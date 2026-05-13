@@ -1,0 +1,25 @@
+digraph node_anatomy {
+  graph [rankdir=TB fontname="Helvetica Neue" bgcolor="white" pad=0.4
+         splines=false nodesep=0.3 ranksep=0.3]
+  node  [fontname="Courier New" fontsize=9 style="filled" shape=box
+         margin="0.25,0.15" width=4.2]
+  edge  [color="#94a3b8" arrowhead=none style=invis]
+
+  header [label="BundleGraphNode" fontname="Helvetica Neue Bold"
+          fontsize=14 fillcolor="#1e293b" fontcolor="white"
+          color="#1e293b" shape=box width=4.2]
+
+  id_path [label="id:   ContentHash  // SHA-256(source) — stable identity\npath: string"
+           fillcolor="#e2e8f0" color="#94a3b8" fontcolor="#334155"]
+
+  p1 [label="▸  PHASE 1  —  always present, ~2 KB avg, cached by content hash\n\nsummary.exports:     Export[]         // named · default · re-export · star\nsummary.imports:     Import[]         // static + dynamic import() · exact bindings\nsummary.sideEffects: SideEffectMarker // NONE | POSSIBLE(reason) | DEFINITE\nsummary.callEdges:   CallEdge[]       // export A → export B (cross-module DCE)\nsummary.ambientRefs: string[]         // window.X · document · globalThis.Y"
+     fillcolor="#f0fdf4" color="#16a34a" fontcolor="#14532d"]
+
+  p2 [label="▸  PHASE 2  —  thin-link decisions\n\nalive:    boolean    // reachable from any active entry point?\nchunkId?: ChunkId    // assigned chunk (route-based day 1, PGO later)"
+     fillcolor="#fffbeb" color="#d97706" fontcolor="#92400e"]
+
+  p3 [label="▸  PHASE 3  —  lazy, only for alive + changed nodes\n\ntransform?.code:    string    // post-TS · post-JSX · minification-ready\ntransform?.map:     SourceMap\ntransform?.exports: string[]  // surviving exports after Phase 2 DCE"
+     fillcolor="#eff6ff" color="#3b82f6" fontcolor="#1e3a8a"]
+
+  header -> id_path -> p1 -> p2 -> p3
+}

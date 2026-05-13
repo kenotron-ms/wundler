@@ -1,0 +1,70 @@
+digraph wundler {
+  graph [rankdir=LR fontname="Helvetica Neue" bgcolor="white"
+         pad=0.5 splines=ortho nodesep=0.45 ranksep=0.9]
+  node  [fontname="Helvetica Neue" fontsize=10 style="filled,rounded"
+         shape=box margin="0.22,0.12"]
+  edge  [fontname="Helvetica Neue" fontsize=8 color="#64748b"]
+
+  src [label="Source Files\n(.ts · .tsx · .js · .cjs)"
+       fillcolor="#dbeafe" color="#2563eb" fontcolor="#1e3a8a"]
+
+  subgraph cluster_build {
+    label="Build Pipeline  —  Rust · incremental"
+    labelloc=t color="#16a34a" fillcolor="#f0fdf4"
+    style="filled,rounded" fontsize=11 fontcolor="#14532d" margin=14
+
+    P1 [label="Summarizer\nrayon · parallel"
+        fillcolor="#bbf7d0" color="#15803d"]
+    SC [label="Summary Cache\nfile: SHA-256(source)\npkg: SHA-256(name+ver+deps)"
+        shape=cylinder fillcolor="#fef9c3" color="#d97706"]
+    P2 [label="Thin-Link Analyzer\nreachability · call-edge DCE\nchunk assignment"
+        fillcolor="#bbf7d0" color="#15803d"]
+    BG [label="Bundle Graph\n+ ChunkManifest"
+        fillcolor="#4ade80" color="#166534" penwidth=2 fontcolor="#14532d"]
+    P3 [label="TransformEngine\nRolldown  |  Rspack"
+        fillcolor="#bbf7d0" color="#15803d"]
+  }
+
+  subgraph cluster_delivery {
+    label="Delivery Layer"
+    labelloc=t color="#2563eb" fillcolor="#eff6ff"
+    style="filled,rounded" fontsize=11 fontcolor="#1e3a8a" margin=14
+
+    CDN [label="CDN\ncontent-hashed chunks\nmanifest.json (fallback)"
+         shape=cylinder fillcolor="#bfdbfe" color="#3b82f6"]
+    ABS [label="Adaptive Bundle Service\nmanifest server — never serves code"
+         fillcolor="#93c5fd" color="#1d4ed8" fontcolor="#1e3a8a"]
+    PGO [label="PGO Store\nco-request matrix\nsuggestedMerge hints"
+         shape=cylinder fillcolor="#bfdbfe" color="#3b82f6"]
+  }
+
+  subgraph cluster_client {
+    label="Client"
+    labelloc=t color="#d97706" fillcolor="#fffbeb"
+    style="filled,rounded" fontsize=11 fontcolor="#92400e" margin=14
+
+    SW [label="Service Worker\ncachedHashes → delta manifest"
+        fillcolor="#fde68a" color="#b45309"]
+    BR [label="Browser"
+        fillcolor="#fef9c3" color="#d97706"]
+  }
+
+  src -> P1
+  P1 -> SC   [dir=both label="read/write"]
+  SC -> P2
+  P2 -> BG
+  BG -> P3
+  P3 -> CDN  [label="chunk files"]
+
+  BG  -> ABS [label="ChunkManifest"]
+  ABS -> PGO [style=dashed label="co-request\nlogs"]
+  PGO -> P2  [style=dashed color="#9ca3af"
+              label="PGO hints\n(Level 2)" fontcolor="#6b7280"]
+
+  CDN -> SW  [label="static\nfallback"]
+  ABS -> SW  [label="delta\nmanifest"]
+  SW  -> BR
+
+  src -> BR  [style=dashed color="#9ca3af" constraint=false
+              label="dev: native ESM" fontcolor="#6b7280"]
+}
