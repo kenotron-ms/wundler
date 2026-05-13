@@ -209,15 +209,46 @@ interface Chunk {
 
 ### Overview
 
-Phase 3 is implemented by driving **Rolldown** (Rust, Rollup-compatible). Rolldown handles TypeScript, JSX, CSS modules, and all other transforms correctly and at speed. Wundler's innovation is Phase 1 and Phase 2. Phase 3 delegates to Rolldown for transform correctness and performance, avoiding the need to re-implement a transform engine from scratch.
+Phase 3 operates through a **pluggable `TransformEngine` interface**. It receives a set of module nodes and chunk assignments from Phase 2 and produces content-hashed chunk files. Phase 3 is the most isolated part of the system — its contract is narrow enough to support multiple concrete backends.
 
-**Input:** `BundleGraphNode` (path + summary) + Phase 2 decisions  
-**Output:** `BundleGraphNode.transform` (cached per content hash)  
+**Input:** `BundleGraphNode[]` (per chunk) + Phase 2 decisions  
+**Output:** `ChunkOutput[]` (code + source map + content hash, per chunk)  
 **Scope:** only `alive: true` nodes whose content hash changed since the last build
 
 Phase 3's wall-clock time is proportional to `(changed_alive_modules / CPU_cores)` — not total module count.
 
-**Why Rolldown and not another tool:** Rolldown is Rust-native (same runtime as Phase 1 and Phase 2), Rollup-compatible (large existing plugin ecosystem), and actively maintained for production bundling at scale. Using it as the Phase 3 engine means the FFI boundary is eliminated on the hot path and correctness is inherited.
+### TransformEngine Interface
+
+```typescript
+interface TransformEngine {
+  // Transform a set of module nodes into one chunk
+  transformChunk(
+    modules: BundleGraphNode[],
+    chunkId: ChunkId,
+    decisions: PhaseDecisions
+  ): Promise<ChunkOutput>
+
+  // Finalize: write all chunk files to disk
+  emit(outputs: ChunkOutput[], outDir: string): Promise<void>
+}
+
+interface ChunkOutput {
+  chunkId:  ChunkId
+  hash:     ContentHash
+  code:     string
+  map:      SourceMap
+}
+```
+
+### Adapters
+
+**`RolldownAdapter`** (default): Drives Rolldown (Rust, Rollup-compatible). No FFI boundary — same runtime as Phases 1 and 2. Best long-term performance. Rollup plugin ecosystem available.
+
+**`RspackAdapter`**: Drives Rspack (Rust, webpack-compatible). Enables Teams to adopt ThinBundle's Phase 1 + Phase 2 incrementally without replacing an existing Rspack setup. webpack plugin ecosystem available. Introduces a thin API boundary but Phase 3 is not on the hot path, so this is acceptable.
+
+### Trade-off
+
+Two adapters means two code paths to maintain. Any new Phase 3 capability (CSS module changes, new asset handling) must be implemented in both. **Ship one adapter on day 1** — whichever engine is closer to Teams' current toolchain. Define the interface now. Add the second adapter when there is a concrete need for it.
 
 ---
 
@@ -371,7 +402,7 @@ Level 2 follows when PGO data stabilizes — approximately Month 6+.
 | Side effects — function level | Aggressive (call-edge DCE) | Conservative | Functions with zero callers from live entry points are provably dead |
 | Correctness audit mode | Mandatory | Optional / deferred | Required before any tree-shaking ships to production. Non-negotiable. |
 | Day-1 chunk strategy | Route-based splitting | Package-based, PGO | Correct, predictable, compatible with PGO upgrade path in Level 2 |
-| Phase 3 engine | Rolldown | Build from scratch | Correctness + transform performance for free; no FFI on hot path |
+| Phase 3 engine | Pluggable `TransformEngine` interface | Build from scratch | Narrow contract enables Rolldown (default) and Rspack adapters; only Phase 3 is behind the interface — Phases 1+2 have no FFI concern |
 | ABS serving model | Manifests only, never code | Serving code directly | ABS compromise ≠ code injection; substantially better security model for enterprise |
 | Service worker dependency | Assumed present | New infrastructure | Standard in every large-scale web application; not new operational overhead |
 | Implementation language | Rust | Go, Node.js | Ecosystem convergence; native Rolldown integration; no FFI on hot path |
