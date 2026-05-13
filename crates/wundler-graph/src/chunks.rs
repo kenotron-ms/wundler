@@ -4,8 +4,12 @@
 //!
 //! * **Initial chunks** — one per entry route, loaded on first page render.
 //! * **Lazy chunks** — one per `import()` boundary, fetched on demand.
+//! * **Commons chunk** — shared modules extracted when they appear in ≥
+//!   `commons_threshold` candidate chunks, emitted first with id `"commons"`.
 //!
-//! # Algorithm
+//! # Algorithm (3-phase)
+//!
+//! ## Phase 1 — Collect candidates (WITHOUT de-duplication)
 //!
 //! For each entry route (sorted for determinism):
 //! 1. Derive a `chunk_id` from the route name via [`chunk_id_slug`].
@@ -13,18 +17,30 @@
 //!    [`static_bfs_chunk_with_dynamic_capture`].  Dynamic `import()` targets
 //!    discovered during BFS are pushed onto a `lazy_queue` (deduped by
 //!    `lazy_seen`).
-//! 3. Use a `module_index` map with first-seen-wins semantics so that a module
-//!    claimed by an earlier route is not re-assigned to a later one.
-//! 4. Emit a [`Chunk`] with [`LoadCondition::Initial`] and a placeholder
-//!    content hash (`ContentHash("")`); real hashing is performed in a later
-//!    pass.
+//! 3. Emit one [`Candidate`] per alive route with the **full** BFS result
+//!    (no first-seen-wins at this stage — shared modules may appear in
+//!    multiple candidates).
 //!
 //! After all entry routes are processed, drain the `lazy_queue`:
-//! * Skip if the root is already owned by an earlier chunk (first-seen-wins).
-//! * Otherwise create a `lazy_N` chunk by running the same BFS helper,
-//!   filtering out modules already in `module_index`, and pushing a
-//!   [`LoadCondition::Lazy`] chunk.  Nested dynamic imports discovered during
-//!   the lazy BFS are also captured into the queue.
+//! * Skip if the BFS result is empty (empty-skip).
+//! * Otherwise create a `lazy_N` [`Candidate`].  Nested dynamic imports
+//!   discovered during the lazy BFS are also captured into the queue.
+//!
+//! ## Phase 2 — Count appearances
+//!
+//! Build `appearance: HashMap<ContentHash, usize>` counting in how many
+//! candidate chunks each module appears.  A per-candidate `seen_in_this`
+//! `HashSet` prevents double-counting the same module within one candidate.
+//!
+//! ## Phase 3 — Emit chunks
+//!
+//! * `commons_set` = modules with `appearance` count ≥ `commons_threshold`.
+//! * Emit commons chunk **first** (id `"commons"`, `LoadCondition::Initial`,
+//!   members sorted by `ContentHash.0` lexicographically, placeholder hash).
+//! * Emit each per-route / lazy candidate with commons members filtered out
+//!   and any remaining duplicates resolved by first-seen-wins
+//!   (`if module_index.contains_key(&m) { continue }`).
+//! * Skip candidates that become empty after filtering.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -33,10 +49,23 @@ use wundler_core::types::{BundleGraphNode, ContentHash, ImportKind};
 use crate::types::{Chunk, ChunkId, LoadCondition};
 
 // ---------------------------------------------------------------------------
+// Internal types
+// ---------------------------------------------------------------------------
+
+/// A pre-deduplication snapshot of the modules reachable from one route or
+/// lazy-import root.  Used in Phases 1 and 2 before commons extraction.
+struct Candidate {
+    id: String,
+    load_condition: LoadCondition,
+    /// Full BFS result — may overlap with other candidates (intentional).
+    modules: Vec<ContentHash>,
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Assign modules to initial **and** lazy chunks.
+/// Assign modules to initial, lazy, and commons chunks.
 ///
 /// # Parameters
 ///
@@ -44,21 +73,24 @@ use crate::types::{Chunk, ChunkId, LoadCondition};
 /// * `alive` — set of module hashes that survived the reachability pass.
 /// * `entry_hashes` — map from route name (e.g. `"main"`) to its entry
 ///   module `ContentHash`.
-/// * `_commons_threshold` — reserved for the commons-chunk pass (Task 11);
-///   unused here.
+/// * `commons_threshold` — minimum number of candidate chunks a module must
+///   appear in to be hoisted into the commons chunk.  Pass `usize::MAX` (or
+///   any value larger than the number of routes) to disable commons
+///   extraction.
 ///
 /// # Returns
 ///
 /// A tuple of:
-/// * `Vec<Chunk>` — initial chunks (one per alive entry route, sorted) followed
-///   by lazy chunks in BFS-discovery order.
+/// * `Vec<Chunk>` — commons chunk (if any) first, then initial chunks (one
+///   per alive entry route, sorted) followed by lazy chunks in
+///   BFS-discovery order.
 /// * `HashMap<ContentHash, ChunkId>` — reverse index mapping each assigned
-///   module hash to the chunk it was first assigned to.
+///   module hash to the chunk it belongs to.
 pub fn assign_chunks(
     nodes: &[BundleGraphNode],
     alive: &HashSet<ContentHash>,
     entry_hashes: &HashMap<String, ContentHash>,
-    _commons_threshold: usize,
+    commons_threshold: usize,
 ) -> (Vec<Chunk>, HashMap<ContentHash, ChunkId>) {
     // -----------------------------------------------------------------------
     // Build lookup indices.
@@ -79,18 +111,18 @@ pub fn assign_chunks(
     let mut routes: Vec<&String> = entry_hashes.keys().collect();
     routes.sort();
 
-    let mut chunks: Vec<Chunk> = Vec::new();
-    let mut module_index: HashMap<ContentHash, ChunkId> = HashMap::new();
-
-    // Lazy chunk bookkeeping.
+    // Lazy chunk bookkeeping (shared across all BFS passes).
     let mut lazy_seen: HashSet<ContentHash> = HashSet::new();
     let mut lazy_queue: VecDeque<(String, ContentHash)> = VecDeque::new();
     let mut lazy_counter: usize = 0;
 
     // -----------------------------------------------------------------------
-    // One INITIAL chunk per alive entry route.
+    // Phase 1 — Collect candidates WITHOUT de-duplication.
     // -----------------------------------------------------------------------
 
+    let mut candidates: Vec<Candidate> = Vec::new();
+
+    // One INITIAL candidate per alive entry route.
     for route in routes {
         // Unwrap is safe: `route` came from `entry_hashes.keys()`.
         let entry_hash = entry_hashes.get(route).expect("route key must exist");
@@ -103,6 +135,7 @@ pub fn assign_chunks(
         let chunk_id = format!("initial_{}", chunk_id_slug(route));
 
         // BFS over static imports only; dynamic import targets captured into queue.
+        // No first-seen-wins filtering — full BFS result goes into the candidate.
         let bfs_modules = static_bfs_chunk_with_dynamic_capture(
             entry_hash,
             &by_hash,
@@ -112,50 +145,20 @@ pub fn assign_chunks(
             &mut lazy_queue,
         );
 
-        // First-seen-wins: assign each module to this chunk only if it has not
-        // yet been claimed by an earlier chunk.
-        let mut chunk_modules: Vec<ContentHash> = Vec::new();
-        for m in bfs_modules {
-            let assigned_to = module_index
-                .entry(m.clone())
-                .or_insert_with(|| chunk_id.clone());
-            if assigned_to == &chunk_id {
-                chunk_modules.push(m);
-            }
-        }
-
-        chunks.push(Chunk {
+        candidates.push(Candidate {
             id: chunk_id,
-            modules: chunk_modules,
-            // Placeholder — real content hash is computed in Task 11.
-            hash: ContentHash("".to_string()),
             load_condition: LoadCondition::Initial,
-            // PGO fields — not yet computed.
-            co_request_score: None,
-            median_load_order: None,
-            suggested_merge: None,
+            modules: bfs_modules,
         });
     }
 
-    // -----------------------------------------------------------------------
-    // Drain the lazy queue to create LAZY chunks.
+    // Drain the lazy queue to create LAZY candidates.
     //
     // Note: `static_bfs_chunk_with_dynamic_capture` may push new entries into
     // `lazy_queue` during BFS of a lazy root (nested dynamic imports), so the
     // loop continues until the queue is fully drained.
-    // -----------------------------------------------------------------------
-
     while let Some((_, root_hash)) = lazy_queue.pop_front() {
-        // Skip if the root is already owned by an earlier chunk.
-        if module_index.contains_key(&root_hash) {
-            continue;
-        }
-
-        lazy_counter += 1;
-        let chunk_id = format!("lazy_{lazy_counter}");
-
-        // BFS from the lazy root; nested dynamic imports are captured into the
-        // queue for processing in subsequent iterations.
+        // BFS from the lazy root; nested dynamic imports captured into the queue.
         let bfs_modules = static_bfs_chunk_with_dynamic_capture(
             &root_hash,
             &by_hash,
@@ -165,27 +168,104 @@ pub fn assign_chunks(
             &mut lazy_queue,
         );
 
-        // Filter out modules already claimed by an earlier chunk.
-        let chunk_modules: Vec<ContentHash> = bfs_modules
-            .into_iter()
-            .filter(|m| !module_index.contains_key(m))
-            .collect();
+        // Empty-skip: if the root is not alive or has no alive descendants,
+        // discard this queue entry without creating a candidate.
+        if bfs_modules.is_empty() {
+            continue;
+        }
 
-        // Skip if all reachable modules are already owned elsewhere.
+        lazy_counter += 1;
+        let chunk_id = format!("lazy_{lazy_counter}");
+
+        candidates.push(Candidate {
+            id: chunk_id,
+            load_condition: LoadCondition::Lazy,
+            modules: bfs_modules,
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 2 — Count appearances.
+    //
+    // `appearance[m]` = number of candidate chunks that contain module `m`.
+    // A per-candidate `seen_in_this` HashSet prevents double-counting if the
+    // same module appears more than once in a single candidate's BFS result.
+    // -----------------------------------------------------------------------
+
+    let mut appearance: HashMap<ContentHash, usize> = HashMap::new();
+    for candidate in &candidates {
+        let mut seen_in_this: HashSet<ContentHash> = HashSet::new();
+        for m in &candidate.modules {
+            if seen_in_this.insert(m.clone()) {
+                *appearance.entry(m.clone()).or_insert(0) += 1;
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 3 — Emit chunks.
+    // -----------------------------------------------------------------------
+
+    // Modules that appear in ≥ commons_threshold candidates are hoisted to commons.
+    let commons_set: HashSet<ContentHash> = appearance
+        .iter()
+        .filter(|(_, &count)| count >= commons_threshold)
+        .map(|(h, _)| h.clone())
+        .collect();
+
+    let mut chunks: Vec<Chunk> = Vec::new();
+    let mut module_index: HashMap<ContentHash, ChunkId> = HashMap::new();
+
+    // Emit the commons chunk FIRST (deterministic id "commons").
+    if !commons_set.is_empty() {
+        // Sort members by ContentHash.0 for determinism.
+        let mut commons_modules: Vec<ContentHash> = commons_set.iter().cloned().collect();
+        commons_modules.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // Claim all commons modules in module_index before per-route processing.
+        for m in &commons_modules {
+            module_index.insert(m.clone(), "commons".to_string());
+        }
+
+        chunks.push(Chunk {
+            id: "commons".to_string(),
+            modules: commons_modules,
+            hash: ContentHash("".to_string()),
+            load_condition: LoadCondition::Initial,
+            co_request_score: None,
+            median_load_order: None,
+            suggested_merge: None,
+        });
+    }
+
+    // Emit per-route and lazy chunks with commons filtered out and
+    // first-seen-wins applied for any remaining cross-chunk duplicates.
+    for candidate in candidates {
+        let mut chunk_modules: Vec<ContentHash> = Vec::new();
+        for m in candidate.modules {
+            // Commons members are already in module_index; skip them.
+            if commons_set.contains(&m) {
+                continue;
+            }
+            // First-seen-wins: skip if already claimed by an earlier chunk.
+            if module_index.contains_key(&m) {
+                continue;
+            }
+            // Claim this module for the current chunk.
+            module_index.insert(m.clone(), candidate.id.clone());
+            chunk_modules.push(m);
+        }
+
+        // Skip chunks that become empty after commons filtering.
         if chunk_modules.is_empty() {
             continue;
         }
 
-        // Claim the modules for this lazy chunk.
-        for m in &chunk_modules {
-            module_index.insert(m.clone(), chunk_id.clone());
-        }
-
         chunks.push(Chunk {
-            id: chunk_id,
+            id: candidate.id,
             modules: chunk_modules,
             hash: ContentHash("".to_string()),
-            load_condition: LoadCondition::Lazy,
+            load_condition: candidate.load_condition,
             co_request_score: None,
             median_load_order: None,
             suggested_merge: None,

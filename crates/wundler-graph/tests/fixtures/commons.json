@@ -1,0 +1,134 @@
+[
+  {
+    "id": "hash-entry_a",
+    "path": "entry_a",
+    "summary": {
+      "exports": [],
+      "imports": [
+        {"specifier": "priv_a1", "kind": "NAMED", "bindings": [], "is_dynamic": false},
+        {"specifier": "priv_a2", "kind": "NAMED", "bindings": [], "is_dynamic": false},
+        {"specifier": "shared_util", "kind": "NAMED", "bindings": [], "is_dynamic": false}
+      ],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-entry_b",
+    "path": "entry_b",
+    "summary": {
+      "exports": [],
+      "imports": [
+        {"specifier": "priv_b1", "kind": "NAMED", "bindings": [], "is_dynamic": false},
+        {"specifier": "priv_b2", "kind": "NAMED", "bindings": [], "is_dynamic": false},
+        {"specifier": "shared_util", "kind": "NAMED", "bindings": [], "is_dynamic": false}
+      ],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-entry_c",
+    "path": "entry_c",
+    "summary": {
+      "exports": [],
+      "imports": [
+        {"specifier": "priv_c1", "kind": "NAMED", "bindings": [], "is_dynamic": false},
+        {"specifier": "priv_c2", "kind": "NAMED", "bindings": [], "is_dynamic": false},
+        {"specifier": "shared_util", "kind": "NAMED", "bindings": [], "is_dynamic": false}
+      ],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-priv_a1",
+    "path": "priv_a1",
+    "summary": {
+      "exports": [],
+      "imports": [],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-priv_a2",
+    "path": "priv_a2",
+    "summary": {
+      "exports": [],
+      "imports": [],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-priv_b1",
+    "path": "priv_b1",
+    "summary": {
+      "exports": [],
+      "imports": [],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-priv_b2",
+    "path": "priv_b2",
+    "summary": {
+      "exports": [],
+      "imports": [],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-priv_c1",
+    "path": "priv_c1",
+    "summary": {
+      "exports": [],
+      "imports": [],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-priv_c2",
+    "path": "priv_c2",
+    "summary": {
+      "exports": [],
+      "imports": [],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-shared_util",
+    "path": "shared_util",
+    "summary": {
+      "exports": [],
+      "imports": [],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  }
+]
