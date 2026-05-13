@@ -5,12 +5,20 @@
 //! typed graph nodes, deterministic topological ordering, cycle
 //! detection, and JSON serialisation.
 
+pub mod analyzer;
 pub mod chunks;
 pub mod dce;
 pub mod graph;
 pub mod manifest;
 pub mod reachability;
 pub mod types;
+
+// ---------------------------------------------------------------------------
+// Convenience re-exports
+// ---------------------------------------------------------------------------
+
+pub use analyzer::{AnalysisResult, AnalysisStats, GraphAnalyzer};
+pub use types::{Chunk, ChunkId, ChunkManifest, EntryPoint, LoadCondition};
 
 /// Returns the crate name – used as a lightweight smoke-test sentinel.
 pub fn hello() -> &'static str {
