@@ -1,0 +1,261 @@
+[
+  {
+    "id": "hash-entry",
+    "path": "entry",
+    "summary": {
+      "exports": [{"name": "main", "kind": "DEFAULT", "source": null}],
+      "imports": [
+        {"specifier": "util_a", "kind": "NAMED", "bindings": [], "is_dynamic": false},
+        {"specifier": "util_b", "kind": "NAMED", "bindings": [], "is_dynamic": false}
+      ],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [
+        {"caller": "main", "callee": "util_a::a"},
+        {"caller": "main", "callee": "util_b::b"}
+      ],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-util_a",
+    "path": "util_a",
+    "summary": {
+      "exports": [
+        {"name": "a",      "kind": "NAMED", "source": null},
+        {"name": "a_dead", "kind": "NAMED", "source": null}
+      ],
+      "imports": [
+        {"specifier": "util_a_dep", "kind": "NAMED", "bindings": [], "is_dynamic": false}
+      ],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [
+        {"caller": "a", "callee": "util_a_dep::live"}
+      ],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-util_a_dep",
+    "path": "util_a_dep",
+    "summary": {
+      "exports": [
+        {"name": "live", "kind": "NAMED", "source": null},
+        {"name": "dead", "kind": "NAMED", "source": null}
+      ],
+      "imports": [],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-util_b",
+    "path": "util_b",
+    "summary": {
+      "exports": [
+        {"name": "b",      "kind": "NAMED", "source": null},
+        {"name": "b_dead", "kind": "NAMED", "source": null}
+      ],
+      "imports": [],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-r1",
+    "path": "r1",
+    "summary": {
+      "exports": [{"name": "fn", "kind": "NAMED", "source": null}],
+      "imports": [{"specifier": "r2", "kind": "NAMED", "bindings": [], "is_dynamic": false}],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-r2",
+    "path": "r2",
+    "summary": {
+      "exports": [{"name": "fn", "kind": "NAMED", "source": null}],
+      "imports": [{"specifier": "r3", "kind": "NAMED", "bindings": [], "is_dynamic": false}],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-r3",
+    "path": "r3",
+    "summary": {
+      "exports": [{"name": "fn", "kind": "NAMED", "source": null}],
+      "imports": [{"specifier": "r4", "kind": "NAMED", "bindings": [], "is_dynamic": false}],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-r4",
+    "path": "r4",
+    "summary": {
+      "exports": [{"name": "fn", "kind": "NAMED", "source": null}],
+      "imports": [{"specifier": "r5", "kind": "NAMED", "bindings": [], "is_dynamic": false}],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-r5",
+    "path": "r5",
+    "summary": {
+      "exports": [{"name": "fn", "kind": "NAMED", "source": null}],
+      "imports": [{"specifier": "r6", "kind": "NAMED", "bindings": [], "is_dynamic": false}],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-r6",
+    "path": "r6",
+    "summary": {
+      "exports": [{"name": "fn", "kind": "NAMED", "source": null}],
+      "imports": [{"specifier": "r7", "kind": "NAMED", "bindings": [], "is_dynamic": false}],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-r7",
+    "path": "r7",
+    "summary": {
+      "exports": [{"name": "fn", "kind": "NAMED", "source": null}],
+      "imports": [{"specifier": "r8", "kind": "NAMED", "bindings": [], "is_dynamic": false}],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-r8",
+    "path": "r8",
+    "summary": {
+      "exports": [{"name": "fn", "kind": "NAMED", "source": null}],
+      "imports": [],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-d1",
+    "path": "d1",
+    "summary": {
+      "exports": [{"name": "fn", "kind": "NAMED", "source": null}],
+      "imports": [{"specifier": "d2", "kind": "NAMED", "bindings": [], "is_dynamic": false}],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": false
+  },
+  {
+    "id": "hash-d2",
+    "path": "d2",
+    "summary": {
+      "exports": [{"name": "fn", "kind": "NAMED", "source": null}],
+      "imports": [{"specifier": "d3", "kind": "NAMED", "bindings": [], "is_dynamic": false}],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": false
+  },
+  {
+    "id": "hash-d3",
+    "path": "d3",
+    "summary": {
+      "exports": [{"name": "fn", "kind": "NAMED", "source": null}],
+      "imports": [{"specifier": "d4", "kind": "NAMED", "bindings": [], "is_dynamic": false}],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": false
+  },
+  {
+    "id": "hash-d4",
+    "path": "d4",
+    "summary": {
+      "exports": [{"name": "fn", "kind": "NAMED", "source": null}],
+      "imports": [{"specifier": "d5", "kind": "NAMED", "bindings": [], "is_dynamic": false}],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": false
+  },
+  {
+    "id": "hash-d5",
+    "path": "d5",
+    "summary": {
+      "exports": [{"name": "fn", "kind": "NAMED", "source": null}],
+      "imports": [{"specifier": "d6", "kind": "NAMED", "bindings": [], "is_dynamic": false}],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": false
+  },
+  {
+    "id": "hash-d6",
+    "path": "d6",
+    "summary": {
+      "exports": [{"name": "fn", "kind": "NAMED", "source": null}],
+      "imports": [{"specifier": "d7", "kind": "NAMED", "bindings": [], "is_dynamic": false}],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": false
+  },
+  {
+    "id": "hash-d7",
+    "path": "d7",
+    "summary": {
+      "exports": [{"name": "fn", "kind": "NAMED", "source": null}],
+      "imports": [{"specifier": "d8", "kind": "NAMED", "bindings": [], "is_dynamic": false}],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": false
+  },
+  {
+    "id": "hash-d8",
+    "path": "d8",
+    "summary": {
+      "exports": [{"name": "fn", "kind": "NAMED", "source": null}],
+      "imports": [],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": false
+  }
+]

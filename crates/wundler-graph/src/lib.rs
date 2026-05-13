@@ -5,6 +5,7 @@
 //! typed graph nodes, deterministic topological ordering, cycle
 //! detection, and JSON serialisation.
 
+pub mod dce;
 pub mod graph;
 pub mod reachability;
 pub mod types;
