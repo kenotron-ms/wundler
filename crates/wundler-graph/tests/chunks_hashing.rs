@@ -86,8 +86,8 @@ fn changes_when_members_change() {
     let b = ContentHash::from_source("module_b");
 
     let hash_ab = hash_chunk(&[a.clone(), b.clone()]);
-    let hash_a_only = hash_chunk(&[a.clone()]);
-    let hash_b_only = hash_chunk(&[b.clone()]);
+    let hash_a_only = hash_chunk(std::slice::from_ref(&a));
+    let hash_b_only = hash_chunk(std::slice::from_ref(&b));
 
     assert_ne!(
         hash_ab, hash_a_only,

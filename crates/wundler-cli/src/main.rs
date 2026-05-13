@@ -246,7 +246,7 @@ fn run_analyze(path: PathBuf, entry_args: Vec<String>, commons_threshold: usize)
         .collect::<Result<_>>()?;
 
     // Walk the directory and summarize every JS/TS file.
-    let summarizer = ModuleSummarizer::default();
+    let summarizer = ModuleSummarizer;
     let nodes = WalkDir::new(&path)
         .into_iter()
         .filter_map(|e| e.ok())

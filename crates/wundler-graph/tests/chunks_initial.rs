@@ -227,7 +227,7 @@ fn dynamic_imports_excluded_from_initial_chunk() {
 
     // dynamic.js must now be in the module index (owned by the lazy chunk).
     assert!(
-        module_index.get(&dyn_mod.id).is_some(),
+        module_index.contains_key(&dyn_mod.id),
         "dynamic.js must appear in module_index (owned by lazy chunk)"
     );
 }

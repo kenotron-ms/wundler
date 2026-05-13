@@ -1927,13 +1927,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "hex",
- "indexmap",
  "petgraph",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
- "thiserror",
  "wundler-core",
 ]
 
