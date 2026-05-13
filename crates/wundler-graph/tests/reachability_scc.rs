@@ -44,6 +44,7 @@ fn make_node(path: &str, imports: &[&str]) -> BundleGraphNode {
         },
         alive: true,
         chunk_id: None,
+        source: None,
     }
 }
 

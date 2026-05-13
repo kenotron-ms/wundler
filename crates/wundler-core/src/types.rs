@@ -135,6 +135,10 @@ pub struct BundleGraphNode {
     pub alive: bool,
     #[serde(rename = "chunkId", skip_serializing_if = "Option::is_none")]
     pub chunk_id: Option<String>,
+    /// The raw source text of the module, if available.
+    /// Populated by the transform layer; not persisted in the bundle graph.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub source: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -179,6 +183,7 @@ mod tests {
             },
             alive: true,
             chunk_id: Some("chunk-0".to_string()),
+            source: None,
         };
         let json = serde_json::to_string(&node).expect("serialization failed");
         let roundtripped: BundleGraphNode =

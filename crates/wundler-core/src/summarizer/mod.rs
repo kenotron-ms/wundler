@@ -60,6 +60,7 @@ pub fn summarize_directory(dir: &Path, cache: &LocalCache) -> Result<Vec<BundleG
                     summary: cached_summary,
                     alive: false,
                     chunk_id: None,
+                    source: None,
                 });
             }
             let summarizer = ModuleSummarizer::new();
@@ -130,6 +131,7 @@ impl ModuleSummarizer {
             },
             alive: false,
             chunk_id: None,
+            source: None,
         })
     }
 }

@@ -1,4 +1,4 @@
-//! SWC-based dead export stripping for a single module.
+//! SWC-based transform adapter: dead export stripping and chunk concatenation.
 
 use std::collections::HashSet;
 
@@ -111,5 +111,83 @@ fn decl_binding_name(decl: &Decl) -> Option<String> {
             }
         }),
         _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SwcTransformAdapter
+// ---------------------------------------------------------------------------
+
+use crate::engine::{ChunkOutput, TransformDecisions, TransformEngine, TransformError};
+use wundler_core::types::{BundleGraphNode, ContentHash};
+use wundler_graph::types::Chunk;
+
+/// SWC-backed `TransformEngine` implementation that concatenates N modules
+/// into a single chunk file with IIFE scope isolation per module.
+pub struct SwcTransformAdapter;
+
+impl SwcTransformAdapter {
+    /// Create a new `SwcTransformAdapter`.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for SwcTransformAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TransformEngine for SwcTransformAdapter {
+    fn transform_chunk(
+        &self,
+        modules: &[BundleGraphNode],
+        chunk: &Chunk,
+        decisions: &TransformDecisions,
+    ) -> Result<ChunkOutput, TransformError> {
+        if modules.is_empty() {
+            return Ok(ChunkOutput {
+                chunk_id: chunk.id.clone(),
+                hash: ContentHash::from_bytes(b""),
+                code: format!("// chunk: {} (empty)\n", chunk.id),
+                source_map: None,
+            });
+        }
+
+        let mut combined = String::new();
+        combined.push_str(&format!("// chunk: {}\n", chunk.id));
+
+        for node in modules {
+            let source = node.source.as_deref().ok_or_else(|| {
+                TransformError::TransformFailed {
+                    chunk_id: chunk.id.clone(),
+                    reason: format!("node {:?} missing source", node.path),
+                }
+            })?;
+
+            let stripped = if let Some(dead) = decisions.dead_exports.get(&node.id) {
+                strip_dead_exports(source, dead).map_err(|e| TransformError::TransformFailed {
+                    chunk_id: chunk.id.clone(),
+                    reason: format!("strip_dead_exports({:?}): {}", node.path, e),
+                })?
+            } else {
+                source.to_string()
+            };
+
+            combined.push_str(&format!("\n// module: {}\n", node.path));
+            combined.push_str("(function() {\n");
+            combined.push_str(&stripped);
+            combined.push_str("\n})();\n");
+        }
+
+        let hash = ContentHash::from_bytes(combined.as_bytes());
+
+        Ok(ChunkOutput {
+            chunk_id: chunk.id.clone(),
+            hash,
+            code: combined,
+            source_map: None,
+        })
     }
 }

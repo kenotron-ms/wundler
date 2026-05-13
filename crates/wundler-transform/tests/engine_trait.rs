@@ -34,6 +34,7 @@ fn make_node(hash_bytes: &[u8]) -> BundleGraphNode {
         },
         alive: true,
         chunk_id: Some("chunk-0".to_string()),
+        source: None,
     }
 }
 

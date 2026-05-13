@@ -26,6 +26,7 @@ fn make_node(path: &str, imports: Vec<Import>) -> BundleGraphNode {
         },
         alive: true,
         chunk_id: None,
+        source: None,
     }
 }
 

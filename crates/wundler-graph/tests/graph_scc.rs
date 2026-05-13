@@ -20,6 +20,7 @@ fn make_node(path: &str) -> BundleGraphNode {
         },
         alive: true,
         chunk_id: None,
+        source: None,
     }
 }
 
