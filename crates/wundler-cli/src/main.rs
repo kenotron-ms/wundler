@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -5,6 +6,7 @@ use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
 use walkdir::WalkDir;
 use wundler_core::{cache::local::LocalCache, validation::run_validate_scale, ModuleSummarizer};
+use wundler_graph::GraphAnalyzer;
 
 const JS_EXTENSIONS: &[&str] = &["ts", "tsx", "js", "jsx", "mjs", "cjs"];
 
@@ -44,6 +46,24 @@ enum Commands {
         #[arg(long, value_name = "DIR")]
         cache_dir: Option<PathBuf>,
     },
+
+    /// Analyse a directory and produce a chunk manifest JSON.
+    Analyze {
+        /// Root directory containing JS/TS source files.
+        #[arg(value_name = "PATH")]
+        path: PathBuf,
+
+        /// Entry point(s) in ROUTE=PATH format (e.g. /=src/index.ts).
+        /// PATH is relative to the directory argument.
+        /// Repeat this flag for multiple entry points.
+        #[arg(long = "entry", value_name = "ROUTE=PATH", required = true)]
+        entry: Vec<String>,
+
+        /// Minimum number of chunks a module must appear in to be promoted to
+        /// the shared commons chunk. Defaults to 2.
+        #[arg(long = "commons-threshold", default_value_t = 2)]
+        commons_threshold: usize,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -72,6 +92,42 @@ fn count_js_ts_files(dir: &std::path::Path) -> usize {
                 .unwrap_or(false)
         })
         .count()
+}
+
+/// Parse a single `--entry` argument of the form `ROUTE=PATH`.
+///
+/// Returns `(route, path)` where `path` is the raw (possibly relative) path
+/// string from the argument.
+///
+/// # Errors
+///
+/// Returns an error (mentioning "entry") if the argument has no `=`, or if
+/// either the route or path component is empty.
+fn parse_entry_arg(s: &str) -> Result<(String, PathBuf)> {
+    let eq_pos = s.find('=').ok_or_else(|| {
+        anyhow::anyhow!(
+            "invalid --entry value {s:?}: expected ROUTE=PATH format (no '=' found); \
+             use --entry <route>=<path>"
+        )
+    })?;
+
+    let route = &s[..eq_pos];
+    let path = &s[eq_pos + 1..];
+
+    if route.is_empty() {
+        anyhow::bail!(
+            "invalid --entry value {s:?}: route (left of '=') cannot be empty; \
+             use --entry <route>=<path>"
+        );
+    }
+    if path.is_empty() {
+        anyhow::bail!(
+            "invalid --entry value {s:?}: path (right of '=') cannot be empty; \
+             use --entry <route>=<path>"
+        );
+    }
+
+    Ok((route.to_string(), PathBuf::from(path)))
 }
 
 // ---------------------------------------------------------------------------
@@ -176,6 +232,48 @@ fn cmd_validate_scale(path: PathBuf, cache_dir: Option<PathBuf>) -> Result<()> {
     Ok(())
 }
 
+/// Run the full bundle analysis on `path`, using the given entry points and
+/// commons threshold, then print the resulting [`ChunkManifest`] as JSON.
+fn run_analyze(path: PathBuf, entry_args: Vec<String>, commons_threshold: usize) -> Result<()> {
+    // Parse every --entry argument into an absolute entry-point path so it
+    // matches the absolute node paths produced by WalkDir below.
+    let entry_points: HashMap<String, PathBuf> = entry_args
+        .iter()
+        .map(|s| {
+            let (route, rel_path) = parse_entry_arg(s)?;
+            Ok((route, path.join(rel_path)))
+        })
+        .collect::<Result<_>>()?;
+
+    // Walk the directory and summarize every JS/TS file.
+    let summarizer = ModuleSummarizer::default();
+    let nodes = WalkDir::new(&path)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .filter_map(|e| {
+            let p = e.path().to_path_buf();
+            let ext = p.extension()?.to_str()?.to_lowercase();
+            if JS_EXTENSIONS.contains(&ext.as_str()) {
+                Some(p)
+            } else {
+                None
+            }
+        })
+        .map(|p| summarizer.summarize(&p))
+        .collect::<Result<Vec<_>>>()
+        .with_context(|| format!("failed to summarize directory {}", path.display()))?;
+
+    // Configure and run the graph analyzer.
+    let mut analyzer = GraphAnalyzer::new(entry_points);
+    analyzer.commons_threshold = commons_threshold;
+    let result = analyzer.analyze(nodes)?;
+
+    // Print the manifest as pretty JSON.
+    println!("{}", result.manifest.to_json()?);
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -185,5 +283,10 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Summarize { path, cache_dir } => cmd_summarize(path, cache_dir),
         Commands::ValidateScale { path, cache_dir } => cmd_validate_scale(path, cache_dir),
+        Commands::Analyze {
+            path,
+            entry,
+            commons_threshold,
+        } => run_analyze(path, entry, commons_threshold),
     }
 }
