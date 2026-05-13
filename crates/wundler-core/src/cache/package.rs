@@ -121,15 +121,13 @@ impl PackageLevelCache {
     pub fn cache_key_for(&self, module_path: &Path, source: &str) -> Result<ContentHash> {
         if let Some(pkg_dir) = find_package_dir(module_path) {
             let pkg_hash = compute_package_hash(&pkg_dir)?;
-            let rel = module_path
-                .strip_prefix(&pkg_dir)
-                .with_context(|| {
-                    format!(
-                        "failed to strip prefix {} from {}",
-                        pkg_dir.display(),
-                        module_path.display()
-                    )
-                })?;
+            let rel = module_path.strip_prefix(&pkg_dir).with_context(|| {
+                format!(
+                    "failed to strip prefix {} from {}",
+                    pkg_dir.display(),
+                    module_path.display()
+                )
+            })?;
             let combined = format!("{}{}", pkg_hash.as_str(), rel.to_string_lossy());
             Ok(ContentHash::from_bytes(combined.as_bytes()))
         } else {
@@ -192,7 +190,10 @@ mod tests {
         let module_path = pkg_dir.join("utils").join("index.js");
 
         let result = find_package_dir(&module_path);
-        assert!(result.is_some(), "expected Some for node_modules/lodash path");
+        assert!(
+            result.is_some(),
+            "expected Some for node_modules/lodash path"
+        );
         assert_eq!(result.unwrap(), pkg_dir);
     }
 
@@ -242,9 +243,8 @@ mod tests {
         let module_path = pkg_dir.join("utils").join("cloneDeep.js");
 
         let cache_dir = TempDir::new().unwrap();
-        let cache = PackageLevelCache::new(
-            LocalCache::new(cache_dir.path().to_path_buf()).unwrap(),
-        );
+        let cache =
+            PackageLevelCache::new(LocalCache::new(cache_dir.path().to_path_buf()).unwrap());
 
         // Source content changes — key must remain the same because it is
         // derived from package.json, not from source bytes.
@@ -266,9 +266,8 @@ mod tests {
         let module_path = dir.path().join("src").join("components").join("Button.js");
 
         let cache_dir = TempDir::new().unwrap();
-        let cache = PackageLevelCache::new(
-            LocalCache::new(cache_dir.path().to_path_buf()).unwrap(),
-        );
+        let cache =
+            PackageLevelCache::new(LocalCache::new(cache_dir.path().to_path_buf()).unwrap());
 
         let key1 = cache.cache_key_for(&module_path, "const a = 1;").unwrap();
         let key2 = cache.cache_key_for(&module_path, "const a = 2;").unwrap();

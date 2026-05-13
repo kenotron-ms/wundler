@@ -222,6 +222,10 @@ mod tests {
     fn test_dynamic_import_non_literal_ignored() {
         let module = parse("async function load(name) { return import(name); }");
         let imports = extract_imports(&module);
-        assert_eq!(imports.len(), 0, "non-literal dynamic import should be ignored");
+        assert_eq!(
+            imports.len(),
+            0,
+            "non-literal dynamic import should be ignored"
+        );
     }
 }

@@ -3,7 +3,9 @@
 
 use std::collections::HashSet;
 
-use swc_core::ecma::ast::{Callee, CallExpr, Decl, Expr, FnDecl, Module, ModuleDecl, ModuleItem, Stmt};
+use swc_core::ecma::ast::{
+    CallExpr, Callee, Decl, Expr, FnDecl, Module, ModuleDecl, ModuleItem, Stmt,
+};
 use swc_core::ecma::visit::{Visit, VisitWith};
 
 use crate::types::CallEdge;
@@ -31,10 +33,10 @@ pub fn extract_call_edges(module: &Module, exported_names: &HashSet<String>) -> 
             // `function foo() { … }` at the top level — visit only when the
             // name is in the exported set (e.g. exported via a separate
             // `export { foo }` declaration).
-            ModuleItem::Stmt(Stmt::Decl(Decl::Fn(fn_decl))) => {
-                if exported_names.contains(fn_decl.ident.sym.as_ref()) {
-                    visitor.visit_exported_fn(fn_decl);
-                }
+            ModuleItem::Stmt(Stmt::Decl(Decl::Fn(fn_decl)))
+                if exported_names.contains(fn_decl.ident.sym.as_ref()) =>
+            {
+                visitor.visit_exported_fn(fn_decl);
             }
             _ => {}
         }

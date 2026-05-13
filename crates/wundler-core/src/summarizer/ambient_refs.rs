@@ -175,8 +175,7 @@ mod tests {
         let refs = extract_ambient_refs(&module);
         let x_count = refs.iter().filter(|r| r.as_str() == "window.X").count();
         assert_eq!(
-            x_count,
-            1,
+            x_count, 1,
             "expected 'window.X' to appear exactly once, got refs: {:?}",
             refs
         );

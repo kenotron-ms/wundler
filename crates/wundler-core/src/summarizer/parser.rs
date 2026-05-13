@@ -44,7 +44,12 @@ pub fn parse_module(source: &str, path: &Path) -> Result<Module> {
         }),
     };
 
-    let lexer = Lexer::new(syntax, Default::default(), StringInput::from(&*source_file), None);
+    let lexer = Lexer::new(
+        syntax,
+        Default::default(),
+        StringInput::from(&*source_file),
+        None,
+    );
     let mut parser = Parser::new_from(lexer);
 
     parser

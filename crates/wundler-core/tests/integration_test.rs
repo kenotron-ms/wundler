@@ -135,7 +135,9 @@ fn test_summarize_side_effects_ambient_is_definite() {
     );
 
     assert!(
-        node.summary.ambient_refs.contains(&"window.APP_VERSION".to_string()),
+        node.summary
+            .ambient_refs
+            .contains(&"window.APP_VERSION".to_string()),
         "expected 'window.APP_VERSION' in ambient_refs, got: {:?}",
         node.summary.ambient_refs
     );

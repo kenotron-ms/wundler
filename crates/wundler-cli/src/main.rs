@@ -4,9 +4,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
 use walkdir::WalkDir;
-use wundler_core::{
-    cache::local::LocalCache, validation::run_validate_scale, ModuleSummarizer,
-};
+use wundler_core::{cache::local::LocalCache, validation::run_validate_scale, ModuleSummarizer};
 
 const JS_EXTENSIONS: &[&str] = &["ts", "tsx", "js", "jsx", "mjs", "cjs"];
 

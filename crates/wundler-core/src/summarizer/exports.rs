@@ -81,9 +81,7 @@ fn collect_decl_names(decl: &Decl, exports: &mut Vec<Export>) {
             }
         }
         Decl::TsInterface(ts_interface) => exports.push(named(ts_interface.id.sym.to_string())),
-        Decl::TsTypeAlias(ts_type_alias) => {
-            exports.push(named(ts_type_alias.id.sym.to_string()))
-        }
+        Decl::TsTypeAlias(ts_type_alias) => exports.push(named(ts_type_alias.id.sym.to_string())),
         Decl::TsEnum(ts_enum) => exports.push(named(ts_enum.id.sym.to_string())),
         Decl::TsModule(ts_module) => {
             let name = match &ts_module.id {
@@ -99,10 +97,8 @@ fn collect_pat_names(pat: &Pat, exports: &mut Vec<Export>) {
     match pat {
         Pat::Ident(binding_ident) => exports.push(named(binding_ident.id.sym.to_string())),
         Pat::Array(array_pat) => {
-            for elem in &array_pat.elems {
-                if let Some(p) = elem {
-                    collect_pat_names(p, exports);
-                }
+            for p in array_pat.elems.iter().flatten() {
+                collect_pat_names(p, exports);
             }
         }
         Pat::Object(object_pat) => {

@@ -72,15 +72,10 @@ impl LocalCache {
         let json = serde_json::to_string(summary).context("failed to serialize module summary")?;
         // Atomic write: write to .tmp then rename.
         let tmp_path = path.with_extension("tmp");
-        fs::write(&tmp_path, &json).with_context(|| {
-            format!("failed to write temp cache file: {}", tmp_path.display())
-        })?;
-        fs::rename(&tmp_path, &path).with_context(|| {
-            format!(
-                "failed to rename temp cache file to: {}",
-                path.display()
-            )
-        })?;
+        fs::write(&tmp_path, &json)
+            .with_context(|| format!("failed to write temp cache file: {}", tmp_path.display()))?;
+        fs::rename(&tmp_path, &path)
+            .with_context(|| format!("failed to rename temp cache file to: {}", path.display()))?;
         Ok(())
     }
 
@@ -110,7 +105,9 @@ impl LocalCache {
     /// `<root>/<HH>/<rest>.json`
     fn entry_path(&self, hash: &ContentHash) -> PathBuf {
         let hex = hash.as_str();
-        self.root.join(&hex[..2]).join(format!("{}.json", &hex[2..]))
+        self.root
+            .join(&hex[..2])
+            .join(format!("{}.json", &hex[2..]))
     }
 }
 
