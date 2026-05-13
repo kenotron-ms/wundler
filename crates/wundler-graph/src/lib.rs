@@ -5,6 +5,8 @@
 //! typed graph nodes, deterministic topological ordering, cycle
 //! detection, and JSON serialisation.
 
+pub mod types;
+
 /// Returns the crate name – used as a lightweight smoke-test sentinel.
 pub fn hello() -> &'static str {
     "wundler-graph"
