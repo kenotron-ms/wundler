@@ -48,8 +48,8 @@ impl ModuleSummarizer {
         let (parse_source, parse_path_buf) = {
             let is_js = path.extension().and_then(|e| e.to_str()) == Some("js");
             if is_js && cjs::is_cjs(&source) {
-                let _cjs_exports = cjs::detect_cjs_exports(&source);
-                let stub = cjs::generate_cjs_stub(&source);
+                let cjs_exports = cjs::detect_cjs_exports(&source);
+                let stub = cjs::generate_cjs_stub(path, &cjs_exports);
                 (stub, path.with_extension("mjs"))
             } else {
                 (source.clone(), path.to_path_buf())
