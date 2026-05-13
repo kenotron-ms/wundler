@@ -50,7 +50,9 @@ fn bfs_follows_static_and_dynamic_transitive_descendants() {
     }
 
     // Must NOT be alive
-    for path in ["b", "c", "y1", "y2", "z1", "z2", "lazy_b1", "lazy_c1", "cir1", "cir2"] {
+    for path in [
+        "b", "c", "y1", "y2", "z1", "z2", "lazy_b1", "lazy_c1", "cir1", "cir2",
+    ] {
         let h = hash_of(&nodes, path);
         assert!(
             !alive.contains(&h),
@@ -136,10 +138,7 @@ fn entry_with_no_imports_is_alive_alone() {
 
     let alive = compute_reachability(&nodes, &entry_set);
 
-    assert!(
-        alive.contains(&entry),
-        "expected x2 itself to be alive"
-    );
+    assert!(alive.contains(&entry), "expected x2 itself to be alive");
     assert_eq!(
         alive.len(),
         1,

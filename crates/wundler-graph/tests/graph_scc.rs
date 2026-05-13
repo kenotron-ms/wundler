@@ -87,18 +87,9 @@ fn scc_acyclic_graph_yields_singleton_sccs() {
     // All hashes should appear exactly once
     let all_hashes: Vec<&ContentHash> = sccs.iter().flatten().collect();
     assert_eq!(all_hashes.len(), 3, "expected exactly 3 hashes total");
-    assert!(
-        all_hashes.contains(&&hash_a),
-        "expected hash_a in SCCs"
-    );
-    assert!(
-        all_hashes.contains(&&hash_b),
-        "expected hash_b in SCCs"
-    );
-    assert!(
-        all_hashes.contains(&&hash_c),
-        "expected hash_c in SCCs"
-    );
+    assert!(all_hashes.contains(&&hash_a), "expected hash_a in SCCs");
+    assert!(all_hashes.contains(&&hash_b), "expected hash_b in SCCs");
+    assert!(all_hashes.contains(&&hash_c), "expected hash_c in SCCs");
 }
 
 // ---------------------------------------------------------------------------
@@ -134,14 +125,8 @@ fn scc_two_module_cycle_yields_one_scc_of_size_2() {
         "expected the SCC to contain both nodes, got {:?}",
         sccs[0]
     );
-    assert!(
-        sccs[0].contains(&hash_a),
-        "expected hash_a in the SCC"
-    );
-    assert!(
-        sccs[0].contains(&hash_b),
-        "expected hash_b in the SCC"
-    );
+    assert!(sccs[0].contains(&hash_a), "expected hash_a in the SCC");
+    assert!(sccs[0].contains(&hash_b), "expected hash_b in the SCC");
 }
 
 // ---------------------------------------------------------------------------

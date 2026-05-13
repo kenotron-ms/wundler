@@ -30,7 +30,17 @@ fn hash_of(nodes: &[BundleGraphNode], path: &str) -> ContentHash {
 fn alive_set(nodes: &[BundleGraphNode]) -> HashSet<ContentHash> {
     let mut alive = HashSet::new();
     for path in [
-        "entry", "util_a", "util_a_dep", "util_b", "r1", "r2", "r3", "r4", "r5", "r6", "r7",
+        "entry",
+        "util_a",
+        "util_a_dep",
+        "util_b",
+        "r1",
+        "r2",
+        "r3",
+        "r4",
+        "r5",
+        "r6",
+        "r7",
         "r8",
     ] {
         alive.insert(hash_of(nodes, path));

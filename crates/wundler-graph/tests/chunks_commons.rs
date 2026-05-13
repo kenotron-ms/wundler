@@ -60,10 +60,7 @@ fn shared_util_in_commons_when_threshold_2() {
     let (chunks, module_index) = assign_chunks(&nodes, &alive, &entry_hashes, 2);
 
     // commons chunk must be first.
-    assert!(
-        !chunks.is_empty(),
-        "expected at least one chunk, got none"
-    );
+    assert!(!chunks.is_empty(), "expected at least one chunk, got none");
     let commons = &chunks[0];
     assert_eq!(
         commons.id, "commons",
@@ -137,9 +134,12 @@ fn private_modules_not_in_commons() {
         .expect("expected a commons chunk");
 
     let private_hashes = [
-        &priv_a1.id, &priv_a2.id,
-        &priv_b1.id, &priv_b2.id,
-        &priv_c1.id, &priv_c2.id,
+        &priv_a1.id,
+        &priv_a2.id,
+        &priv_b1.id,
+        &priv_b2.id,
+        &priv_c1.id,
+        &priv_c2.id,
     ];
 
     for hash in private_hashes {

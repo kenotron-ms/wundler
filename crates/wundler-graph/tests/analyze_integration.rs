@@ -46,11 +46,19 @@ fn analyze_three_entries() {
     .collect();
 
     let analyzer = GraphAnalyzer::new(entry_points);
-    let result = analyzer.analyze(nodes).expect("analyze must succeed for valid entries");
+    let result = analyzer
+        .analyze(nodes)
+        .expect("analyze must succeed for valid entries");
 
     // ── stats ────────────────────────────────────────────────────────────────
-    assert_eq!(result.stats.total, 15, "total must be 15 (all nodes in fixture)");
-    assert_eq!(result.stats.alive, 13, "alive must be 13 (cir1+cir2 are dead)");
+    assert_eq!(
+        result.stats.total, 15,
+        "total must be 15 (all nodes in fixture)"
+    );
+    assert_eq!(
+        result.stats.alive, 13,
+        "alive must be 13 (cir1+cir2 are dead)"
+    );
     assert_eq!(result.stats.dead, 2, "dead must be 2 (cir1, cir2)");
     assert_eq!(
         result.stats.chunks,
@@ -66,7 +74,11 @@ fn analyze_three_entries() {
         result.manifest.build_id
     );
     assert!(
-        result.manifest.build_id.chars().all(|c| c.is_ascii_hexdigit()),
+        result
+            .manifest
+            .build_id
+            .chars()
+            .all(|c| c.is_ascii_hexdigit()),
         "build_id must be lowercase hex; got {:?}",
         result.manifest.build_id
     );
@@ -105,14 +117,26 @@ fn analyze_three_entries() {
         .count();
 
     assert_eq!(
-        initial_count, 3,
+        initial_count,
+        3,
         "expected 3 initial route chunks, got {initial_count}; chunks = {:?}",
-        result.manifest.chunks.iter().map(|c| &c.id).collect::<Vec<_>>()
+        result
+            .manifest
+            .chunks
+            .iter()
+            .map(|c| &c.id)
+            .collect::<Vec<_>>()
     );
     assert_eq!(
-        lazy_count, 3,
+        lazy_count,
+        3,
         "expected 3 lazy chunks, got {lazy_count}; chunks = {:?}",
-        result.manifest.chunks.iter().map(|c| &c.id).collect::<Vec<_>>()
+        result
+            .manifest
+            .chunks
+            .iter()
+            .map(|c| &c.id)
+            .collect::<Vec<_>>()
     );
 
     // ── entry_chunks ordering: "commons" first for every route ────────────────
@@ -151,8 +175,9 @@ fn analyze_three_entries() {
 fn analyze_single_entry_a() {
     let nodes = load_nodes();
 
-    let entry_points: HashMap<String, PathBuf> =
-        [("/a".to_string(), PathBuf::from("a"))].into_iter().collect();
+    let entry_points: HashMap<String, PathBuf> = [("/a".to_string(), PathBuf::from("a"))]
+        .into_iter()
+        .collect();
 
     let analyzer = GraphAnalyzer::new(entry_points);
     let result = analyzer
@@ -196,12 +221,10 @@ fn analyze_single_entry_a() {
 fn analyze_unknown_path_returns_err() {
     let nodes = load_nodes();
 
-    let entry_points: HashMap<String, PathBuf> = [(
-        "/unknown".to_string(),
-        PathBuf::from("no_such_module"),
-    )]
-    .into_iter()
-    .collect();
+    let entry_points: HashMap<String, PathBuf> =
+        [("/unknown".to_string(), PathBuf::from("no_such_module"))]
+            .into_iter()
+            .collect();
 
     let analyzer = GraphAnalyzer::new(entry_points);
     let result = analyzer.analyze(nodes);

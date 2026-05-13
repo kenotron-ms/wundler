@@ -16,8 +16,7 @@ use wundler_graph::chunks::hash_chunk;
 fn empty_chunk_equals_sha256_of_empty_input() {
     let result = hash_chunk(&[]);
     assert_eq!(
-        result.0,
-        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        result.0, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "empty chunk must produce SHA-256 of empty input"
     );
 }
@@ -72,8 +71,14 @@ fn order_independent() {
     let reversed = hash_chunk(&[c.clone(), b.clone(), a.clone()]);
     let shuffled = hash_chunk(&[b.clone(), a.clone(), c.clone()]);
 
-    assert_eq!(forward, reversed, "hash must be order-independent (forward vs reversed)");
-    assert_eq!(forward, shuffled, "hash must be order-independent (forward vs shuffled)");
+    assert_eq!(
+        forward, reversed,
+        "hash must be order-independent (forward vs reversed)"
+    );
+    assert_eq!(
+        forward, shuffled,
+        "hash must be order-independent (forward vs shuffled)"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -89,10 +94,7 @@ fn changes_when_members_change() {
     let hash_a_only = hash_chunk(std::slice::from_ref(&a));
     let hash_b_only = hash_chunk(std::slice::from_ref(&b));
 
-    assert_ne!(
-        hash_ab, hash_a_only,
-        "adding a member must change the hash"
-    );
+    assert_ne!(hash_ab, hash_a_only, "adding a member must change the hash");
     assert_ne!(
         hash_ab, hash_b_only,
         "different member sets must produce different hashes"

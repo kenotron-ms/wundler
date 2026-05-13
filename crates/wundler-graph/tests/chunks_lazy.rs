@@ -67,7 +67,12 @@ fn dynamic_import_creates_lazy_chunk() {
     let lazy_root = make_node("lazy_root.js", vec![static_import("lazy_dep.js")]);
     let lazy_dep = make_node("lazy_dep.js", vec![]);
 
-    let nodes = vec![entry.clone(), a.clone(), lazy_root.clone(), lazy_dep.clone()];
+    let nodes = vec![
+        entry.clone(),
+        a.clone(),
+        lazy_root.clone(),
+        lazy_dep.clone(),
+    ];
 
     let mut alive = HashSet::new();
     alive.insert(entry.id.clone());
@@ -81,7 +86,12 @@ fn dynamic_import_creates_lazy_chunk() {
     let (chunks, module_index) = assign_chunks(&nodes, &alive, &entry_hashes, 2);
 
     // Expect 2 chunks: one initial, one lazy.
-    assert_eq!(chunks.len(), 2, "expected 2 chunks (1 initial + 1 lazy), got {:?}", chunks.iter().map(|c| &c.id).collect::<Vec<_>>());
+    assert_eq!(
+        chunks.len(),
+        2,
+        "expected 2 chunks (1 initial + 1 lazy), got {:?}",
+        chunks.iter().map(|c| &c.id).collect::<Vec<_>>()
+    );
 
     // Find the initial chunk.
     let initial = chunks
@@ -89,8 +99,15 @@ fn dynamic_import_creates_lazy_chunk() {
         .find(|c| c.load_condition == LoadCondition::Initial)
         .expect("expected an INITIAL chunk");
     assert_eq!(initial.id, "initial_main");
-    assert_eq!(initial.modules.len(), 2, "initial chunk must contain entry.js and a.js");
-    assert!(initial.modules.contains(&entry.id), "entry.js must be in initial");
+    assert_eq!(
+        initial.modules.len(),
+        2,
+        "initial chunk must contain entry.js and a.js"
+    );
+    assert!(
+        initial.modules.contains(&entry.id),
+        "entry.js must be in initial"
+    );
     assert!(initial.modules.contains(&a.id), "a.js must be in initial");
 
     // Find the lazy chunk.
@@ -98,10 +115,7 @@ fn dynamic_import_creates_lazy_chunk() {
         .iter()
         .find(|c| c.load_condition == LoadCondition::Lazy)
         .expect("expected a LAZY chunk");
-    assert_eq!(
-        lazy_chunk.id, "lazy_1",
-        "first lazy chunk must be 'lazy_1'"
-    );
+    assert_eq!(lazy_chunk.id, "lazy_1", "first lazy chunk must be 'lazy_1'");
     assert_eq!(
         lazy_chunk.modules.len(),
         2,
@@ -285,13 +299,22 @@ fn nested_dynamic_imports_yield_two_distinct_lazy_chunks() {
     assert!(ids.contains("lazy_2"), "expected lazy_2");
 
     // la.js and lb.js must both be in module_index.
-    assert!(module_index.contains_key(&la.id), "la.js must be in module_index");
-    assert!(module_index.contains_key(&lb.id), "lb.js must be in module_index");
+    assert!(
+        module_index.contains_key(&la.id),
+        "la.js must be in module_index"
+    );
+    assert!(
+        module_index.contains_key(&lb.id),
+        "lb.js must be in module_index"
+    );
 
     // la.js and lb.js must be in DIFFERENT lazy chunks.
     let la_chunk = module_index.get(&la.id).unwrap();
     let lb_chunk = module_index.get(&lb.id).unwrap();
-    assert_ne!(la_chunk, lb_chunk, "la.js and lb.js must be in different lazy chunks");
+    assert_ne!(
+        la_chunk, lb_chunk,
+        "la.js and lb.js must be in different lazy chunks"
+    );
 
     // la.js must be in lazy_1, lb.js must be in lazy_2 (outer discovered first).
     assert_eq!(

@@ -37,8 +37,7 @@ fn load_condition_round_trips_all_variants() {
         LoadCondition::Prefetch,
     ] {
         let json = serde_json::to_string(&variant).expect("serialize failed");
-        let recovered: LoadCondition =
-            serde_json::from_str(&json).expect("deserialize failed");
+        let recovered: LoadCondition = serde_json::from_str(&json).expect("deserialize failed");
         assert_eq!(recovered, variant, "round-trip failed for {variant:?}");
     }
 }
@@ -84,10 +83,7 @@ fn chunk_manifest_round_trips_with_all_fields_preserved() {
     assert_eq!(recovered.chunks[0].id, "chunk-main");
     assert_eq!(recovered.chunks[0].hash, chunk_hash);
     assert_eq!(recovered.chunks[0].load_condition, LoadCondition::Initial);
-    assert_eq!(
-        recovered.chunks[0].co_request_score,
-        Some(1.0)
-    );
+    assert_eq!(recovered.chunks[0].co_request_score, Some(1.0));
     assert_eq!(recovered.chunks[0].suggested_merge, None);
     assert_eq!(
         recovered.entry_chunks.get("main"),
@@ -106,5 +102,8 @@ fn from_json_rejects_malformed_input() {
     assert!(result.is_err(), "expected error for malformed JSON");
 
     let result2 = ChunkManifest::from_json(r#"{"build_id": "x"}"#);
-    assert!(result2.is_err(), "expected error for missing required fields");
+    assert!(
+        result2.is_err(),
+        "expected error for missing required fields"
+    );
 }

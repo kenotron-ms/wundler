@@ -84,9 +84,20 @@ fn cycle_member_pulls_entire_scc_alive() {
     let alive = compute_reachability_with_sccs(&nodes, &entry_set);
 
     assert!(alive.contains(&h("entry")), "'entry' must be alive");
-    assert!(alive.contains(&h("a")), "'a' must be alive (SCC member reached)");
-    assert!(alive.contains(&h("b")), "'b' must be alive (co-SCC member with 'a')");
-    assert_eq!(alive.len(), 3, "expected exactly 3 alive nodes, got {}", alive.len());
+    assert!(
+        alive.contains(&h("a")),
+        "'a' must be alive (SCC member reached)"
+    );
+    assert!(
+        alive.contains(&h("b")),
+        "'b' must be alive (co-SCC member with 'a')"
+    );
+    assert_eq!(
+        alive.len(),
+        3,
+        "expected exactly 3 alive nodes, got {}",
+        alive.len()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -114,9 +125,20 @@ fn unreachable_cycle_is_entirely_dead() {
     let alive = compute_reachability_with_sccs(&nodes, &entry_set);
 
     assert!(alive.contains(&h("entry")), "'entry' must be alive");
-    assert!(!alive.contains(&h("cycle_a")), "'cycle_a' must be dead (unreachable)");
-    assert!(!alive.contains(&h("cycle_b")), "'cycle_b' must be dead (unreachable)");
-    assert_eq!(alive.len(), 1, "expected exactly 1 alive node, got {}", alive.len());
+    assert!(
+        !alive.contains(&h("cycle_a")),
+        "'cycle_a' must be dead (unreachable)"
+    );
+    assert!(
+        !alive.contains(&h("cycle_b")),
+        "'cycle_b' must be dead (unreachable)"
+    );
+    assert_eq!(
+        alive.len(),
+        1,
+        "expected exactly 1 alive node, got {}",
+        alive.len()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -144,10 +166,24 @@ fn cycle_node_in_entry_marks_whole_cycle_alive() {
 
     let alive = compute_reachability_with_sccs(&nodes, &entry_set);
 
-    assert!(alive.contains(&h("a")), "'a' must be alive (entry + SCC member)");
-    assert!(alive.contains(&h("b")), "'b' must be alive (co-SCC member activated with 'a')");
-    assert!(!alive.contains(&h("c")), "'c' must be dead (not reachable from 'a')");
-    assert_eq!(alive.len(), 2, "expected exactly 2 alive nodes, got {}", alive.len());
+    assert!(
+        alive.contains(&h("a")),
+        "'a' must be alive (entry + SCC member)"
+    );
+    assert!(
+        alive.contains(&h("b")),
+        "'b' must be alive (co-SCC member activated with 'a')"
+    );
+    assert!(
+        !alive.contains(&h("c")),
+        "'c' must be dead (not reachable from 'a')"
+    );
+    assert_eq!(
+        alive.len(),
+        2,
+        "expected exactly 2 alive nodes, got {}",
+        alive.len()
+    );
 }
 
 // ---------------------------------------------------------------------------

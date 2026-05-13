@@ -59,8 +59,10 @@ pub fn compute_dead_exports(
         nodes.iter().map(|n| (n.id.clone(), n)).collect();
 
     // Path → hash (for resolving cross-module `"path::export"` callees).
-    let path_to_hash: HashMap<&str, ContentHash> =
-        nodes.iter().map(|n| (n.path.as_str(), n.id.clone())).collect();
+    let path_to_hash: HashMap<&str, ContentHash> = nodes
+        .iter()
+        .map(|n| (n.path.as_str(), n.id.clone()))
+        .collect();
 
     // -----------------------------------------------------------------------
     // Step 2 — seed live_exports with public roots.

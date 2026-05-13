@@ -95,7 +95,10 @@ fn round_trip_preserves_all_fields() {
     let restored = ChunkManifest::from_json(&json).expect("from_json must succeed");
 
     // build_id preserved
-    assert_eq!(original.build_id, restored.build_id, "build_id must be preserved");
+    assert_eq!(
+        original.build_id, restored.build_id,
+        "build_id must be preserved"
+    );
 
     // entry_chunks preserved
     assert_eq!(
@@ -108,7 +111,10 @@ fn round_trip_preserves_all_fields() {
             .entry_chunks
             .get(route)
             .unwrap_or_else(|| panic!("entry_chunks must contain route '{route}'"));
-        assert_eq!(chunk_ids, restored_ids, "entry_chunks for '{route}' must match");
+        assert_eq!(
+            chunk_ids, restored_ids,
+            "entry_chunks for '{route}' must match"
+        );
     }
 
     // module_index preserved
@@ -122,7 +128,11 @@ fn round_trip_preserves_all_fields() {
             .module_index
             .get(hash)
             .unwrap_or_else(|| panic!("module_index must contain hash '{}'", hash.0));
-        assert_eq!(chunk_id, restored_id, "module_index entry for '{}' must match", hash.0);
+        assert_eq!(
+            chunk_id, restored_id,
+            "module_index entry for '{}' must match",
+            hash.0
+        );
     }
 
     // chunk count preserved
@@ -209,10 +219,19 @@ fn output_is_pretty_printed_json() {
     assert!(parsed.is_object(), "JSON output must be a JSON object");
 
     let obj = parsed.as_object().expect("already confirmed object above");
-    assert!(obj.contains_key("build_id"), "JSON must have 'build_id' key");
+    assert!(
+        obj.contains_key("build_id"),
+        "JSON must have 'build_id' key"
+    );
     assert!(obj.contains_key("chunks"), "JSON must have 'chunks' key");
-    assert!(obj.contains_key("entry_chunks"), "JSON must have 'entry_chunks' key");
-    assert!(obj.contains_key("module_index"), "JSON must have 'module_index' key");
+    assert!(
+        obj.contains_key("entry_chunks"),
+        "JSON must have 'entry_chunks' key"
+    );
+    assert!(
+        obj.contains_key("module_index"),
+        "JSON must have 'module_index' key"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -222,12 +241,17 @@ fn output_is_pretty_printed_json() {
 #[test]
 fn malformed_json_returns_error() {
     let result = ChunkManifest::from_json("{ not valid json ]");
-    assert!(result.is_err(), "syntactically malformed JSON must return Err");
+    assert!(
+        result.is_err(),
+        "syntactically malformed JSON must return Err"
+    );
 
     let result2 = ChunkManifest::from_json("");
     assert!(result2.is_err(), "empty string must return Err");
 
     // Structurally valid JSON but wrong schema (build_id must be a string)
-    let result3 = ChunkManifest::from_json("{\"build_id\": 42, \"chunks\": [], \"entry_chunks\": {}, \"module_index\": {}}");
+    let result3 = ChunkManifest::from_json(
+        "{\"build_id\": 42, \"chunks\": [], \"entry_chunks\": {}, \"module_index\": {}}",
+    );
     assert!(result3.is_err(), "wrong type for build_id must return Err");
 }

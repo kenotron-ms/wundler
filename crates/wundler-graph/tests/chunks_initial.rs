@@ -97,10 +97,7 @@ fn single_entry_one_initial_chunk_with_static_descendants() {
         chunk.modules.contains(&entry.id),
         "entry.js must be in chunk"
     );
-    assert!(
-        chunk.modules.contains(&util.id),
-        "util.js must be in chunk"
-    );
+    assert!(chunk.modules.contains(&util.id), "util.js must be in chunk");
     assert!(
         chunk.modules.contains(&helper.id),
         "helper.js must be in chunk"
@@ -209,7 +206,10 @@ fn dynamic_imports_excluded_from_initial_chunk() {
         1,
         "dynamic import must NOT pull dynamic.js into the INITIAL chunk"
     );
-    assert!(initial.modules.contains(&entry.id), "entry.js must be present");
+    assert!(
+        initial.modules.contains(&entry.id),
+        "entry.js must be present"
+    );
     assert!(
         !initial.modules.contains(&dyn_mod.id),
         "dynamic.js must NOT be in the INITIAL chunk"

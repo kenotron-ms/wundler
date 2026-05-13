@@ -55,9 +55,10 @@ fn build_id_deterministic_and_64_chars() {
 
 #[test]
 fn build_id_changes_when_entry_set_changes() {
-    let entry_hashes_slash: HashMap<String, ContentHash> = [("/".to_string(), ContentHash("aaa".to_string()))]
-        .into_iter()
-        .collect();
+    let entry_hashes_slash: HashMap<String, ContentHash> =
+        [("/".to_string(), ContentHash("aaa".to_string()))]
+            .into_iter()
+            .collect();
 
     let entry_hashes_admin: HashMap<String, ContentHash> =
         [("/admin".to_string(), ContentHash("bbb".to_string()))]
