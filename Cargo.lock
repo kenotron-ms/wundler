@@ -1883,6 +1883,7 @@ dependencies = [
  "clap",
  "indicatif",
  "serde_json",
+ "walkdir",
  "wundler-core",
 ]
 
