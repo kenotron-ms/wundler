@@ -6,6 +6,7 @@
 //! detection, and JSON serialisation.
 
 pub mod graph;
+pub mod reachability;
 pub mod types;
 
 /// Returns the crate name – used as a lightweight smoke-test sentinel.

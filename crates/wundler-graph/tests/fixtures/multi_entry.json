@@ -1,0 +1,202 @@
+[
+  {
+    "id": "hash-a",
+    "path": "a",
+    "summary": {
+      "exports": [],
+      "imports": [
+        {"specifier": "x1",     "kind": "NAMED",   "bindings": [], "is_dynamic": false},
+        {"specifier": "lazy_a1","kind": "DYNAMIC", "bindings": [], "is_dynamic": true},
+        {"specifier": "shared", "kind": "NAMED",   "bindings": [], "is_dynamic": false}
+      ],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-b",
+    "path": "b",
+    "summary": {
+      "exports": [],
+      "imports": [
+        {"specifier": "y1",     "kind": "NAMED",   "bindings": [], "is_dynamic": false},
+        {"specifier": "lazy_b1","kind": "DYNAMIC", "bindings": [], "is_dynamic": true},
+        {"specifier": "shared", "kind": "NAMED",   "bindings": [], "is_dynamic": false}
+      ],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-c",
+    "path": "c",
+    "summary": {
+      "exports": [],
+      "imports": [
+        {"specifier": "z1",     "kind": "NAMED",   "bindings": [], "is_dynamic": false},
+        {"specifier": "z2",     "kind": "NAMED",   "bindings": [], "is_dynamic": false},
+        {"specifier": "lazy_c1","kind": "DYNAMIC", "bindings": [], "is_dynamic": true}
+      ],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-x1",
+    "path": "x1",
+    "summary": {
+      "exports": [],
+      "imports": [
+        {"specifier": "x2", "kind": "NAMED", "bindings": [], "is_dynamic": false}
+      ],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-x2",
+    "path": "x2",
+    "summary": {
+      "exports": [],
+      "imports": [],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-y1",
+    "path": "y1",
+    "summary": {
+      "exports": [],
+      "imports": [
+        {"specifier": "y2", "kind": "NAMED", "bindings": [], "is_dynamic": false}
+      ],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-y2",
+    "path": "y2",
+    "summary": {
+      "exports": [],
+      "imports": [],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-z1",
+    "path": "z1",
+    "summary": {
+      "exports": [],
+      "imports": [],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-z2",
+    "path": "z2",
+    "summary": {
+      "exports": [],
+      "imports": [],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-lazy_a1",
+    "path": "lazy_a1",
+    "summary": {
+      "exports": [],
+      "imports": [],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-lazy_b1",
+    "path": "lazy_b1",
+    "summary": {
+      "exports": [],
+      "imports": [],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-lazy_c1",
+    "path": "lazy_c1",
+    "summary": {
+      "exports": [],
+      "imports": [],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-shared",
+    "path": "shared",
+    "summary": {
+      "exports": [],
+      "imports": [],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-cir1",
+    "path": "cir1",
+    "summary": {
+      "exports": [],
+      "imports": [
+        {"specifier": "cir2", "kind": "NAMED", "bindings": [], "is_dynamic": false}
+      ],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  },
+  {
+    "id": "hash-cir2",
+    "path": "cir2",
+    "summary": {
+      "exports": [],
+      "imports": [
+        {"specifier": "cir1", "kind": "NAMED", "bindings": [], "is_dynamic": false}
+      ],
+      "sideEffects": {"kind": "NONE"},
+      "callEdges": [],
+      "ambientRefs": []
+    },
+    "alive": true
+  }
+]
