@@ -1,0 +1,20 @@
+{
+  "name": "wundler-test-app",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "rolldown -c rolldown.config.ts",
+    "build:watch": "rolldown -c rolldown.config.ts --watch",
+    "serve": "npx serve dist -l 4000"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "rolldown": "latest",
+    "typescript": "^5.0.0"
+  }
+}
