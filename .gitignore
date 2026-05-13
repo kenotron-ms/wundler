@@ -1,2 +1,5 @@
 .superpowers/
 .DS_Store
+target/
+.playwright-cli/
+test-app-screenshot.png
