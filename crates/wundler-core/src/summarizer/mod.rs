@@ -11,7 +11,10 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::Result;
+use rayon::prelude::*;
+use walkdir::WalkDir;
 
+use crate::cache::local::LocalCache;
 use crate::cjs;
 use crate::summarizer::ambient_refs::extract_ambient_refs;
 use crate::summarizer::call_edges::extract_call_edges;
@@ -20,6 +23,54 @@ use crate::summarizer::imports::extract_imports;
 use crate::summarizer::parser::parse_module;
 use crate::summarizer::side_effects::analyze_side_effects;
 use crate::types::{BundleGraphNode, ContentHash, ModuleSummary};
+
+const JS_EXTENSIONS: &[&str] = &["ts", "tsx", "js", "jsx", "mjs", "cjs"];
+
+/// Walks `dir` recursively and summarizes every file whose extension is one of
+/// [`JS_EXTENSIONS`], returning one [`BundleGraphNode`] per file.
+///
+/// Results are computed in parallel via Rayon. Cache hits short-circuit the
+/// parse step: if a cached [`ModuleSummary`] exists for the file's content
+/// hash, the node is reconstructed from the cache without re-parsing.
+pub fn summarize_directory(dir: &Path, cache: &LocalCache) -> Result<Vec<BundleGraphNode>> {
+    let paths: Vec<_> = WalkDir::new(dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .filter_map(|e| {
+            let path = e.path().to_path_buf();
+            let ext = path.extension()?.to_str()?.to_lowercase();
+            if JS_EXTENSIONS.contains(&ext.as_str()) {
+                Some(path)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    paths
+        .par_iter()
+        .map(|path| {
+            let source = fs::read_to_string(path)?;
+            let hash = ContentHash::from_source(&source);
+            if let Some(cached_summary) = cache.get(&hash)? {
+                return Ok(BundleGraphNode {
+                    id: hash,
+                    path: path.to_string_lossy().into_owned(),
+                    summary: cached_summary,
+                    alive: false,
+                    chunk_id: None,
+                });
+            }
+            let summarizer = ModuleSummarizer::new();
+            let node = summarizer.summarize(path)?;
+            cache.put(&node.id, &node.summary)?;
+            Ok(node)
+        })
+        .collect::<Vec<Result<_>>>()
+        .into_iter()
+        .collect::<Result<Vec<_>>>()
+}
 
 /// Reads a source file from disk, parses it, and produces a `BundleGraphNode`
 /// containing the module's id, path, and full summary.
@@ -86,5 +137,63 @@ impl ModuleSummarizer {
 impl Default for ModuleSummarizer {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cache::local::LocalCache;
+    use std::fs as sfs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_summarize_directory_processes_all_ts_files() {
+        let dir = TempDir::new().unwrap();
+        let cache_dir = TempDir::new().unwrap();
+        let cache = LocalCache::new(cache_dir.path().to_path_buf()).unwrap();
+
+        sfs::write(dir.path().join("a.ts"), "export const a = 1;").unwrap();
+        sfs::write(dir.path().join("b.ts"), "export const b = 2;").unwrap();
+        sfs::write(dir.path().join("c.ts"), "export const c = 3;").unwrap();
+
+        let nodes = summarize_directory(dir.path(), &cache).unwrap();
+        assert_eq!(nodes.len(), 3);
+        for node in &nodes {
+            assert!(!node.id.as_str().is_empty(), "node id should be non-empty");
+        }
+    }
+
+    #[test]
+    fn test_summarize_directory_uses_cache_on_second_run() {
+        let dir = TempDir::new().unwrap();
+        let cache_dir = TempDir::new().unwrap();
+        let cache = LocalCache::new(cache_dir.path().to_path_buf()).unwrap();
+
+        sfs::write(dir.path().join("a.ts"), "export const a = 1;").unwrap();
+
+        let nodes1 = summarize_directory(dir.path(), &cache).unwrap();
+        assert_eq!(nodes1.len(), 1);
+        let id1 = nodes1[0].id.clone();
+
+        let nodes2 = summarize_directory(dir.path(), &cache).unwrap();
+        assert_eq!(nodes2.len(), 1);
+        let id2 = nodes2[0].id.clone();
+
+        assert_eq!(id1, id2, "second run should return same id from cache");
+    }
+
+    #[test]
+    fn test_summarize_directory_skips_non_js_ts_files() {
+        let dir = TempDir::new().unwrap();
+        let cache_dir = TempDir::new().unwrap();
+        let cache = LocalCache::new(cache_dir.path().to_path_buf()).unwrap();
+
+        sfs::write(dir.path().join("a.ts"), "export const a = 1;").unwrap();
+        sfs::write(dir.path().join("styles.css"), ".foo { color: red; }").unwrap();
+        sfs::write(dir.path().join("readme.md"), "# README").unwrap();
+
+        let nodes = summarize_directory(dir.path(), &cache).unwrap();
+        assert_eq!(nodes.len(), 1, "only the .ts file should be processed");
     }
 }
