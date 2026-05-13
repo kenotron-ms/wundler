@@ -44,6 +44,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use sha2::{Digest, Sha256};
 use wundler_core::types::{BundleGraphNode, ContentHash, ImportKind};
 
 use crate::types::{Chunk, ChunkId, LoadCondition};
@@ -227,10 +228,13 @@ pub fn assign_chunks(
             module_index.insert(m.clone(), "commons".to_string());
         }
 
+        // Build hash from the final sorted members list before moving it.
+        let chunk_hash = hash_chunk(&commons_modules);
+
         chunks.push(Chunk {
             id: "commons".to_string(),
             modules: commons_modules,
-            hash: ContentHash("".to_string()),
+            hash: chunk_hash,
             load_condition: LoadCondition::Initial,
             co_request_score: None,
             median_load_order: None,
@@ -261,10 +265,13 @@ pub fn assign_chunks(
             continue;
         }
 
+        // Build hash from the final modules list before moving it.
+        let chunk_hash = hash_chunk(&chunk_modules);
+
         chunks.push(Chunk {
             id: candidate.id,
             modules: chunk_modules,
-            hash: ContentHash("".to_string()),
+            hash: chunk_hash,
             load_condition: candidate.load_condition,
             co_request_score: None,
             median_load_order: None,
@@ -380,6 +387,29 @@ fn chunk_id_slug(route: &str) -> String {
     } else {
         slug
     }
+}
+
+// ---------------------------------------------------------------------------
+// Public hashing API
+// ---------------------------------------------------------------------------
+
+/// Compute a deterministic SHA-256 hash over a set of chunk member hashes.
+///
+/// The algorithm is:
+/// 1. Extract the hex string (`h.0.as_str()`) from each member `ContentHash`.
+/// 2. Sort those strings lexicographically so the result is order-independent.
+/// 3. Join them with `"\n"`.
+/// 4. Compute `SHA-256` of the joined UTF-8 bytes.
+/// 5. Return the lowercase hex-encoded digest as a `ContentHash` (64 ASCII chars).
+///
+/// An empty member slice produces the SHA-256 of the empty byte sequence:
+/// `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+pub fn hash_chunk(members: &[ContentHash]) -> ContentHash {
+    let mut sorted: Vec<&str> = members.iter().map(|h| h.0.as_str()).collect();
+    sorted.sort();
+    let joined = sorted.join("\n");
+    let digest = Sha256::digest(joined.as_bytes());
+    ContentHash(hex::encode(digest))
 }
 
 // ---------------------------------------------------------------------------
