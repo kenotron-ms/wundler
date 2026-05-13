@@ -1,96 +1,104 @@
 ---
-title: "Wundler: A Linker-Inspired Module Graph Architecture"
-subtitle: "Architecture Brief — Executive Software Architect Review"
-date: "2026-05-13"
+title: "Wundler"
+subtitle: "Architecture Brief — Executive Software Architect Review · 2026-05-13"
 ---
 
-# Wundler: A Linker-Inspired Module Graph Architecture
+# Wundler
 
-**Architecture Brief · 2026-05-13**
+**The module graph is the software. The bundle is a query.**
+
+Wundler is a continuously-maintained module graph and delivery system for large-scale JavaScript applications. Source files are parsed into a compact graph of metadata. All output forms — development servers, CI artifacts, production bundles, adaptive per-client delivery — are materializations of that graph. One graph, many queries.
 
 ---
 
 ## The Problem
 
-Every extant JS bundler — Vite, webpack, esbuild, Rspack, Rolldown — performs eager global analysis on every invocation. The module graph is re-traversed from scratch regardless of what changed. Build time is O(n) in total module count, not O(Δ). At 50,000+ modules this is not a profiling problem or a parallelism problem; it is an architectural category error. The linker world solved this in 2019–2022. We're applying those solutions here.
+Every extant JS bundler performs eager global analysis on every invocation. Build time is O(n) in total module count, not O(Δ). At 50,000+ modules this is an architectural category error, not a profiling problem. The linker world solved the equivalent problem across 2019–2022.
 
 ---
 
-## Intellectual Foundation: The Linker Isomorphism
+## From Linker to Bundler
 
-The central insight is that JavaScript bundling and native-code linking are structurally isomorphic problems. The linker world's solutions map directly — sometimes identically — to the bundler domain.
+![The direct conceptual mapping between the linker world and Wundler](assets/linker-map.png)
 
-![Figure 1: Direct concept mapping from the linker world to Wundler](assets/linker-map.png)
+JavaScript bundling and native-code linking are structurally isomorphic. Each linker innovation maps directly.
 
-**mold's parallelism model** rewrote LLD's 35%-serial symbol-table insertion into a concurrent `oneTBB::concurrent_hash_map` with sharded string dedup. The key architectural insight: LLD's `DenseMap` (single-threaded) was the bottleneck, not the computations themselves. Wundler's Phase 1 applies the same principle: `rayon` parallel iterators, one summarizer task per source file, zero shared mutable state.
+**mold** rewrote LLD's 35%-serial symbol-table insertion with a concurrent `oneTBB::concurrent_hash_map` and sharded string dedup. LLD's `DenseMap` (single-threaded) was the bottleneck, not the computation. Wundler's Summarizer applies the same design: `rayon` parallel iterators, one task per source file, no shared mutable state.
 
-**ThinLTO** is the closest prior art. It splits monolithic LTO into three decoupled phases: (1) per-module compile → summary index (parallel, incremental), (2) thin-link on summaries only (serial, fast — summaries are kilobytes, not megabytes), (3) per-module backend guided by thin-link decisions (parallel). A `FunctionSummary` in ThinLTO carries call edges, type IDs, hotness, and side-effect markers — exactly what a `ModuleSummary` in Wundler carries for JavaScript exports. The key insight ThinLTO proved: **you can do accurate cross-module optimization without ever loading the full IR of every module simultaneously.** Summaries are sufficient for all global decisions.
+**ThinLTO** split monolithic LTO into three decoupled operations: per-module summary emission (parallel, cached), global analysis on summaries only (serial, fast — summaries are kilobytes), per-module backend guided by those decisions (parallel again). A `FunctionSummary` carries call edges, type IDs, hotness, and side-effect markers — precisely what a Wundler `ModuleSummary` carries for JavaScript. ThinLTO proved that accurate cross-module optimization never requires loading every module's full IR simultaneously. Summaries are sufficient.
 
-**BOLT and Propeller** introduced profile-guided binary layout — reordering basic blocks and functions by measuring actual runtime call patterns rather than guessing at static heuristics. BOLT's C³ clustering algorithm and Propeller's `--symbol-ordering-file` (derived from `perf` profiles) are the direct ancestors of Wundler's PGO chunk grouping in the Adaptive Bundle Service.
+**BOLT and Propeller** introduced profile-guided binary layout, reordering basic blocks and functions by measuring actual runtime call patterns rather than static heuristics. BOLT's C³ clustering algorithm and Propeller's `--symbol-ordering-file` are the direct ancestors of Wundler's PGO chunk grouping in the Adaptive Bundle Service.
 
-**Incremental linking** (mold's approach over gold's) avoids on-disk state persistence — mold just re-runs so fast that the OS page cache makes the "second link" essentially free. For summaries that are 2KB each, Wundler's Phase 1 is the same: re-summarizing an unchanged module is cheaper than deserializing a complex on-disk structure.
+**Incremental linking** (mold's model, not gold's) avoids on-disk state persistence entirely. mold reruns so fast that the OS page cache makes the second link essentially free. For 2KB summaries, resummarizig an unchanged module is cheaper than deserializing a complex on-disk structure — so Wundler does the same.
 
-**Dynamic linking** — GOT/PLT, late-bound symbol resolution, `ld.so` loading only what's referenced — is the conceptual ancestor of Wundler's Adaptive Bundle Service. The browser client resolves module dependencies at runtime against a manifest server, fetching only what it doesn't already have. The service worker is `ld.so`. The content-hashed CDN chunks are shared libraries. The delta manifest is the `.so` lookup.
+**Dynamic linking** — GOT/PLT, late-bound symbol resolution, `ld.so` loading only what's referenced — is the conceptual ancestor of the Adaptive Bundle Service. The service worker is `ld.so`. Content-hashed CDN chunks are shared libraries. The delta manifest is the `.so` lookup. The browser fetches only what it doesn't already have.
 
 ---
 
-## Architecture
+## The Mental Model
 
-![Figure 2: Wundler System Architecture](assets/system-arch.png)
+![The module graph as the center of gravity. All output forms are derived.](assets/mental-model.png)
+
+The central data structure is the **Bundle Graph**: a content-addressed DAG where nodes are modules and edges are import relationships, persisted across builds. One graph, two materialization strategies: dev serves native ESM directly from summary data; production materializes chunk files through the Transform Engine. No separate dev/prod pipeline. No divergence.
+
+---
+
+## System Architecture
+
+![System architecture: three zones, one feedback loop](assets/system-overview.png)
 
 ### Components
 
-**Bundle Graph** — the primary artifact. Not a bundle file. A content-addressed DAG where nodes are modules and edges are import relationships. The Bundle Graph is persisted across builds. All output artifacts (static bundles, chunk files, ABS delta responses, native ESM for dev) are *materializations* — different query strategies over the same graph. There is no separate dev/prod build; there is one graph and two materialization modes.
+**Summarizer** — parses each source file and emits a compact `ModuleSummary` (~2KB): exports (named, default, re-export, star), imports (static and dynamic, exact bindings), a `SideEffectMarker`, inter-export call edges, and ambient global references. Runs in parallel. Cached by `SHA-256(source)` — a file that hasn't changed costs nothing. For `node_modules`, the cache key is `SHA-256(pkg-name + version + dep-tree)`, skipping source hashing entirely for packages whose version hasn't moved.
 
-**Summary Cache** — two-tier, content-addressed. File-level key: `SHA-256(source)`. Package-level key: `SHA-256(pkg-name + version + dep-tree-hash)` for `node_modules`, which are structurally stable between dev iterations. A CI-seeded remote layer (Azure Blob / S3) populates the cache for developers on cold builds. Phase 1 cost for a developer is proportional to `|changed_source_files|`, not `|total_modules|`.
+A CI-seeded remote cache (Azure Blob / S3) means developer cold builds populate from a cache seeded in CI. Summarizer cost scales with changed source files, not total module count.
 
-**Thin-Link Analyzer** — operates exclusively on summaries. At 50k modules × ~2KB/summary ≈ 100MB total. Single-threaded bandwidth-bound scan: ~50ms. Three passes: (1) BFS/DFS reachability from entry points — dead modules skip Phase 3 entirely and are never transformed; (2) call-edge DCE — exports unreachable from live entry points via the call graph are marked dead; (3) chunk assignment — route-based splits at `import()` boundaries on day 1, PGO-refined after Level 1 collects data. Re-runs only when a summary changes (new imports or exports); pure implementation edits don't touch Phase 2.
+**Graph Analyzer** — reads all summaries and builds the full module graph. Three passes: (1) BFS/DFS reachability from entry points, marking unreachable modules dead; (2) call-edge DCE, marking exports unreachable from live entry points as dead; (3) delivery group assignment. Operates on summary data only. At 50k modules, the entire working set is ~100MB — a bandwidth-bound serial scan takes ~50ms. Re-runs only when a summary changes (new imports or exports added). Implementation-only edits never touch it.
 
-**ChunkManifest** — Phase 2's output. The handshake between the build system and the Adaptive Bundle Service:
+**ChunkManifest** — the Graph Analyzer's output, and the handshake with the Adaptive Bundle Service:
 
 ```
 ChunkManifest {
   buildId:      string                         // SHA of entry points
   chunks:       Chunk[]
-  entryChunks:  Record<EntryPoint, ChunkId[]>  // what to load per route
-  moduleIndex:  Record<ContentHash, ChunkId>   // O(1) lookup
+  entryChunks:  Record<EntryPoint, ChunkId[]>
+  moduleIndex:  Record<ContentHash, ChunkId>
 
   Chunk {
     id, modules: ContentHash[], hash: ContentHash
     loadCondition: INITIAL | LAZY | PREFETCH
-    coRequestScore?:  number    // P(this chunk | initial load) — ABS-populated
+    coRequestScore?:  number    // P(chunk | initial load) — ABS-populated
     suggestedMerge?:  ChunkId   // ABS recommendation, no rebuild required
   }
 }
 ```
 
-**TransformEngine** — pluggable interface behind `transformChunk(modules, chunkId, decisions) → ChunkOutput`. Two concrete adapters: `RolldownAdapter` (Rust-native, default, no FFI on hot path) and `RspackAdapter` (webpack-compatible, for stacks already on Rspack). Phase 3 wall-clock time scales as `|changed_alive_modules| / cores`. Unchanged modules hit the transform cache (keyed on `ContentHash`). Dead modules — those marked `alive: false` by Phase 2 — never reach Phase 3.
+**Transform Engine** — produces output files for alive, changed modules only. Behind a `TransformEngine` interface: `RolldownAdapter` (Rust-native, default) and `RspackAdapter` (webpack-compatible). Wall-clock time scales as `|changed_alive_modules| / cores`. Dead modules never reach this component.
 
-**CJS Stub Generator** — `module.exports = { ... }` is evaluated, not declared. For CJS packages: execute the package entry in an isolated `happy-dom` worker, enumerate `Object.keys(module.exports)`, emit a synthetic `.mjs` stub with named exports. The stub is what Phase 1 summarizes. Same approach as Cloudpack; only accurate method for dynamic export patterns.
-
----
-
-## The Bundle Graph Node
-
-![Figure 3: BundleGraphNode — three production phases, one data structure](assets/node-anatomy.png)
-
-The `SideEffectMarker` deserves specific mention. JavaScript's module-level code is the hardest correctness problem in the system. The rule applied here is the ThinLTO rule: **conservative at module boundaries, aggressive at function boundaries.** Module-level code (any statement that executes at `import` time) is conservatively assumed to have side effects unless proven otherwise. Function-level code (named exports, helper functions) is aggressively eliminated if unreachable from live entry points via call-edge reachability. A correctness audit mode diffs Conservative-only output against the heuristic on every build and alerts on divergence — this is a non-negotiable safety net before any tree-shaking reaches production.
+**CJS Stub Generator** — `module.exports` is evaluated, not declared. For CJS packages: execute the entry point in an isolated `happy-dom` worker, enumerate exports, emit a synthetic `.mjs` stub. The stub is what the Summarizer parses. Only accurate method for dynamic export patterns.
 
 ---
 
-## Adaptive Bundle Service & PGO Feedback Loop
+## The Module Graph Node
 
-The ABS is a manifest server, not a code server. CDN serves code. This distinction drives the security model: ABS compromise lets an attacker redirect clients to different *existing* content-hashed chunks, not inject arbitrary code. Build-time ed25519 signing of chunk hashes enables the service worker to detect manifest tampering.
+![Each node carries three layers, produced by three different components](assets/node-card.png)
 
-**Protocol:**
+The `SideEffectMarker` requires specific attention. The rule: conservative at module boundaries, aggressive at function boundaries. Module-level code (any statement executing at import time) is conservatively assumed to have side effects unless proven otherwise. Export-level code is aggressively eliminated if unreachable from live entry points via call-edge reachability. A correctness audit mode diffs Conservative-only output against the heuristic on every build and alerts on divergence. This runs before any tree-shaking reaches production.
+
+---
+
+## Adaptive Bundle Service & PGO
+
+The ABS is a manifest server. The CDN serves code. This separation defines the security model: ABS compromise redirects clients to different existing content-hashed chunks — not code injection. Build-time ed25519 signing of chunk hashes lets the service worker detect manifest tampering.
+
 ```
-Client → ABS: { entryPoint, cachedHashes: ContentHash[], buildId? }
-ABS → Client: { buildId, fetchUrls: URL[], prefetchUrls: URL[], ttl }
+Client → ABS:  { entryPoint, cachedHashes: ContentHash[], buildId? }
+ABS → Client:  { buildId, fetchUrls: URL[], prefetchUrls: URL[], ttl }
 ```
 
-The ABS records which chunks were served together per session — the co-request log. Over time this builds a matrix approximating P(chunk\_A | chunk\_B). C³-style clustering (BOLT-derived) identifies chunks that are always co-fetched and proposes `suggestedMerge` hints into the ChunkManifest. The chunk reorganization applies to future requests *without a rebuild* — the graph is unchanged, only the ChunkManifest's `suggestedMerge` entries update. This is the PGO feedback loop closing: usage data from production flows back into chunk assignment decisions, improving delivery without engineering intervention.
+The ABS logs co-request patterns per session. Over time the PGO Store builds `P(chunk_A | chunk_B)`. C³-style clustering identifies chunks that should merge. `suggestedMerge` hints update the ChunkManifest without a rebuild — the graph is unchanged, only the delivery groupings shift. This is the feedback loop: production traffic continuously improves chunk layout. Every sufficiently large web application already ships a service worker managing module assets. The delta-manifest protocol is a configuration update to an existing component, not new infrastructure.
 
-Every client already has a service worker managing module assets at this scale. The delta-manifest protocol is a SW configuration update. Failure degrades transparently to `manifest.json` on CDN.
+**Failure degrades transparently.** Service worker timeout at 100ms p99 falls back to `manifest.json` on CDN. The ABS is never on the hard critical path.
 
 ---
 
@@ -99,21 +107,21 @@ Every client already has a service worker managing module assets at this scale. 
 | Invariant | Mechanism |
 |---|---|
 | Module-level side effects preserved | Conservative `SideEffectMarker` at module boundary |
-| Function-level dead code eliminated | Call-edge reachability across summary graph |
+| Export-level dead code eliminated | Call-edge reachability from live entry points |
 | CJS exports correctly enumerated | Worker execution + synthetic `.mjs` stub |
-| Tree-shaking correctness verified | Audit mode: diff Conservative vs heuristic on every build |
-| Build output immutable | Content-hash keyed chunks on CDN; `buildId` invalidation |
-| ABS never a SPOF | SW timeouts at 100ms p99 → falls back to `manifest.json` |
-| Transform engine correct-by-default | Rolldown / Rspack behind `TransformEngine` interface |
+| Tree-shaking correctness verified | Audit mode: diff Conservative vs heuristic every build |
+| Output immutability | Content-hash-keyed CDN chunks; `buildId` invalidation |
+| ABS never a SPOF | 100ms SW timeout → fallback to static `manifest.json` |
+| Transform correctness inherited | Rolldown / Rspack behind pluggable `TransformEngine` |
 
 ---
 
-## Deployment Levels
+## Deployment
 
-| Level | What ships | New infra | When |
+| Level | Capability | New infra | When |
 |---|---|---|---|
-| **0 — Static** | ThinBundle replaces build pipeline; chunks + `manifest.json` on CDN | None | Month 3 |
-| **1 — Adaptive** | ABS manifest server + SW delta protocol | ABS service | Month 4+ |
-| **2 — PGO** | Co-request matrix drives `suggestedMerge` chunk refinement | PGO store | Month 6+ |
+| **0 — Static** | Replaces build pipeline; chunks + `manifest.json` on CDN | None | Month 3 |
+| **1 — Adaptive** | ABS delta serving + SW protocol | ABS service | Month 4+ |
+| **2 — PGO** | Co-request-driven chunk reorganization | PGO store | Month 6+ |
 
-Level 0 is independently valuable: faster CI builds, dead-code elimination at scale, no dev/prod divergence. Levels 1 and 2 are additive optimizations that degrade cleanly to Level 0 if unavailable. The Month 1 gate — run Phase 1 across the full production module graph and confirm ~100MB summary cache size — validates the entire architecture before any further investment.
+Level 0 ships independently and already outperforms the current toolchain: incremental builds proportional to changes, dead code eliminated at scale. The Month 1 gate — run the Summarizer across the full production module graph and confirm ~100MB summary cache size — validates the entire architecture before further investment.
