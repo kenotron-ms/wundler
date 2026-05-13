@@ -162,12 +162,19 @@ fn entry_with_no_imports_produces_singleton_chunk() {
 
 // ---------------------------------------------------------------------------
 // Test 3: dynamic imports do NOT pull modules into the INITIAL chunk
+//
+// entry.js --dynamic--> dynamic.js
+//
+// The dynamic module is alive.  `assign_chunks` must NOT include it in the
+// INITIAL chunk — only `entry.js` itself belongs there.  The dynamic module
+// gets its own LAZY chunk instead.
 // ---------------------------------------------------------------------------
 
 /// entry.js --dynamic--> dynamic.js
 ///
 /// The dynamic module is alive, but `assign_chunks` must NOT include it in the
-/// INITIAL chunk — only `entry.js` itself belongs there.
+/// INITIAL chunk — only `entry.js` itself belongs there.  A separate lazy
+/// chunk is created for `dynamic.js`.
 #[test]
 fn dynamic_imports_excluded_from_initial_chunk() {
     let entry = make_node("entry.js", vec![dynamic_import("dynamic.js")]);
@@ -183,25 +190,44 @@ fn dynamic_imports_excluded_from_initial_chunk() {
 
     let (chunks, module_index) = assign_chunks(&nodes, &alive, &entry_hashes, 2);
 
-    assert_eq!(chunks.len(), 1, "expected exactly 1 chunk");
-    let chunk = &chunks[0];
-    assert_eq!(chunk.id, "initial_main");
-    assert_eq!(chunk.load_condition, LoadCondition::Initial);
-
+    // There are now 2 chunks: initial_main and a lazy chunk for dynamic.js.
     assert_eq!(
-        chunk.modules.len(),
+        chunks.len(),
+        2,
+        "expected 2 chunks (1 initial + 1 lazy), got {:?}",
+        chunks.iter().map(|c| &c.id).collect::<Vec<_>>()
+    );
+
+    // Find the initial chunk and verify dynamic.js is NOT in it.
+    let initial = chunks
+        .iter()
+        .find(|c| c.load_condition == LoadCondition::Initial)
+        .expect("expected an INITIAL chunk");
+    assert_eq!(initial.id, "initial_main");
+    assert_eq!(
+        initial.modules.len(),
         1,
         "dynamic import must NOT pull dynamic.js into the INITIAL chunk"
     );
-    assert!(chunk.modules.contains(&entry.id), "entry.js must be present");
+    assert!(initial.modules.contains(&entry.id), "entry.js must be present");
     assert!(
-        !chunk.modules.contains(&dyn_mod.id),
+        !initial.modules.contains(&dyn_mod.id),
         "dynamic.js must NOT be in the INITIAL chunk"
     );
 
-    // dynamic.js must NOT be in the module index (it was never claimed).
+    // dynamic.js must be in a LAZY chunk.
+    let lazy_chunk = chunks
+        .iter()
+        .find(|c| c.load_condition == LoadCondition::Lazy)
+        .expect("expected a LAZY chunk for dynamic.js");
     assert!(
-        module_index.get(&dyn_mod.id).is_none(),
-        "dynamic.js should not appear in module_index"
+        lazy_chunk.modules.contains(&dyn_mod.id),
+        "dynamic.js must appear in the lazy chunk"
+    );
+
+    // dynamic.js must now be in the module index (owned by the lazy chunk).
+    assert!(
+        module_index.get(&dyn_mod.id).is_some(),
+        "dynamic.js must appear in module_index (owned by lazy chunk)"
     );
 }

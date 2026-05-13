@@ -1,19 +1,30 @@
-//! Initial chunk assignment for the Wundler bundle graph.
+//! Chunk assignment for the Wundler bundle graph.
 //!
-//! This module assigns modules to *initial* chunks — the chunks that are part
-//! of the entry-point HTML payload and loaded on first page render.
+//! This module assigns modules to chunks:
+//!
+//! * **Initial chunks** — one per entry route, loaded on first page render.
+//! * **Lazy chunks** — one per `import()` boundary, fetched on demand.
 //!
 //! # Algorithm
 //!
 //! For each entry route (sorted for determinism):
 //! 1. Derive a `chunk_id` from the route name via [`chunk_id_slug`].
-//! 2. Run a static-import-only BFS from the entry module to collect all
-//!    transitively reachable modules via [`static_bfs_chunk`].
+//! 2. Run a static-import-only BFS from the entry module via
+//!    [`static_bfs_chunk_with_dynamic_capture`].  Dynamic `import()` targets
+//!    discovered during BFS are pushed onto a `lazy_queue` (deduped by
+//!    `lazy_seen`).
 //! 3. Use a `module_index` map with first-seen-wins semantics so that a module
 //!    claimed by an earlier route is not re-assigned to a later one.
 //! 4. Emit a [`Chunk`] with [`LoadCondition::Initial`] and a placeholder
 //!    content hash (`ContentHash("")`); real hashing is performed in a later
 //!    pass.
+//!
+//! After all entry routes are processed, drain the `lazy_queue`:
+//! * Skip if the root is already owned by an earlier chunk (first-seen-wins).
+//! * Otherwise create a `lazy_N` chunk by running the same BFS helper,
+//!   filtering out modules already in `module_index`, and pushing a
+//!   [`LoadCondition::Lazy`] chunk.  Nested dynamic imports discovered during
+//!   the lazy BFS are also captured into the queue.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -25,7 +36,7 @@ use crate::types::{Chunk, ChunkId, LoadCondition};
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Assign modules to initial chunks, one per alive entry point.
+/// Assign modules to initial **and** lazy chunks.
 ///
 /// # Parameters
 ///
@@ -39,7 +50,8 @@ use crate::types::{Chunk, ChunkId, LoadCondition};
 /// # Returns
 ///
 /// A tuple of:
-/// * `Vec<Chunk>` — one chunk per alive entry route, in sorted-route order.
+/// * `Vec<Chunk>` — initial chunks (one per alive entry route, sorted) followed
+///   by lazy chunks in BFS-discovery order.
 /// * `HashMap<ContentHash, ChunkId>` — reverse index mapping each assigned
 ///   module hash to the chunk it was first assigned to.
 pub fn assign_chunks(
@@ -70,8 +82,13 @@ pub fn assign_chunks(
     let mut chunks: Vec<Chunk> = Vec::new();
     let mut module_index: HashMap<ContentHash, ChunkId> = HashMap::new();
 
+    // Lazy chunk bookkeeping.
+    let mut lazy_seen: HashSet<ContentHash> = HashSet::new();
+    let mut lazy_queue: VecDeque<(String, ContentHash)> = VecDeque::new();
+    let mut lazy_counter: usize = 0;
+
     // -----------------------------------------------------------------------
-    // One chunk per alive entry route.
+    // One INITIAL chunk per alive entry route.
     // -----------------------------------------------------------------------
 
     for route in routes {
@@ -85,9 +102,15 @@ pub fn assign_chunks(
 
         let chunk_id = format!("initial_{}", chunk_id_slug(route));
 
-        // BFS over static imports only, collecting all reachable alive modules.
-        let bfs_modules =
-            static_bfs_chunk(entry_hash, &by_hash, &path_to_hash, alive);
+        // BFS over static imports only; dynamic import targets captured into queue.
+        let bfs_modules = static_bfs_chunk_with_dynamic_capture(
+            entry_hash,
+            &by_hash,
+            &path_to_hash,
+            alive,
+            &mut lazy_seen,
+            &mut lazy_queue,
+        );
 
         // First-seen-wins: assign each module to this chunk only if it has not
         // yet been claimed by an earlier chunk.
@@ -114,6 +137,61 @@ pub fn assign_chunks(
         });
     }
 
+    // -----------------------------------------------------------------------
+    // Drain the lazy queue to create LAZY chunks.
+    //
+    // Note: `static_bfs_chunk_with_dynamic_capture` may push new entries into
+    // `lazy_queue` during BFS of a lazy root (nested dynamic imports), so the
+    // loop continues until the queue is fully drained.
+    // -----------------------------------------------------------------------
+
+    while let Some((_, root_hash)) = lazy_queue.pop_front() {
+        // Skip if the root is already owned by an earlier chunk.
+        if module_index.contains_key(&root_hash) {
+            continue;
+        }
+
+        lazy_counter += 1;
+        let chunk_id = format!("lazy_{lazy_counter}");
+
+        // BFS from the lazy root; nested dynamic imports are captured into the
+        // queue for processing in subsequent iterations.
+        let bfs_modules = static_bfs_chunk_with_dynamic_capture(
+            &root_hash,
+            &by_hash,
+            &path_to_hash,
+            alive,
+            &mut lazy_seen,
+            &mut lazy_queue,
+        );
+
+        // Filter out modules already claimed by an earlier chunk.
+        let chunk_modules: Vec<ContentHash> = bfs_modules
+            .into_iter()
+            .filter(|m| !module_index.contains_key(m))
+            .collect();
+
+        // Skip if all reachable modules are already owned elsewhere.
+        if chunk_modules.is_empty() {
+            continue;
+        }
+
+        // Claim the modules for this lazy chunk.
+        for m in &chunk_modules {
+            module_index.insert(m.clone(), chunk_id.clone());
+        }
+
+        chunks.push(Chunk {
+            id: chunk_id,
+            modules: chunk_modules,
+            hash: ContentHash("".to_string()),
+            load_condition: LoadCondition::Lazy,
+            co_request_score: None,
+            median_load_order: None,
+            suggested_merge: None,
+        });
+    }
+
     (chunks, module_index)
 }
 
@@ -123,25 +201,27 @@ pub fn assign_chunks(
 
 /// BFS over **static** imports only, starting from `root`.
 ///
+/// Dynamic `import()` targets encountered during the traversal are captured
+/// into `lazy_queue` (deduped via `lazy_seen`) instead of being traversed.
+/// This keeps the returned module list limited to the static-import reachable
+/// set, while ensuring every dynamic boundary is queued for lazy processing.
+///
 /// Returns a `Vec<ContentHash>` of all modules reachable via non-dynamic
 /// import edges whose targets are in the `alive` set.  `root` itself is
 /// included as the first element if it is alive.
 ///
-/// # Static vs dynamic
+/// # When there are no dynamic imports
 ///
-/// An import is considered *static* if `import.kind != ImportKind::Dynamic`.
-/// Dynamic `import()` boundaries create separate lazy chunks and are therefore
-/// not traversed here.
-///
-/// # Dead modules
-///
-/// Targets not present in `alive` (or whose paths cannot be resolved via
-/// `path_to_hash`) are silently skipped.
-fn static_bfs_chunk<'a>(
+/// The function behaves identically to the previous `static_bfs_chunk`
+/// helper — `lazy_queue` remains unchanged and the return value is the pure
+/// static-reachable set.
+fn static_bfs_chunk_with_dynamic_capture<'a>(
     root: &ContentHash,
     by_hash: &HashMap<ContentHash, &'a BundleGraphNode>,
     path_to_hash: &HashMap<&str, &'a ContentHash>,
     alive: &HashSet<ContentHash>,
+    lazy_seen: &mut HashSet<ContentHash>,
+    lazy_queue: &mut VecDeque<(String, ContentHash)>,
 ) -> Vec<ContentHash> {
     let mut visited: HashSet<ContentHash> = HashSet::new();
     let mut queue: VecDeque<ContentHash> = VecDeque::new();
@@ -161,12 +241,22 @@ fn static_bfs_chunk<'a>(
         };
 
         for import in &node.summary.imports {
-            // Skip dynamic imports — they do not belong in an INITIAL chunk.
             if import.kind == ImportKind::Dynamic {
+                // Capture dynamic import target into the lazy queue (deduped).
+                let target_hash = match path_to_hash.get(import.specifier.as_str()) {
+                    Some(h) => *h,
+                    None => continue, // Unresolved specifier — skip.
+                };
+
+                if alive.contains(target_hash) && lazy_seen.insert(target_hash.clone()) {
+                    lazy_queue.push_back((import.specifier.clone(), target_hash.clone()));
+                }
+
+                // Do NOT traverse into the dynamic target from this chunk.
                 continue;
             }
 
-            // Resolve the specifier to a content hash via the path index.
+            // Static import: resolve and follow.
             let target_hash = match path_to_hash.get(import.specifier.as_str()) {
                 Some(h) => *h,
                 None => continue, // Unresolved specifier (e.g. npm package) — skip.
