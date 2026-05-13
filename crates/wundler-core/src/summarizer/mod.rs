@@ -1,4 +1,5 @@
 // Summarizer module — parses source files and emits compact ModuleSummary values.
+pub mod ambient_refs;
 pub mod call_edges;
 pub mod exports;
 pub mod imports;
