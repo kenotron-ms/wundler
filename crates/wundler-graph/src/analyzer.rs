@@ -105,11 +105,31 @@ impl GraphAnalyzer {
                     .to_str()
                     .ok_or_else(|| anyhow!("route {route:?}: path is not valid UTF-8"))?;
 
-                let hash = path_to_hash.get(path_str).ok_or_else(|| {
-                    anyhow!(
-                        "route {route:?}: path {path_str:?} not found in graph"
-                    )
-                })?;
+                // Try to find the entry hash using multiple path formats.
+                //
+                // After the CLI Bug-1 fix, entry paths are no longer joined
+                // with the scan root: they are stored exactly as the user
+                // wrote them (e.g. `"src/index.ts"`).  WalkDir, however,
+                // prepends `"./"` when the scan root is `"."`, producing
+                // `"./src/index.ts"`.  For absolute scan roots it produces
+                // absolute paths like `"/tmp/xxx/src/index.ts"`.  We therefore
+                // try several fallback strategies in order.
+                let hash = path_to_hash
+                    .get(path_str)
+                    // 1. With "./" prefix (WalkDir from scan root ".").
+                    .or_else(|| path_to_hash.get(format!("./{path_str}").as_str()))
+                    // 2. Suffix match (entry is relative to scan root, but
+                    //    WalkDir produced an absolute or longer-prefix path).
+                    .or_else(|| {
+                        let suffix = format!("/{path_str}");
+                        nodes
+                            .iter()
+                            .find(|n| n.path.ends_with(&suffix))
+                            .and_then(|n| path_to_hash.get(n.path.as_str()))
+                    })
+                    .ok_or_else(|| {
+                        anyhow!("route {route:?}: path {path_str:?} not found in graph")
+                    })?;
 
                 entry_hashes.insert(route.clone(), hash.clone());
                 entry_hash_set.insert(hash.clone());

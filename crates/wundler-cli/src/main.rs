@@ -235,13 +235,22 @@ fn cmd_validate_scale(path: PathBuf, cache_dir: Option<PathBuf>) -> Result<()> {
 /// Run the full bundle analysis on `path`, using the given entry points and
 /// commons threshold, then print the resulting [`ChunkManifest`] as JSON.
 fn run_analyze(path: PathBuf, entry_args: Vec<String>, commons_threshold: usize) -> Result<()> {
-    // Parse every --entry argument into an absolute entry-point path so it
-    // matches the absolute node paths produced by WalkDir below.
+    // Parse every --entry argument.
+    //
+    // Entry paths are interpreted **relative to the current working directory**,
+    // NOT relative to the scan root.  This prevents the "path-doubling" bug:
+    // if the caller writes `--entry main=test-app/src/main.tsx` while scanning
+    // `test-app/src`, the old `path.join(rel_path)` produced
+    // `"test-app/src/test-app/src/main.tsx"` which does not exist.
+    //
+    // Using `PathBuf::from(rel_path)` keeps the path exactly as the user wrote
+    // it, which matches the node paths that WalkDir records (e.g.
+    // `"test-app/src/main.tsx"` when scan root is `"test-app/src"`).
     let entry_points: HashMap<String, PathBuf> = entry_args
         .iter()
         .map(|s| {
             let (route, rel_path) = parse_entry_arg(s)?;
-            Ok((route, path.join(rel_path)))
+            Ok((route, rel_path))
         })
         .collect::<Result<_>>()?;
 

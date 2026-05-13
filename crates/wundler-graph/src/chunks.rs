@@ -47,6 +47,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use sha2::{Digest, Sha256};
 use wundler_core::types::{BundleGraphNode, ContentHash, ImportKind};
 
+use crate::graph::{resolve_specifier, strip_dot_slash};
 use crate::types::{Chunk, ChunkId, LoadCondition};
 
 // ---------------------------------------------------------------------------
@@ -101,9 +102,18 @@ pub fn assign_chunks(
     let by_hash: HashMap<ContentHash, &BundleGraphNode> =
         nodes.iter().map(|n| (n.id.clone(), n)).collect();
 
-    // Path string → ContentHash reference.
-    let path_to_hash: HashMap<&str, &ContentHash> =
-        nodes.iter().map(|n| (n.path.as_str(), &n.id)).collect();
+    // Path string → ContentHash reference (normalised: leading "./" stripped).
+    // This matches the resolution performed by `resolve_specifier`.
+    let normalised_paths: Vec<String> = nodes
+        .iter()
+        .map(|n| strip_dot_slash(&n.path).to_owned())
+        .collect();
+    let path_to_hash: HashMap<&str, &ContentHash> = normalised_paths
+        .iter()
+        .zip(nodes.iter())
+        .map(|(norm, n)| (norm.as_str(), &n.id))
+        .collect();
+    let all_paths: std::collections::HashSet<&str> = path_to_hash.keys().copied().collect();
 
     // -----------------------------------------------------------------------
     // Sort routes for deterministic chunk-id assignment.
@@ -141,6 +151,7 @@ pub fn assign_chunks(
             entry_hash,
             &by_hash,
             &path_to_hash,
+            &all_paths,
             alive,
             &mut lazy_seen,
             &mut lazy_queue,
@@ -164,6 +175,7 @@ pub fn assign_chunks(
             &root_hash,
             &by_hash,
             &path_to_hash,
+            &all_paths,
             alive,
             &mut lazy_seen,
             &mut lazy_queue,
@@ -306,6 +318,7 @@ fn static_bfs_chunk_with_dynamic_capture<'a>(
     root: &ContentHash,
     by_hash: &HashMap<ContentHash, &'a BundleGraphNode>,
     path_to_hash: &HashMap<&str, &'a ContentHash>,
+    all_paths: &std::collections::HashSet<&str>,
     alive: &HashSet<ContentHash>,
     lazy_seen: &mut HashSet<ContentHash>,
     lazy_queue: &mut VecDeque<(String, ContentHash)>,
@@ -328,13 +341,19 @@ fn static_bfs_chunk_with_dynamic_capture<'a>(
         };
 
         for import in &node.summary.imports {
+            // Resolve the specifier using the same logic as build_adjacency.
+            let target_path = match resolve_specifier(&node.path, &import.specifier, all_paths) {
+                Some(p) => p,
+                None => continue, // Unresolved specifier — skip.
+            };
+
+            let target_hash = match path_to_hash.get(target_path) {
+                Some(h) => *h,
+                None => continue, // Hash not found — skip.
+            };
+
             if import.kind == ImportKind::Dynamic {
                 // Capture dynamic import target into the lazy queue (deduped).
-                let target_hash = match path_to_hash.get(import.specifier.as_str()) {
-                    Some(h) => *h,
-                    None => continue, // Unresolved specifier — skip.
-                };
-
                 if alive.contains(target_hash) && lazy_seen.insert(target_hash.clone()) {
                     lazy_queue.push_back((import.specifier.clone(), target_hash.clone()));
                 }
@@ -344,10 +363,6 @@ fn static_bfs_chunk_with_dynamic_capture<'a>(
             }
 
             // Static import: resolve and follow.
-            let target_hash = match path_to_hash.get(import.specifier.as_str()) {
-                Some(h) => *h,
-                None => continue, // Unresolved specifier (e.g. npm package) — skip.
-            };
 
             // Skip dead targets.
             if !alive.contains(target_hash) {
