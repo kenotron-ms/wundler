@@ -8,6 +8,7 @@
 pub mod chunks;
 pub mod dce;
 pub mod graph;
+pub mod manifest;
 pub mod reachability;
 pub mod types;
 
