@@ -5,6 +5,7 @@
 //! typed graph nodes, deterministic topological ordering, cycle
 //! detection, and JSON serialisation.
 
+pub mod graph;
 pub mod types;
 
 /// Returns the crate name – used as a lightweight smoke-test sentinel.
