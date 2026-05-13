@@ -142,6 +142,46 @@ type SideEffectMarker =
 
 **Correctness audit mode** (mandatory, non-negotiable): A build mode that runs both Conservative-only and the heuristic side by side, diffs observable outputs, and alerts on any divergence. This must be implemented and pass before any tree-shaking ships to production users. Getting this wrong silently breaks production for 300M users. There is no acceptable tradeoff here.
 
+### Two-Tier Summary Cache
+
+Phase 1 maintains two cache levels, motivated by Cloudpack's `{withSource|noSource}` hash matrix:
+
+**Package-level fast path:** For modules in `node_modules`, the cache key is `SHA-256(package-name + version + resolved-dep-tree)` — not a hash of file contents. If the package version and its transitive dep versions are unchanged, the summary is considered valid without re-reading source files. At Teams scale, the majority of 50k modules are stable vendor packages. This fast path means the cold build for a new developer is populated largely from a remote cache seeded by CI.
+
+**File-level hash (Phase 1 default):** For source code under active development, `SHA-256(source)` as specified. Only these modules are re-summarized on change.
+
+### Remote Cache
+
+Phase 1 summaries are content-addressable and safe to share across machines. A remote cache layer (Azure Blob Storage, S3, or equivalent) allows CI to seed the summary cache on every build, so developers skip Phase 1 entirely for anything CI has already summarized. Interface:
+
+```typescript
+interface SummaryRemoteCache {
+  get(key: ContentHash): Promise<BundleGraphNode['summary'] | null>
+  put(key: ContentHash, summary: BundleGraphNode['summary']): Promise<void>
+  sync(keys: ContentHash[]): Promise<void>  // batch prefetch before a build
+}
+```
+
+The remote cache is not required for correctness — a local miss just recomputes. It is required for fast developer onboarding at Teams scale.
+
+### CJS Interop
+
+ES module static analysis cannot enumerate CJS exports reliably. `module.exports = { ... }` is evaluated, not declared. At Teams scale, a significant portion of `node_modules` is CJS.
+
+**Strategy (from Cloudpack's approach):** For CJS packages, execute the package entry point in an isolated worker with a browser-like environment (`happy-dom`), enumerate `Object.keys(module.exports)`, and emit a synthetic `.mjs` stub:
+
+```js
+import cjsExport from './index.js';
+const { a, b, c } = cjsExport;
+const defaultExport = cjsExport?.default?.default ?? cjsExport?.default;
+export default defaultExport;
+export { a, b, c };
+```
+
+The stub is what Phase 1 summarizes; the summary's exports reflect the runtime-enumerated exports. `PackageSettings.unsafeCjsExportNames` provides an escape hatch: a hard-coded export list for packages where worker execution fails or is undesirable.
+
+This is the only approach that achieves near-100% accuracy for CJS export detection. Static analysis (`acorn`) is faster but misses dynamic export patterns. The worker approach is heavier but correct.
+
 ### Validation Experiment (Month 1 Gate)
 
 Run the summarizer across Teams' full module graph. Measure total summary cache size.
