@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/wundler-core", "crates/wundler-cli"]
+resolver = "2"

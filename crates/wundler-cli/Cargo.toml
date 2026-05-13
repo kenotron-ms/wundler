@@ -1,0 +1,11 @@
+[package]
+name = "wundler-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+wundler-core = { path = "../wundler-core" }
+clap = { version = "4", features = ["derive"] }
+indicatif = "0.17"
+anyhow = "1"
+serde_json = "1"
