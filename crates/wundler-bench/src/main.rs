@@ -21,15 +21,24 @@ struct Args {
     #[arg(long, default_value = "BENCHMARK_RESULTS.md")]
     output: PathBuf,
 
-    /// Module counts for the CAS benchmark (comma-separated).
+    /// Module counts for the full-pipeline CAS benchmark (comma-separated).
     #[arg(long, default_value = "100,500,1000,5000,10000")]
     scales: String,
 
-    /// Module count for the ABS benchmark.
-    #[arg(long, default_value_t = 1000)]
-    abs_modules: usize,
+    /// Module counts for the analysis-only benchmark (comma-separated).
+    /// Defaults to the same list as --scales.
+    #[arg(long)]
+    analysis_scales: Option<String>,
 
-    /// Skip slow benchmarks — runs only N=100 and N=500 for CAS.
+    /// Module counts for the ABS benchmark (comma-separated).
+    #[arg(long, default_value = "1000,5000,10000")]
+    abs_scales: String,
+
+    /// Run ONLY the analysis-only benchmark (skip full-pipeline CAS bench).
+    #[arg(long)]
+    analysis: bool,
+
+    /// Skip slow benchmarks — caps all scale lists at N=500.
     #[arg(long)]
     fast: bool,
 }
@@ -41,35 +50,61 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Parse scale list
-    let mut scales: Vec<usize> = args
-        .scales
-        .split(',')
-        .filter_map(|s| s.trim().parse::<usize>().ok())
-        .collect();
+    // ── Parse scale lists ──────────────────────────────────────────────────
+    let mut cas_scales: Vec<usize> = parse_scales(&args.scales);
+    let mut analysis_scales: Vec<usize> = args
+        .analysis_scales
+        .as_deref()
+        .map(parse_scales)
+        .unwrap_or_else(|| cas_scales.clone());
+    let mut abs_scale_list: Vec<usize> = parse_scales(&args.abs_scales);
 
     if args.fast {
-        scales.retain(|&n| n <= 500);
-        if scales.is_empty() {
-            scales = vec![100, 500];
-        }
+        cap_scales(&mut cas_scales, 500);
+        cap_scales(&mut analysis_scales, 500);
+        cap_scales(&mut abs_scale_list, 500);
     }
 
-    eprintln!("wundler-bench: CAS benchmark at scales {:?}", scales);
-    let cas_results = wundler_bench::cas_bench::run(&scales)?;
-
-    eprintln!(
-        "wundler-bench: ABS benchmark at N={} …",
-        args.abs_modules
-    );
     let churn_levels = vec![0.005, 0.01, 0.05, 0.10, 0.25, 0.50];
-    let abs_results = wundler_bench::abs_bench::run(args.abs_modules, &churn_levels)?;
 
+    // ── Analysis-only benchmark ────────────────────────────────────────────
+    eprintln!(
+        "wundler-bench: analysis benchmark at scales {:?}",
+        analysis_scales
+    );
+    let analysis_results = wundler_bench::analysis_bench::run(&analysis_scales)?;
+
+    // ── Full-pipeline CAS benchmark ────────────────────────────────────────
+    let cas_results = if !args.analysis {
+        eprintln!(
+            "wundler-bench: full-pipeline CAS benchmark at scales {:?}",
+            cas_scales
+        );
+        wundler_bench::cas_bench::run(&cas_scales)?
+    } else {
+        eprintln!("wundler-bench: --analysis flag set, skipping full-pipeline CAS bench");
+        Vec::new()
+    };
+
+    // ── ABS benchmark ─────────────────────────────────────────────────────
+    eprintln!(
+        "wundler-bench: ABS benchmark at scales {:?} …",
+        abs_scale_list
+    );
+    let abs_scale_results =
+        wundler_bench::abs_bench::run_scales(&abs_scale_list, &churn_levels)?;
+
+    // ── Write report ──────────────────────────────────────────────────────
     eprintln!("wundler-bench: writing report to {:?}", args.output);
-    wundler_bench::report::write_report(&cas_results, &abs_results, &args.output)?;
+    wundler_bench::report::write_report(
+        &analysis_results,
+        &cas_results,
+        &abs_scale_results,
+        &args.output,
+    )?;
 
     eprintln!("wundler-bench: done ✓");
-    print_summary(&cas_results, &abs_results);
+    print_summary(&analysis_results, &cas_results, &abs_scale_results);
 
     Ok(())
 }
@@ -79,35 +114,73 @@ fn main() -> Result<()> {
 // ---------------------------------------------------------------------------
 
 fn print_summary(
+    analysis: &[wundler_bench::analysis_bench::AnalysisBenchResult],
     cas: &[wundler_bench::cas_bench::CasBenchResult],
-    abs: &[wundler_bench::abs_bench::AbsChurnResult],
+    abs_scales: &[wundler_bench::abs_bench::AbsScaleResult],
 ) {
     println!();
     println!("┌─────────────────────────────────────────────────────────────┐");
     println!("│  Wundler Benchmark Summary                                  │");
     println!("├─────────────────────────────────────────────────────────────┤");
-    println!("│  CAS — Summarizer Cache                                     │");
-    for r in cas {
+    println!("│  Analysis-only CAS (no transform)                           │");
+    for r in analysis {
+        let flag = if r.is_extrapolated { "*" } else { " " };
         println!(
-            "│  N={:>7}  cold={:>6}ms  warm={:>5}ms  speedup={:>5.1}×  │",
+            "│  N={:>7}  cold={:>6}ms  warm={:>5}ms  speedup={:>6.0}×{}  │",
             format_n(r.n_modules),
-            r.cold_build_ms,
-            r.warm_build_ms,
+            r.cold_ms,
+            r.warm_ms,
             r.speedup,
+            flag,
         );
+    }
+    if !cas.is_empty() {
+        println!("├─────────────────────────────────────────────────────────────┤");
+        println!("│  Full pipeline (incl. transform)                            │");
+        for r in cas {
+            println!(
+                "│  N={:>7}  cold={:>6}ms  warm={:>5}ms  speedup={:>5.1}×  │",
+                format_n(r.n_modules),
+                r.cold_build_ms,
+                r.warm_build_ms,
+                r.speedup,
+            );
+        }
     }
     println!("├─────────────────────────────────────────────────────────────┤");
     println!("│  ABS — Delta Efficiency                                     │");
-    for r in abs {
+    for sr in abs_scales {
         println!(
-            "│  churn={:>5.1}%  total={:>7.1}KB  delta={:>7.1}KB  saved={:>5.1}%  │",
-            r.churn_fraction * 100.0,
-            r.total_bundle_kb,
-            r.abs_download_kb,
-            r.savings_pct,
+            "│  N={:>7}:                                                │",
+            format_n(sr.n_modules)
         );
+        for r in &sr.churns {
+            println!(
+                "│    churn={:>5.1}%  delta={:>7.1}KB  saved={:>5.1}%          │",
+                r.churn_fraction * 100.0,
+                r.abs_download_kb,
+                r.savings_pct,
+            );
+        }
     }
     println!("└─────────────────────────────────────────────────────────────┘");
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn parse_scales(s: &str) -> Vec<usize> {
+    s.split(',')
+        .filter_map(|tok| tok.trim().parse::<usize>().ok())
+        .collect()
+}
+
+fn cap_scales(scales: &mut Vec<usize>, max: usize) {
+    scales.retain(|&n| n <= max);
+    if scales.is_empty() {
+        scales.push(max);
+    }
 }
 
 fn format_n(n: usize) -> String {

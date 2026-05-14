@@ -26,6 +26,103 @@ use crate::types::{BundleGraphNode, ContentHash, ModuleSummary};
 
 const JS_EXTENSIONS: &[&str] = &["ts", "tsx", "js", "jsx", "mjs", "cjs"];
 
+// ---------------------------------------------------------------------------
+// Summarize-with-stats types
+// ---------------------------------------------------------------------------
+
+/// Aggregate statistics from a `summarize_directory_with_stats` call.
+#[derive(Debug, Clone, Default)]
+pub struct SummarizeStats {
+    /// Total number of JS/TS files processed.
+    pub total: usize,
+    /// Files whose summary was read from the on-disk cache (no SWC parse).
+    pub cache_hits: usize,
+    /// Files that were SWC-parsed and written back to the cache.
+    pub cache_misses: usize,
+}
+
+/// Return value of [`summarize_directory_with_stats`].
+pub struct SummarizeResult {
+    /// One [`BundleGraphNode`] per discovered JS/TS file.
+    pub nodes: Vec<BundleGraphNode>,
+    /// Cache-hit / miss counters for this run.
+    pub stats: SummarizeStats,
+}
+
+/// Like [`summarize_directory`] but also returns per-run cache statistics.
+///
+/// Useful for verifying cache behaviour in benchmarks and tests: after a warm
+/// run only one file should be a miss (the touched file), and every other file
+/// should be a hit.
+pub fn summarize_directory_with_stats(
+    dir: &Path,
+    cache: &LocalCache,
+) -> Result<SummarizeResult> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    let paths: Vec<_> = WalkDir::new(dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .filter_map(|e| {
+            let path = e.path().to_path_buf();
+            let ext = path.extension()?.to_str()?.to_lowercase();
+            if JS_EXTENSIONS.contains(&ext.as_str()) {
+                Some(path)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let total = paths.len();
+    let hits_counter = Arc::new(AtomicUsize::new(0));
+    let misses_counter = Arc::new(AtomicUsize::new(0));
+
+    let nodes = {
+        let hits = Arc::clone(&hits_counter);
+        let misses = Arc::clone(&misses_counter);
+        paths
+            .par_iter()
+            .map(move |path| {
+                let source = fs::read_to_string(path)?;
+                let hash = ContentHash::from_source(&source);
+                if let Some(cached_summary) = cache.get(&hash)? {
+                    hits.fetch_add(1, Ordering::Relaxed);
+                    return Ok(BundleGraphNode {
+                        id: hash,
+                        path: path.to_string_lossy().into_owned(),
+                        summary: cached_summary,
+                        alive: false,
+                        chunk_id: None,
+                        source: None,
+                    });
+                }
+                misses.fetch_add(1, Ordering::Relaxed);
+                let summarizer = ModuleSummarizer::new();
+                let node = summarizer.summarize(path)?;
+                cache.put(&node.id, &node.summary)?;
+                Ok(node)
+            })
+            .collect::<Vec<Result<_>>>()
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?
+    };
+
+    let cache_hits = hits_counter.load(Ordering::Relaxed);
+    let cache_misses = misses_counter.load(Ordering::Relaxed);
+
+    Ok(SummarizeResult {
+        nodes,
+        stats: SummarizeStats {
+            total,
+            cache_hits,
+            cache_misses,
+        },
+    })
+}
+
 /// Walks `dir` recursively and summarizes every file whose extension is one of
 /// [`JS_EXTENSIONS`], returning one [`BundleGraphNode`] per file.
 ///
@@ -148,6 +245,30 @@ mod tests {
     use crate::cache::local::LocalCache;
     use std::fs as sfs;
     use tempfile::TempDir;
+
+    // RED test: summarize_directory_with_stats reports accurate cache_hits
+    #[test]
+    fn test_summarize_directory_with_stats_reports_cache_hits() {
+        let dir = TempDir::new().unwrap();
+        let cache_dir = TempDir::new().unwrap();
+        let cache = LocalCache::new(cache_dir.path().to_path_buf()).unwrap();
+
+        sfs::write(dir.path().join("a.ts"), "export const a = 1;").unwrap();
+        sfs::write(dir.path().join("b.ts"), "export const b = 2;").unwrap();
+        sfs::write(dir.path().join("c.ts"), "export const c = 3;").unwrap();
+
+        // Cold run — all misses
+        let result1 = summarize_directory_with_stats(dir.path(), &cache).unwrap();
+        assert_eq!(result1.nodes.len(), 3);
+        assert_eq!(result1.stats.total, 3);
+        assert_eq!(result1.stats.cache_misses, 3, "cold run should have 3 misses");
+        assert_eq!(result1.stats.cache_hits, 0, "cold run should have 0 hits");
+
+        // Warm run — all hits
+        let result2 = summarize_directory_with_stats(dir.path(), &cache).unwrap();
+        assert_eq!(result2.stats.cache_hits, 3, "warm run should have 3 hits");
+        assert_eq!(result2.stats.cache_misses, 0, "warm run should have 0 misses");
+    }
 
     #[test]
     fn test_summarize_directory_processes_all_ts_files() {

@@ -39,6 +39,15 @@ pub struct AbsChurnResult {
     pub savings_pct: f64,
 }
 
+/// ABS results for a single module-count scale.
+#[derive(Debug, Clone)]
+pub struct AbsScaleResult {
+    /// Number of modules in this measurement.
+    pub n_modules: usize,
+    /// One row per churn level.
+    pub churns: Vec<AbsChurnResult>,
+}
+
 // ---------------------------------------------------------------------------
 // Snapshot helpers
 // ---------------------------------------------------------------------------
@@ -168,6 +177,28 @@ pub fn run(
     }
 
     Ok(results)
+}
+
+// ---------------------------------------------------------------------------
+// Multi-scale runner
+// ---------------------------------------------------------------------------
+
+/// Run the ABS benchmark at every module count in `scales` and every churn
+/// fraction in `churns`, returning one [`AbsScaleResult`] per scale.
+///
+/// This is a thin wrapper around [`run`] that makes it easy to compare ABS
+/// delta efficiency across different app sizes.
+pub fn run_scales(scales: &[usize], churns: &[f64]) -> Result<Vec<AbsScaleResult>> {
+    let mut out = Vec::with_capacity(scales.len());
+    for &n in scales {
+        eprintln!("  ABS bench N={} …", n);
+        let churn_results = run(n, churns)?;
+        out.push(AbsScaleResult {
+            n_modules: n,
+            churns: churn_results,
+        });
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------

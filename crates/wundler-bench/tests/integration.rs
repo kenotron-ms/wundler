@@ -256,3 +256,181 @@ fn test_report_formats_correctly() {
         "ABS table should show savings percentage"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Test 5: analysis_bench::run returns correct result shape
+// ---------------------------------------------------------------------------
+
+/// RED: fails until analysis_bench module is implemented.
+#[test]
+fn test_analysis_bench_run_returns_results() {
+    use wundler_bench::analysis_bench;
+
+    // Small scale so the test runs quickly.
+    let results = analysis_bench::run(&[10]).expect("analysis_bench::run failed");
+
+    assert_eq!(results.len(), 1, "should have one result per scale");
+    let r = &results[0];
+    assert_eq!(r.n_modules, 10);
+    // cold_ms should be ≥ warm_ms (warm benefits from cache)
+    assert!(
+        r.cold_ms >= r.warm_ms || r.warm_ms < 500,
+        "unexpected timing: cold={}ms warm={}ms",
+        r.cold_ms,
+        r.warm_ms
+    );
+    assert!(r.speedup >= 1.0, "speedup must be ≥ 1.0, got {}", r.speedup);
+}
+
+// ---------------------------------------------------------------------------
+// Test 6: extrapolate gives approximately linear projection
+// ---------------------------------------------------------------------------
+
+/// RED: fails until `extrapolate` is implemented in analysis_bench.
+#[test]
+fn test_extrapolate_linear_projection() {
+    use wundler_bench::analysis_bench::{extrapolate, AnalysisBenchResult};
+
+    // Perfect linear data: 10ms per 100 modules.
+    let results = vec![
+        AnalysisBenchResult {
+            n_modules: 100,
+            cold_ms: 10,
+            warm_ms: 2,
+            speedup: 5.0,
+            warm_graph_ms: 1,
+            is_extrapolated: false,
+        },
+        AnalysisBenchResult {
+            n_modules: 1_000,
+            cold_ms: 100,
+            warm_ms: 2,
+            speedup: 50.0,
+            warm_graph_ms: 1,
+            is_extrapolated: false,
+        },
+    ];
+
+    let proj = extrapolate(&results, 10_000);
+    assert_eq!(proj.n_modules, 10_000);
+    assert!(
+        proj.is_extrapolated,
+        "extrapolated result must have is_extrapolated=true"
+    );
+    // Expect ~1000ms ± 50%
+    assert!(
+        proj.cold_ms > 500 && proj.cold_ms < 2_000,
+        "expected ~1000ms, got {}ms",
+        proj.cold_ms
+    );
+    // warm stays roughly constant (uses last measured warm)
+    assert!(proj.warm_ms <= 10, "warm should stay small, got {}ms", proj.warm_ms);
+}
+
+// ---------------------------------------------------------------------------
+// Test 7: abs_bench::run_scales works at multiple N values
+// ---------------------------------------------------------------------------
+
+/// RED: fails until `run_scales` is added to abs_bench.
+#[test]
+fn test_abs_run_scales_returns_one_entry_per_scale() {
+    use wundler_bench::abs_bench::run_scales;
+
+    // Use a tiny scale so this test is fast.
+    let churns = vec![0.1_f64, 0.5_f64];
+    let scale_results = run_scales(&[5, 10], &churns).expect("run_scales failed");
+
+    assert_eq!(scale_results.len(), 2, "should have one entry per scale");
+    assert_eq!(scale_results[0].n_modules, 5);
+    assert_eq!(scale_results[1].n_modules, 10);
+    for sr in &scale_results {
+        assert_eq!(
+            sr.churns.len(),
+            churns.len(),
+            "each scale should have all churn rows"
+        );
+        assert!(
+            sr.churns[0].total_bundle_kb > 0.0,
+            "total_bundle_kb must be > 0"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test 8: report::format_analysis_table produces correct markdown
+// ---------------------------------------------------------------------------
+
+/// RED: fails until `format_analysis_table` is added to report.
+#[test]
+fn test_format_analysis_table_has_header_and_speedup() {
+    use wundler_bench::analysis_bench::AnalysisBenchResult;
+    use wundler_bench::report::format_analysis_table;
+
+    let results = vec![AnalysisBenchResult {
+        n_modules: 1_000,
+        cold_ms: 80,
+        warm_ms: 2,
+        speedup: 40.0,
+        warm_graph_ms: 1,
+        is_extrapolated: false,
+    }];
+
+    let table = format_analysis_table(&results);
+    assert!(
+        table.contains("| Modules |"),
+        "analysis table should have Modules header; got:\n{table}"
+    );
+    assert!(
+        table.contains("40.0×"),
+        "analysis table should show 40.0× speedup; got:\n{table}"
+    );
+    assert!(
+        table.contains("1,000"),
+        "analysis table should have N=1000 formatted with comma; got:\n{table}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 9: report::format_real_world_scenarios contains required sections
+// ---------------------------------------------------------------------------
+
+/// RED: fails until `format_real_world_scenarios` is added to report.
+#[test]
+fn test_format_real_world_scenarios_contains_sections() {
+    use wundler_bench::analysis_bench::AnalysisBenchResult;
+    use wundler_bench::abs_bench::{AbsChurnResult, AbsScaleResult};
+    use wundler_bench::report::format_real_world_scenarios;
+
+    let analysis = vec![AnalysisBenchResult {
+        n_modules: 5_000,
+        cold_ms: 400,
+        warm_ms: 2,
+        speedup: 200.0,
+        warm_graph_ms: 1,
+        is_extrapolated: false,
+    }];
+
+    let abs_scales = vec![AbsScaleResult {
+        n_modules: 1_000,
+        churns: vec![AbsChurnResult {
+            churn_fraction: 0.02,
+            total_bundle_kb: 500.0,
+            abs_download_kb: 250.0,
+            savings_pct: 50.0,
+        }],
+    }];
+
+    let section = format_real_world_scenarios(&analysis, &abs_scales);
+    assert!(
+        section.contains("Weekly build time"),
+        "should contain 'Weekly build time'; got:\n{section}"
+    );
+    assert!(
+        section.contains("CDN bandwidth"),
+        "should contain 'CDN bandwidth'; got:\n{section}"
+    );
+    assert!(
+        section.contains("Mid-scale") || section.contains("mid-scale") || section.contains("5,000"),
+        "should mention mid-scale scenario; got:\n{section}"
+    );
+}

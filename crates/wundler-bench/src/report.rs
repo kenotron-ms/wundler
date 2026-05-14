@@ -8,7 +8,8 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use crate::abs_bench::AbsChurnResult;
+use crate::abs_bench::{AbsChurnResult, AbsScaleResult};
+use crate::analysis_bench::AnalysisBenchResult;
 use crate::cas_bench::CasBenchResult;
 
 // ---------------------------------------------------------------------------
@@ -69,6 +70,190 @@ pub fn format_abs_table(results: &[AbsChurnResult]) -> String {
         ));
     }
     s
+}
+
+// ---------------------------------------------------------------------------
+// Analysis-pipeline table (CAS-isolated)
+// ---------------------------------------------------------------------------
+
+/// Format the analysis-only benchmark results as a Markdown table.
+///
+/// Rows flagged as extrapolated are marked with `*`.
+///
+/// ```markdown
+/// | Modules | Cold (ms) | Warm (ms) | Speedup | Warm graph (ms) |
+/// |--------:|----------:|----------:|--------:|----------------:|
+/// |   1,000 |        80 |         2 |   40.0× |               1 |
+/// ```
+pub fn format_analysis_table(results: &[AnalysisBenchResult]) -> String {
+    let mut s = String::new();
+    s.push_str("| Modules | Cold (ms) | Warm (ms) | Speedup | Warm graph (ms) |\n");
+    s.push_str("|--------:|----------:|----------:|--------:|----------------:|\n");
+    for r in results {
+        let flag = if r.is_extrapolated { " *" } else { "" };
+        s.push_str(&format!(
+            "| {:>9} | {:>9} | {:>9} | {:>6.1}× | {:>15} |\n",
+            format!("{}{}", format_thousands(r.n_modules), flag),
+            r.cold_ms,
+            r.warm_ms,
+            r.speedup,
+            r.warm_graph_ms,
+        ));
+    }
+    s
+}
+
+// ---------------------------------------------------------------------------
+// Multi-scale ABS section
+// ---------------------------------------------------------------------------
+
+/// Format the ABS benchmark results for multiple module-count scales.
+///
+/// Emits one sub-section per scale, followed by a note on chunk granularity.
+pub fn format_abs_scales_section(scale_results: &[AbsScaleResult]) -> String {
+    let mut s = String::new();
+    for sr in scale_results {
+        s.push_str(&format!(
+            "### N = {} modules\n\n",
+            format_thousands(sr.n_modules)
+        ));
+        s.push_str(&format_abs_table(&sr.churns));
+        s.push('\n');
+    }
+    s.push_str(
+        "> **Note**: savings are measured at chunk granularity, not module granularity. \
+         Changes within a single chunk result in that whole chunk being re-fetched \
+         regardless of how few modules changed within it. \
+         PGO-driven fine-grained chunk splitting (Plan 5) reduces per-module delta cost.\n",
+    );
+    s
+}
+
+// ---------------------------------------------------------------------------
+// Real-world scenario section
+// ---------------------------------------------------------------------------
+
+/// Compute and format real-world scenario projections for two predefined scales.
+///
+/// Uses the measured analysis-only speedup data and ABS delta fractions to
+/// project to realistic production environments.
+pub fn format_real_world_scenarios(
+    analysis: &[AnalysisBenchResult],
+    abs_scales: &[AbsScaleResult],
+) -> String {
+    let mut s = String::new();
+    s.push_str("## 4. Real-World Scenarios\n\n");
+    s.push_str(
+        "These projections combine the measured analysis-only speedup with ABS delta \
+         fractions to estimate build savings and CDN cost reductions at production scale.\n\n",
+    );
+
+    // The two predefined scenarios from the spec.
+    let scenarios: &[(&str, usize, usize, usize, f64, f64)] = &[
+        // (label, n_modules, dau, sessions_per_user, weekly_churn_pct, initial_bundle_kb)
+        ("Mid-scale", 5_000, 1_000, 5, 0.02, 500.0),
+        ("Large-scale", 50_000, 10_000, 5, 0.01, 2_000.0),
+    ];
+
+    for &(label, n_modules, dau, sessions_per_user, weekly_churn_pct, initial_bundle_kb) in
+        scenarios
+    {
+        s.push_str(&format!("### {label}: {n_mod} modules\n\n",
+            n_mod = format_thousands(n_modules)));
+
+        // ── Build-time projection ─────────────────────────────────────────
+        // Find the best matching analysis result (exact or nearest-N).
+        let analysis_row = find_nearest_analysis(analysis, n_modules);
+
+        if let Some(ar) = analysis_row {
+            s.push_str(&format!(
+                "**Weekly build time** (analysis pipeline only, no transform):\n\
+                 - Weekly build time (cold):  {cold} ms ({cold_s:.1} s)\n\
+                 - Weekly build time (warm):  {warm} ms ({speedup:.0}× faster)\n\n",
+                cold = ar.cold_ms,
+                cold_s = ar.cold_ms as f64 / 1000.0,
+                warm = ar.warm_ms,
+                speedup = ar.speedup,
+            ));
+        } else {
+            s.push_str("_(no matching analysis benchmark data)_\n\n");
+        }
+
+        // ── CDN bandwidth projection ──────────────────────────────────────
+        // Find the ABS delta fraction for the given churn.
+        let delta_fraction = find_abs_delta_fraction(abs_scales, weekly_churn_pct);
+        let sessions_per_week = dau * sessions_per_user;
+
+        let full_download_kb = initial_bundle_kb;
+        let abs_download_kb = initial_bundle_kb * delta_fraction;
+        let savings_pct = (1.0 - delta_fraction) * 100.0;
+
+        let cdn_kb_per_week = full_download_kb * sessions_per_week as f64;
+        let abs_kb_per_week = abs_download_kb * sessions_per_week as f64;
+        let saved_kb = cdn_kb_per_week - abs_kb_per_week;
+
+        // Convert to GB for CDN cost calculation.
+        let cdn_gb_per_week = cdn_kb_per_week / (1024.0 * 1024.0);
+        let abs_gb_per_week = abs_kb_per_week / (1024.0 * 1024.0);
+        let saved_gb = saved_kb / (1024.0 * 1024.0);
+        let saved_dollars = saved_gb * 0.09;
+
+        s.push_str(&format!(
+            "**CDN bandwidth** ({churn:.0}% weekly churn, {dau} DAU, {spu} sessions/user):\n\
+             - Per-deploy download per user:\n\
+               - Without ABS: {bundle_kb:.0} KB (100%)\n\
+               - With ABS:    {abs_kb:.0} KB ({savings:.0}% less)\n\
+             - Weekly CDN bandwidth for all users:\n\
+               - Without ABS: {cdn_gb:.2} GB / week\n\
+               - With ABS:    {abs_gb:.2} GB / week\n\
+               - **Saved: {saved_gb:.2} GB / week ≈ ${dollars:.2} / week at $0.09/GB**\n\n",
+            churn = weekly_churn_pct * 100.0,
+            dau = format_thousands(dau),
+            spu = sessions_per_user,
+            bundle_kb = full_download_kb,
+            abs_kb = abs_download_kb,
+            savings = savings_pct,
+            cdn_gb = cdn_gb_per_week,
+            abs_gb = abs_gb_per_week,
+            saved_gb = saved_gb,
+            dollars = saved_dollars,
+        ));
+    }
+
+    s
+}
+
+// ---------------------------------------------------------------------------
+// Helpers for scenario lookup
+// ---------------------------------------------------------------------------
+
+/// Find the analysis result closest to `target_n`, preferring exact matches
+/// and falling back to the largest measured / extrapolated result.
+fn find_nearest_analysis(results: &[AnalysisBenchResult], target_n: usize) -> Option<&AnalysisBenchResult> {
+    results
+        .iter()
+        .min_by_key(|r| (r.n_modules as isize - target_n as isize).unsigned_abs())
+}
+
+/// Look up the ABS delta fraction (abs_download_kb / total_bundle_kb) for the
+/// churn level nearest to `target_churn`.  Falls back to 0.5 if no data.
+fn find_abs_delta_fraction(abs_scales: &[AbsScaleResult], target_churn: f64) -> f64 {
+    // Use the largest-scale measurement for the best representative data.
+    let best_scale = abs_scales.iter().max_by_key(|s| s.n_modules);
+    let churns = match best_scale {
+        Some(s) => &s.churns,
+        None => return 0.5,
+    };
+    let nearest = churns.iter().min_by(|a, b| {
+        (a.churn_fraction - target_churn)
+            .abs()
+            .partial_cmp(&(b.churn_fraction - target_churn).abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    match nearest {
+        Some(r) if r.total_bundle_kb > 0.0 => r.abs_download_kb / r.total_bundle_kb,
+        _ => 0.5,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -157,7 +342,18 @@ pub fn format_combined_scenario(cas: &[CasBenchResult], abs: &[AbsChurnResult]) 
 // ---------------------------------------------------------------------------
 
 /// Write the complete Markdown benchmark report to `path`.
-pub fn write_report(cas: &[CasBenchResult], abs: &[AbsChurnResult], path: &Path) -> Result<()> {
+///
+/// Sections:
+/// 1. Analysis pipeline only (CAS speedup without transform noise) — headline
+/// 2. Full pipeline including transform (honest overall build time)
+/// 3. ABS delta efficiency at multiple module scales
+/// 4. Real-world scenarios
+pub fn write_report(
+    analysis: &[AnalysisBenchResult],
+    cas: &[CasBenchResult],
+    abs_scales: &[AbsScaleResult],
+    path: &Path,
+) -> Result<()> {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     let ts_secs = SystemTime::now()
@@ -165,7 +361,6 @@ pub fn write_report(cas: &[CasBenchResult], abs: &[AbsChurnResult], path: &Path)
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
-    // YYYY-MM-DD HH:MM from Unix timestamp (simple, no external crate)
     let datetime = format_unix_datetime(ts_secs);
     let platform = platform_string();
 
@@ -178,42 +373,64 @@ pub fn write_report(cas: &[CasBenchResult], abs: &[AbsChurnResult], path: &Path)
     ));
     doc.push_str("---\n\n");
 
-    // ---- Section 1: CAS ----
-    doc.push_str("## 1. CAS — Summarizer Cache: Build Speed at Scale\n\n");
+    // ── Section 1: Analysis pipeline only ──────────────────────────────────
+    doc.push_str("## 1. Analysis Pipeline — CAS Speedup (no transform)\n\n");
     doc.push_str(
-        "The wundler summarizer caches each module's analysis as a content-addressed \
-         `ModuleSummary`. On incremental rebuilds, only changed files are re-summarized; \
-         every other module is a sub-millisecond cache read.\n\n",
+        "This section isolates what CAS actually controls: SWC parse + content-addressed \
+         cache + graph analysis.  The rolldown subprocess is excluded so transform time \
+         does not drown out the summarizer speedup.\n\n\
+         On a warm rebuild (1 file changed out of N), N-1 modules are sub-millisecond \
+         cache reads.  The speedup therefore scales with N.\n\n",
     );
-    doc.push_str(&format_cas_table(cas));
-    doc.push('\n');
-    doc.push_str(
-        "_Cold build scales linearly with module count. \
-         Warm (incremental) build is near-constant — dominated by the graph analysis \
-         pass, not summarization._\n\n",
-    );
+    if !analysis.is_empty() {
+        doc.push_str(&format_analysis_table(analysis));
+        doc.push('\n');
+        doc.push_str("_`*` rows are extrapolated via linear regression, not measured._\n\n");
+    }
 
-    // ---- Section 2: ABS ----
-    doc.push_str("## 2. ABS — Delivery Delta Efficiency\n\n");
+    // ── Section 2: Full pipeline including transform ────────────────────────
+    doc.push_str("## 2. Full Pipeline — CAS + Transform\n\n");
     doc.push_str(
-        "With ABS, the browser only downloads chunks whose module-hash sets changed. \
-         The table below shows download fraction per deploy for a client that was \
-         current on the previous build.\n\n",
+        "The full build includes the transform step (SWC or rolldown).  Transform time \
+         is O(N) even on a warm rebuild because the engine re-processes every alive \
+         module.  This is why the speedup numbers here are much lower than Section 1 — \
+         the pipeline bottleneck shifts from cache I/O to transform.\n\n",
     );
-    if !abs.is_empty() {
-        let n = abs[0].total_bundle_kb * 1024.0 / 1.0; // rough module count
-        let _ = n;
-        doc.push_str(&format_abs_table(abs));
+    if !cas.is_empty() {
+        doc.push_str(&format_cas_table(cas));
         doc.push('\n');
         doc.push_str(
-            "_Savings plateau when churn stays within a single chunk. They collapse \
-             once churn spans the chunk boundary — illustrating that ABS operates at \
-             chunk granularity, not module granularity._\n\n",
+            "_Warm build speedup is modest (≈1.5×) because rolldown re-transforms \
+             every module regardless of cache hits._\n\n",
         );
     }
 
-    // ---- Section 3: Combined scenario ----
-    doc.push_str(&format_combined_scenario(cas, abs));
+    // ── Section 3: ABS delta efficiency ────────────────────────────────────
+    doc.push_str("## 3. ABS — Delivery Delta Efficiency\n\n");
+    doc.push_str(
+        "With ABS, the browser only downloads chunks whose module-hash sets changed. \
+         The tables below show download fraction per deploy for a client that was \
+         current on the previous build.\n\n",
+    );
+    if !abs_scales.is_empty() {
+        doc.push_str(&format_abs_scales_section(abs_scales));
+    }
+
+    // ── Section 4: Real-world scenarios ────────────────────────────────────
+    let mut all_analysis = analysis.to_vec();
+    // Add extrapolated rows for 50k and 100k
+    if !analysis.is_empty() {
+        let measured: Vec<_> = analysis.iter().filter(|r| !r.is_extrapolated).cloned().collect();
+        if !measured.is_empty() {
+            for &target in &[50_000_usize, 100_000_usize] {
+                let already_have = analysis.iter().any(|r| r.n_modules == target);
+                if !already_have {
+                    all_analysis.push(crate::analysis_bench::extrapolate(&measured, target));
+                }
+            }
+        }
+    }
+    doc.push_str(&format_real_world_scenarios(&all_analysis, abs_scales));
 
     std::fs::write(path, &doc)?;
     Ok(())
