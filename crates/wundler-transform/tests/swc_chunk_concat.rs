@@ -43,7 +43,7 @@ fn make_chunk(id: &str) -> Chunk {
 // Tests
 // ---------------------------------------------------------------------------
 
-/// Each module in the chunk gets a `// module: <path>` comment header.
+/// Each module in the chunk gets a `// --- <path> ---` separator comment.
 #[test]
 fn concatenates_two_modules_in_chunk() {
     let adapter = SwcTransformAdapter::new();
@@ -59,20 +59,22 @@ fn concatenates_two_modules_in_chunk() {
         .expect("transform should succeed");
 
     assert!(
-        output.code.contains("// module: a.ts"),
-        "expected '// module: a.ts' in output, got:\n{}",
+        output.code.contains("// --- a.ts ---"),
+        "expected '// --- a.ts ---' separator in output, got:\n{}",
         output.code
     );
     assert!(
-        output.code.contains("// module: b.ts"),
-        "expected '// module: b.ts' in output, got:\n{}",
+        output.code.contains("// --- b.ts ---"),
+        "expected '// --- b.ts ---' separator in output, got:\n{}",
         output.code
     );
 }
 
-/// Each module must be wrapped in an IIFE for scope isolation.
+/// Modules must NOT be wrapped in IIFEs; the chunk must use ESM shared scope
+/// (flat scope-flattened concatenation) so that `import` declarations remain
+/// valid at the top level.
 #[test]
-fn scope_isolation_via_iife_wrapping() {
+fn esm_scope_flattening_no_iife_wrapping() {
     let adapter = SwcTransformAdapter::new();
     let modules = vec![
         node("a.ts", "const x = 1;"),
@@ -85,11 +87,28 @@ fn scope_isolation_via_iife_wrapping() {
         .transform_chunk(&modules, &chunk, &decisions)
         .expect("transform should succeed");
 
-    let iife_count = output.code.matches("(function()").count();
-    assert_eq!(
-        iife_count, 2,
-        "expected 2 IIFE wrappers (one per module), found {} in:\n{}",
-        iife_count, output.code
+    // No IIFE wrappers — they are ESM-incompatible (import is top-level only).
+    assert!(
+        !output.code.contains("(function()"),
+        "chunk must NOT use IIFE wrapping — found in:\n{}",
+        output.code
+    );
+    assert!(
+        !output.code.contains("})();"),
+        "chunk must NOT have IIFE close `}})();` — found in:\n{}",
+        output.code
+    );
+
+    // Both module bodies must appear in the shared flat scope.
+    assert!(
+        output.code.contains("const x"),
+        "module a.ts body must appear in shared scope, got:\n{}",
+        output.code
+    );
+    assert!(
+        output.code.contains("const y"),
+        "module b.ts body must appear in shared scope, got:\n{}",
+        output.code
     );
 }
 

@@ -110,9 +110,13 @@ fn write_chunk_emits_source_map_when_present() {
 fn write_manifest_emits_valid_json() {
     let dir = TempDir::new().unwrap();
     let hash = ContentHash::from_source("test module source");
-    let manifest = make_manifest_with_entry("main", "chunk-0", hash);
+    let manifest = make_manifest_with_entry("main", "chunk-0", hash.clone());
 
-    write_manifest(dir.path(), &manifest).expect("write_manifest failed");
+    // id_to_hash maps the chunk's logical ID to its actual output-file hash.
+    let mut id_to_hash = HashMap::new();
+    id_to_hash.insert("chunk-0".to_string(), hash);
+
+    write_manifest(dir.path(), &manifest, &id_to_hash).expect("write_manifest failed");
 
     let manifest_path = dir.path().join("manifest.json");
     assert!(manifest_path.exists(), "manifest.json must exist");
@@ -143,9 +147,13 @@ fn write_manifest_emits_valid_json() {
 fn write_index_html_references_initial_chunks() {
     let dir = TempDir::new().unwrap();
     let hash = ContentHash::from_source("initial chunk code");
-    let manifest = make_manifest_with_entry("main", "chunk-0", hash);
+    let manifest = make_manifest_with_entry("main", "chunk-0", hash.clone());
 
-    write_index_html(dir.path(), &manifest, "main").expect("write_index_html failed");
+    // id_to_hash maps the chunk's logical ID to its actual output-file hash.
+    let mut id_to_hash = HashMap::new();
+    id_to_hash.insert("chunk-0".to_string(), hash);
+
+    write_index_html(dir.path(), &manifest, "main", &id_to_hash).expect("write_index_html failed");
 
     // Find the generated HTML file (index.html).
     let html_path = dir.path().join("index.html");

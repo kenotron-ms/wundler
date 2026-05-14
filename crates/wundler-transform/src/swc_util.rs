@@ -17,7 +17,13 @@ pub fn parse_source(name: &str, src: &str) -> Result<(Lrc<SourceMap>, Module)> {
     let filename = Lrc::new(FileName::Custom(name.to_owned()));
     let fm = cm.new_source_file(filename, src.to_owned());
 
-    let syntax = if name.ends_with(".ts") || name.ends_with(".tsx") {
+    let syntax = if name.ends_with(".tsx") {
+        // TSX files: TypeScript syntax with JSX enabled.
+        Syntax::Typescript(TsSyntax {
+            tsx: true,
+            ..Default::default()
+        })
+    } else if name.ends_with(".ts") {
         Syntax::Typescript(TsSyntax::default())
     } else {
         Syntax::Es(Default::default())

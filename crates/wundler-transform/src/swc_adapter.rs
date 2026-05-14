@@ -1,4 +1,5 @@
-//! SWC-based transform adapter: dead export stripping and chunk concatenation.
+//! SWC-based transform adapter: TypeScript transpilation, dead export stripping,
+//! and ESM scope-flattened chunk concatenation.
 
 use std::collections::HashSet;
 
@@ -115,6 +116,56 @@ fn decl_binding_name(decl: &Decl) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
+// ESM scope-flattening helpers
+// ---------------------------------------------------------------------------
+
+/// Separate `import` declarations from the module body and strip the `export`
+/// keyword from top-level declarations so they land in shared chunk scope.
+///
+/// Returns `(import_lines, body_text)` where:
+/// * `import_lines` — every line that begins with `import ` (verbatim).
+/// * `body_text`    — the remaining lines, with `export ` stripped from
+///   top-level function/const/class/let/var declarations.
+///
+/// Lines of the form `export default …` are rewritten to
+/// `const __default__ = …` so the binding stays in scope.
+///
+/// This is a line-oriented regex approach suitable for SWC-emitted JavaScript
+/// (well-formatted, declarations always start at the beginning of a line).
+fn strip_imports_from_transpiled_js(js: &str) -> (Vec<String>, String) {
+    let mut imports = Vec::new();
+    let mut body = String::new();
+
+    for line in js.lines() {
+        let trimmed = line.trim_start();
+
+        if trimmed.starts_with("import ") {
+            // Collect the whole import line; deduplication is handled by the caller.
+            imports.push(line.to_string());
+        } else if trimmed.starts_with("export ")
+            && (trimmed.contains("function ")
+                || trimmed.contains("const ")
+                || trimmed.contains("class ")
+                || trimmed.contains("let ")
+                || trimmed.contains("var "))
+        {
+            // Strip the `export ` keyword; the declaration stays in shared scope.
+            body.push_str(&line.replacen("export ", "", 1));
+            body.push('\n');
+        } else if trimmed.starts_with("export default ") {
+            // Rename `export default <expr>` to `const __default__ = <expr>`.
+            body.push_str(&line.replacen("export default ", "const __default__ = ", 1));
+            body.push('\n');
+        } else {
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+
+    (imports, body)
+}
+
+// ---------------------------------------------------------------------------
 // SwcTransformAdapter
 // ---------------------------------------------------------------------------
 
@@ -129,8 +180,15 @@ pub struct SwcAdapterConfig {
     pub source_maps: bool,
 }
 
-/// SWC-backed `TransformEngine` implementation that concatenates N modules
-/// into a single chunk file with IIFE scope isolation per module.
+/// SWC-backed `TransformEngine` implementation.
+///
+/// For each chunk:
+/// 1. Transpiles every TypeScript/TSX module to plain JavaScript via SWC
+///    (`transform_ts_to_js`).
+/// 2. Strips dead exports (`strip_dead_exports`).
+/// 3. Hoists all `import` declarations to the top of the chunk and removes
+///    the `export` keyword from inline declarations, producing a valid ESM
+///    file with a flat shared scope (no IIFE wrappers).
 pub struct SwcTransformAdapter {
     config: SwcAdapterConfig,
 }
@@ -171,16 +229,13 @@ impl TransformEngine for SwcTransformAdapter {
             });
         }
 
-        let mut combined = String::new();
-        combined.push_str(&format!("// chunk: {}\n", chunk.id));
+        // Collect deduplicated import lines and per-module bodies.
+        let mut all_imports: Vec<String> = Vec::new();
+        let mut seen_imports: HashSet<String> = HashSet::new();
+        let mut module_bodies: Vec<String> = Vec::new();
 
-        // Track current output line (1-based) for source map segment generation.
-        // After the header line ("// chunk: ...\n"), we are at line 2.
-        let mut current_line: usize = 2;
-
-        // Per-module tracking for source map generation.
+        // Per-module source paths for source-map generation.
         let mut sources: Vec<String> = Vec::new();
-        let mut mappings_segments: Vec<String> = Vec::new();
 
         for node in modules {
             let source = node.source.as_deref().ok_or_else(|| {
@@ -190,47 +245,68 @@ impl TransformEngine for SwcTransformAdapter {
                 }
             })?;
 
-            let stripped = if let Some(dead) = decisions.dead_exports.get(&node.id) {
-                strip_dead_exports(source, dead).map_err(|e| TransformError::TransformFailed {
+            // Bug 2 fix: transpile TypeScript → JavaScript before any further
+            // processing.  This strips all TS-specific syntax (type annotations,
+            // interfaces, enums, etc.) so the emitted chunk is valid ES module JS.
+            let js =
+                crate::swc_util::transform_ts_to_js(&node.path, source).map_err(|e| {
+                    TransformError::TransformFailed {
+                        chunk_id: chunk.id.clone(),
+                        reason: format!("transform_ts_to_js({:?}): {}", node.path, e),
+                    }
+                })?;
+
+            // Strip dead exports (if any are present for this module).
+            let after_dce = if let Some(dead) = decisions.dead_exports.get(&node.id) {
+                strip_dead_exports(&js, dead).map_err(|e| TransformError::TransformFailed {
                     chunk_id: chunk.id.clone(),
                     reason: format!("strip_dead_exports({:?}): {}", node.path, e),
                 })?
             } else {
-                source.to_string()
+                js
             };
 
-            // "\n// module: {path}\n" — two lines: blank line + comment
-            combined.push_str(&format!("\n// module: {}\n", node.path));
-            current_line += 2; // blank line + comment
+            // Bug 3 fix: extract imports and strip `export` keywords so this
+            // module's declarations land in the shared chunk scope instead of
+            // being wrapped in an IIFE.
+            let (module_imports, module_body) = strip_imports_from_transpiled_js(&after_dce);
 
-            // "(function() {\n"
-            combined.push_str("(function() {\n");
-            current_line += 1;
+            // Deduplicate imports by exact line.
+            for imp in module_imports {
+                if seen_imports.insert(imp.clone()) {
+                    all_imports.push(imp);
+                }
+            }
 
-            // Record the line where this module's body begins.
-            let body_start_line = current_line;
-
-            // Body lines
-            let body_lines = stripped.lines().count().max(1);
-            combined.push_str(&stripped);
-            combined.push('\n');
-            current_line += body_lines;
-
-            // "})();\n"
-            combined.push_str("})();\n");
-            current_line += 1;
+            module_bodies.push(format!("// --- {} ---\n{}", node.path, module_body));
 
             if self.config.source_maps {
                 sources.push(node.path.clone());
-                mappings_segments
-                    .push(format!("{}:{}", node.path, body_start_line));
             }
+        }
+
+        // Assemble the chunk in ESM order:
+        //   1. chunk header comment
+        //   2. deduplicated import declarations (top-level, as ESM requires)
+        //   3. module bodies (declarations in shared scope)
+        let mut combined = format!("// chunk: {}\n", chunk.id);
+
+        if !all_imports.is_empty() {
+            for imp in &all_imports {
+                combined.push_str(imp);
+                combined.push('\n');
+            }
+            combined.push('\n');
+        }
+
+        for body in &module_bodies {
+            combined.push_str(body);
         }
 
         let hash = ContentHash::from_bytes(combined.as_bytes());
 
         let source_map = if self.config.source_maps {
-            Some(build_source_map(&sources, &mappings_segments))
+            Some(build_source_map(&sources, &[]))
         } else {
             None
         };
@@ -247,9 +323,8 @@ impl TransformEngine for SwcTransformAdapter {
 /// Build a v3-format source map JSON string.
 ///
 /// This is a "line-coarse" map: actual column/VLQ mappings are not produced;
-/// instead the per-module body start lines are recorded in the non-standard
-/// `x_wundler_segments` field for tooling that wants to correlate output lines
-/// back to source files.
+/// instead the per-module source paths are recorded.  The `x_wundler_segments`
+/// field can carry additional tooling metadata.
 fn build_source_map(sources: &[String], segments: &[String]) -> String {
     let map = serde_json::json!({
         "version": 3,

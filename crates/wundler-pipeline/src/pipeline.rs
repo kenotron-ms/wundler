@@ -211,6 +211,14 @@ impl BuildPipeline {
         // ----- Step 3: Transform -----
         let outputs = self.run_transform(&analysis)?;
 
+        // Build a mapping from chunk_id → actual output hash so that
+        // write_index_html and write_manifest can reference real file names
+        // rather than the analysis-phase hashes stored in the ChunkManifest.
+        let id_to_output_hash: HashMap<String, ContentHash> = outputs
+            .iter()
+            .map(|o| (o.chunk_id.clone(), o.hash.clone()))
+            .collect();
+
         // ----- Step 4a: Write chunks -----
         let out_dir = &self.config.out_dir;
         let mut chunk_files: Vec<PathBuf> = Vec::with_capacity(outputs.len());
@@ -226,12 +234,12 @@ impl BuildPipeline {
         let chunks_written = chunk_files.len();
 
         // ----- Step 4b: Write manifest -----
-        output::write_manifest(out_dir, &analysis.manifest)
+        output::write_manifest(out_dir, &analysis.manifest, &id_to_output_hash)
             .context("write_manifest failed")?;
 
         // ----- Step 4c: Write index.html for every entry point -----
         for (entry, _) in &self.config.entry_points {
-            output::write_index_html(out_dir, &analysis.manifest, entry)
+            output::write_index_html(out_dir, &analysis.manifest, entry, &id_to_output_hash)
                 .with_context(|| format!("write_index_html failed for entry '{entry}'"))?;
         }
 
