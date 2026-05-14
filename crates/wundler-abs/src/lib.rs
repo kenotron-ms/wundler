@@ -9,6 +9,7 @@
 
 pub mod manifest;
 pub mod server;
+pub mod signing;
 pub mod state;
 pub mod telemetry;
 pub mod types;
