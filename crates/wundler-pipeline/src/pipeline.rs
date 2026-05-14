@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use wundler_core::cache::local::LocalCache;
 use wundler_core::summarizer::summarize_directory;
 use wundler_core::types::BundleGraphNode;
+use wundler_graph::analyzer::{AnalysisResult, GraphAnalyzer};
 use wundler_transform::engine::TransformEngine;
 use wundler_transform::rolldown_adapter::{RolldownAdapter, RolldownAdapterConfig};
 use wundler_transform::swc_adapter::{SwcAdapterConfig, SwcTransformAdapter};
@@ -51,5 +52,19 @@ impl BuildPipeline {
                 )
             })?;
         Ok(nodes)
+    }
+
+    /// Step 2: Run the Plan 2 graph analyzer on a slice of bundle graph nodes.
+    ///
+    /// Resolves entry-point paths from `config.entry_points`, computes module
+    /// reachability, assigns modules to chunks, and assembles the
+    /// [`ChunkManifest`].
+    pub fn run_analyze(&self, nodes: Vec<BundleGraphNode>) -> Result<AnalysisResult> {
+        let mut analyzer = GraphAnalyzer::new(self.config.entry_points.clone());
+        analyzer.commons_threshold = self.config.commons_threshold;
+        let result = analyzer
+            .analyze(nodes)
+            .with_context(|| "graph analysis failed")?;
+        Ok(result)
     }
 }
