@@ -2,6 +2,7 @@
 //! and ESM scope-flattened chunk concatenation.
 
 use std::collections::HashSet;
+use std::path::Path;
 
 use anyhow::Result;
 use swc_core::ecma::ast::{Decl, ExportSpecifier, ModuleDecl, ModuleExportName, ModuleItem, Pat};
@@ -142,6 +143,12 @@ fn strip_imports_from_transpiled_js(js: &str) -> (Vec<String>, String) {
         if trimmed.starts_with("import ") {
             // Collect the whole import line; deduplication is handled by the caller.
             imports.push(line.to_string());
+        } else if trimmed.starts_with("export default ") {
+            // Rename `export default <expr>` to `const __default__ = <expr>`.
+            // Must check this BEFORE the generic `export` branch to avoid
+            // `export default function` being partially stripped to `default function`.
+            body.push_str(&line.replacen("export default ", "const __default__ = ", 1));
+            body.push('\n');
         } else if trimmed.starts_with("export ")
             && (trimmed.contains("function ")
                 || trimmed.contains("const ")
@@ -152,10 +159,6 @@ fn strip_imports_from_transpiled_js(js: &str) -> (Vec<String>, String) {
             // Strip the `export ` keyword; the declaration stays in shared scope.
             body.push_str(&line.replacen("export ", "", 1));
             body.push('\n');
-        } else if trimmed.starts_with("export default ") {
-            // Rename `export default <expr>` to `const __default__ = <expr>`.
-            body.push_str(&line.replacen("export default ", "const __default__ = ", 1));
-            body.push('\n');
         } else {
             body.push_str(line);
             body.push('\n');
@@ -163,6 +166,113 @@ fn strip_imports_from_transpiled_js(js: &str) -> (Vec<String>, String) {
     }
 
     (imports, body)
+}
+
+// ---------------------------------------------------------------------------
+// Intra-chunk import classification
+// ---------------------------------------------------------------------------
+
+/// Classification of an import statement for chunk assembly.
+enum ImportKind {
+    /// Import from a module already concatenated in this chunk — strip it.
+    IntraChunk,
+    /// Import from an external package (bare specifier) or a cross-chunk
+    /// relative path — keep it at the top of the chunk.
+    Keep,
+}
+
+/// Normalise a path string by resolving `.` and `..` components.
+///
+/// Mirrors the logic in `wundler_graph::graph::normalize_path` without
+/// depending on that crate.
+fn normalize_path(path: &str) -> String {
+    let is_absolute = path.starts_with('/');
+    let mut components: Vec<&str> = Vec::new();
+    for component in path.split('/') {
+        match component {
+            "." | "" => {}
+            ".." => {
+                components.pop();
+            }
+            other => components.push(other),
+        }
+    }
+    let joined = components.join("/");
+    if is_absolute {
+        format!("/{}", joined)
+    } else {
+        joined
+    }
+}
+
+/// Extract the module specifier string from a single SWC-emitted import line.
+///
+/// Handles both:
+/// * `import … from 'specifier';`
+/// * `import 'specifier';`   (side-effect imports)
+///
+/// Returns `None` if the line cannot be parsed as an import.
+fn extract_specifier(import_line: &str) -> Option<String> {
+    let trimmed = import_line.trim();
+
+    // Find the last quoted string on the line, which is the specifier.
+    // SWC always uses single quotes for module specifiers.
+    let last_quote_end = trimmed.rfind('\'')?;
+    let before_end = &trimmed[..last_quote_end];
+    let last_quote_start = before_end.rfind('\'')?;
+
+    let specifier = &trimmed[last_quote_start + 1..last_quote_end];
+    Some(specifier.to_string())
+}
+
+/// Classify an import line from `importer_path` given the set of module paths
+/// in the current chunk (`chunk_paths`).
+fn classify_import(
+    importer_path: &str,
+    import_line: &str,
+    chunk_paths: &HashSet<&str>,
+) -> ImportKind {
+    let specifier = match extract_specifier(import_line) {
+        Some(s) => s,
+        None => return ImportKind::Keep, // can't parse → keep to be safe
+    };
+
+    // Bare specifiers (not starting with `.`) are always external packages.
+    if !specifier.starts_with('.') {
+        return ImportKind::Keep;
+    }
+
+    // Resolve the relative specifier against the importer's directory.
+    let importer_dir = Path::new(importer_path)
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_str()
+        .unwrap_or(".");
+
+    let raw = if importer_dir.is_empty() || importer_dir == "." {
+        specifier.clone()
+    } else {
+        format!("{}/{}", importer_dir, specifier)
+    };
+    let base = normalize_path(&raw);
+
+    // Try the path as-is (already has an extension) and with common TS/JS extensions.
+    let candidates = [
+        base.clone(),
+        format!("{base}.ts"),
+        format!("{base}.tsx"),
+        format!("{base}.js"),
+        format!("{base}.jsx"),
+    ];
+
+    for candidate in &candidates {
+        if chunk_paths.contains(candidate.as_str()) {
+            return ImportKind::IntraChunk;
+        }
+    }
+
+    // Didn't match any module in the chunk — cross-chunk or unresolved, keep it.
+    ImportKind::Keep
 }
 
 // ---------------------------------------------------------------------------
@@ -184,11 +294,13 @@ pub struct SwcAdapterConfig {
 ///
 /// For each chunk:
 /// 1. Transpiles every TypeScript/TSX module to plain JavaScript via SWC
-///    (`transform_ts_to_js`).
+///    (`transform_ts_to_js`), including JSX → `React.createElement` for `.tsx`/`.jsx`.
 /// 2. Strips dead exports (`strip_dead_exports`).
-/// 3. Hoists all `import` declarations to the top of the chunk and removes
-///    the `export` keyword from inline declarations, producing a valid ESM
-///    file with a flat shared scope (no IIFE wrappers).
+/// 3. Hoists all `import` declarations to the top of the chunk, filtering out
+///    **intra-chunk** imports (modules already concatenated in this chunk) while
+///    keeping external and cross-chunk imports.
+/// 4. Removes the `export` keyword from inline declarations, producing a valid
+///    ESM file with a flat shared scope (no IIFE wrappers).
 pub struct SwcTransformAdapter {
     config: SwcAdapterConfig,
 }
@@ -229,6 +341,9 @@ impl TransformEngine for SwcTransformAdapter {
             });
         }
 
+        // Build a set of all module paths in this chunk for intra-chunk detection.
+        let chunk_paths: HashSet<&str> = modules.iter().map(|m| m.path.as_str()).collect();
+
         // Collect deduplicated import lines and per-module bodies.
         let mut all_imports: Vec<String> = Vec::new();
         let mut seen_imports: HashSet<String> = HashSet::new();
@@ -245,9 +360,9 @@ impl TransformEngine for SwcTransformAdapter {
                 }
             })?;
 
-            // Bug 2 fix: transpile TypeScript → JavaScript before any further
-            // processing.  This strips all TS-specific syntax (type annotations,
-            // interfaces, enums, etc.) so the emitted chunk is valid ES module JS.
+            // Transpile TypeScript → JavaScript before any further processing.
+            // This strips all TS-specific syntax (type annotations, interfaces,
+            // enums, etc.) and converts JSX → React.createElement for .tsx/.jsx.
             let js =
                 crate::swc_util::transform_ts_to_js(&node.path, source).map_err(|e| {
                     TransformError::TransformFailed {
@@ -266,15 +381,22 @@ impl TransformEngine for SwcTransformAdapter {
                 js
             };
 
-            // Bug 3 fix: extract imports and strip `export` keywords so this
-            // module's declarations land in the shared chunk scope instead of
-            // being wrapped in an IIFE.
+            // Extract imports and strip `export` keywords so this module's
+            // declarations land in the shared chunk scope.
             let (module_imports, module_body) = strip_imports_from_transpiled_js(&after_dce);
 
-            // Deduplicate imports by exact line.
+            // Filter out intra-chunk imports (their code is already concatenated).
+            // Keep external (bare specifier) and cross-chunk relative imports.
             for imp in module_imports {
-                if seen_imports.insert(imp.clone()) {
-                    all_imports.push(imp);
+                match classify_import(&node.path, &imp, &chunk_paths) {
+                    ImportKind::IntraChunk => {
+                        // Skip — this module's code is already in the chunk body.
+                    }
+                    ImportKind::Keep => {
+                        if seen_imports.insert(imp.clone()) {
+                            all_imports.push(imp);
+                        }
+                    }
                 }
             }
 
