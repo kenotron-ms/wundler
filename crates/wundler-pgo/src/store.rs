@@ -77,6 +77,51 @@ impl PgoStore {
         Ok(names)
     }
 
+    /// Insert one session as N rows (one per chunk in `chunk_sequence`).
+    /// Returns the number of rows inserted. Duplicate `(session_id, chunk_id)`
+    /// pairs are silently skipped (see Task 5).
+    pub fn insert_session(&self, record: &crate::types::SessionRecord) -> Result<usize> {
+        let mut conn = self.conn.lock().expect("PGO store mutex poisoned");
+        let tx = conn.transaction().context("begin insert_session tx")?;
+        let mut inserted = 0usize;
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT OR IGNORE INTO sessions \
+                     (session_id, entry_point, chunk_id, load_order, timestamp_ms) \
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                )
+                .context("prepare insert")?;
+            for (i, chunk_id) in record.chunk_sequence.iter().enumerate() {
+                let n = stmt
+                    .execute(rusqlite::params![
+                        record.session_id,
+                        record.entry_point,
+                        chunk_id,
+                        i as i64,
+                        record.timestamp_ms as i64,
+                    ])
+                    .context("execute insert")?;
+                inserted += n;
+            }
+        }
+        tx.commit().context("commit insert_session tx")?;
+        Ok(inserted)
+    }
+
+    /// How many distinct sessions loaded `chunk_id`.
+    pub fn chunk_load_count(&self, chunk_id: &str) -> Result<usize> {
+        let conn = self.conn.lock().expect("PGO store mutex poisoned");
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(DISTINCT session_id) FROM sessions WHERE chunk_id = ?1",
+                [chunk_id],
+                |row| row.get(0),
+            )
+            .context("chunk_load_count query")?;
+        Ok(n as usize)
+    }
+
     /// Return the names of all non-internal indexes in the database.
     pub fn list_indexes(&self) -> Result<Vec<String>> {
         let conn = self.conn.lock().expect("mutex poisoned");
