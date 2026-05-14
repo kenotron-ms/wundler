@@ -100,8 +100,8 @@ sequenceDiagram
 
     Browser->>SW: Navigation (intercepted)
     SW->>SW: Collect module hashes<br/>from Cache Storage
-    SW->>ABS: POST /manifest<br/>{entry_point, cached_hashes, build_id}
-    ABS-->>SW: {fetch_urls, prefetch_urls, ttl}
+    SW->>ABS: POST /manifest<br/>entry_point, cached_hashes, build_id
+    ABS-->>SW: fetch_urls, prefetch_urls, ttl
     SW->>CDN: GET missing chunks
     CDN-->>SW: chunk JS files
     Note over SW: Cache new chunks
@@ -150,7 +150,7 @@ Use this once your application has real user traffic. The defaults assume real t
 ```mermaid
 flowchart TD
     A[Users navigate your app] --> B[Service Worker<br/>POST /manifest to ABS]
-    B --> C[ABS delta computation<br/>TelemetryLogger appends:<br/>{session_id, entry_point,<br/>chunks_served, timestamp}]
+    B --> C[ABS delta computation<br/>TelemetryLogger appends:<br/>session_id, entry_point,<br/>chunks_served, timestamp]
     C --> D[telemetry.jsonl grows]
 
     D -->|daily/hourly cron| E[wundler pgo ingest<br/>telemetry.jsonl --db pgo.sqlite]
@@ -176,7 +176,7 @@ Synthetic PGO is for bootstrapping. Use it before launch, in load tests, or in C
 flowchart TD
     A[Design expected load patterns<br/>e.g. 70% hit /, 20% /dashboard, 10% /settings] --> B[Write synthetic telemetry.jsonl]
 
-    B -->|Format per line:| C["{<br/>  session_id: uuid,<br/>  entry_point: '/',<br/>  chunks_served: ['commons','initial_root'],<br/>  client_had: [],<br/>  timestamp_ms: ...<br/>}"]
+    B -->|Format per line:| C["session_id: uuid<br/>entry_point: slash<br/>chunks_served: commons, initial_root<br/>timestamp_ms: epoch_ms"]
 
     C --> D[wundler pgo ingest<br/>synthetic.jsonl --db pgo.sqlite]
     D --> E[PgoStore populated<br/>with simulated sessions]
@@ -225,6 +225,6 @@ sequenceDiagram
     ABS->>ABS: load_signed_from_disk()<br/>Verify signature at startup<br/>Reject if tampered
 
     SW->>ABS: POST /manifest
-    ABS-->>SW: {fetch_urls, build_id, ...}
+    ABS-->>SW: fetch_urls, build_id, ttl
     Note over SW: SW verifies build_id<br/>matches cached manifest.<br/>Future: SW verifies ed25519<br/>signature of manifest directly.
 ```
