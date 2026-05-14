@@ -1,19 +1,23 @@
 //! Output writer for the Wundler build pipeline.
 //!
-//! Provides three public functions:
+//! Provides four public functions:
 //!
-//! * [`write_chunk`]      — writes a `ChunkOutput` to `<out_dir>/chunks/<hash>.js`
-//!                          (and an optional `.js.map` alongside it).
-//! * [`write_manifest`]   — serialises a `ChunkManifest` as pretty JSON to
-//!                          `<out_dir>/manifest.json`, with chunk hashes
-//!                          updated to the actual output-file hashes.
-//! * [`write_index_html`] — generates an `<out_dir>/index.html` stub that
-//!                          loads the initial chunks for a named entry point,
-//!                          referencing the actual output-file hashes.
+//! * [`write_chunk`]              — writes a `ChunkOutput` to `<out_dir>/chunks/<hash>.js`
+//!                                  (and an optional `.js.map` alongside it).
+//! * [`write_manifest`]           — serialises a `ChunkManifest` as pretty JSON to
+//!                                  `<out_dir>/manifest.json`, with chunk hashes
+//!                                  updated to the actual output-file hashes.
+//! * [`write_index_html`]         — generates an `<out_dir>/index.html` stub that
+//!                                  loads the initial chunks for a named entry point,
+//!                                  referencing the actual output-file hashes.
+//! * [`write_rolldown_index_html`] — generates an `<out_dir>/index.html` that references
+//!                                  rolldown's output files directly (e.g. `root-abc123.js`).
 
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use wundler_transform::engine::sanitize_entry_key;
 
 use anyhow::Result;
 use wundler_core::types::ContentHash;
@@ -127,6 +131,71 @@ pub fn write_index_html(
                     "  <script src=\"chunks/{hash_hex}.js\" type=\"module\"></script>\n"
                 ));
             }
+        }
+    }
+
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{entry}</title>
+</head>
+<body>
+  <div id="root"></div>
+{script_tags}</body>
+</html>
+"#
+    );
+
+    fs::write(out_dir.join("index.html"), html)?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// write_rolldown_index_html
+// ---------------------------------------------------------------------------
+
+/// Generate an `index.html` for the rolldown batch-build path.
+///
+/// Rolldown writes output files directly into `out_dir` with names like
+/// `root-<hash>.js` (for the entry whose sanitized key is `"root"`).
+/// This function scans `out_dir` for files whose stem starts with the
+/// sanitized entry key and references them via `<script type="module">` tags.
+///
+/// Unlike [`write_index_html`], the script `src` values are relative paths
+/// to the output directory (e.g. `./root-abc123.js`), not
+/// `chunks/<sha256>.js`, because rolldown owns the file naming.
+pub fn write_rolldown_index_html(out_dir: &Path, entry: &str) -> Result<()> {
+    fs::create_dir_all(out_dir)?;
+
+    let key = sanitize_entry_key(entry);
+    let prefix = format!("{key}-");
+
+    let mut script_tags = String::new();
+
+    for dir_entry in fs::read_dir(out_dir)? {
+        let dir_entry = dir_entry?;
+        let path = dir_entry.path();
+
+        if path.extension().and_then(|e| e.to_str()) != Some("js") {
+            continue;
+        }
+
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+
+        if stem.starts_with(&prefix) {
+            let filename = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            script_tags.push_str(&format!(
+                "  <script src=\"./{filename}\" type=\"module\"></script>\n"
+            ));
         }
     }
 

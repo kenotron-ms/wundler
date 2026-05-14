@@ -23,6 +23,7 @@ fn make_chunk_output(code: &str, source_map: Option<String>) -> ChunkOutput {
         hash,
         code: code.to_string(),
         source_map,
+        already_written: false,
     }
 }
 
