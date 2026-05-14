@@ -14,6 +14,7 @@ wundler-transform = { path = "../wundler-transform" }
 wundler-pipeline = { path = "../wundler-pipeline" }
 wundler-abs = { path = "../wundler-abs" }
 wundler-pgo = { path = "../wundler-pgo" }
+wundler-bench = { path = "../wundler-bench" }
 clap = { version = "4", features = ["derive"] }
 anyhow = { workspace = true }
 serde = { workspace = true }

@@ -110,6 +110,17 @@ enum Commands {
 
     /// Profile-Guided Optimisation commands.
     Pgo(PgoArgs),
+
+    /// Run the CAS and ABS benchmark suite and write a Markdown report.
+    Bench {
+        /// Output file path for the Markdown report.
+        #[arg(long, default_value = "BENCHMARK_RESULTS.md")]
+        output: std::path::PathBuf,
+
+        /// Skip slow benchmarks (runs only N=100 and N=500 for CAS).
+        #[arg(long)]
+        fast: bool,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -752,5 +763,30 @@ fn main() -> Result<()> {
             PgoCmd::Apply(args) => cmd_pgo_apply(args.db, args.manifest),
             PgoCmd::Status(args) => cmd_pgo_status(args.db),
         },
+        Commands::Bench { output, fast } => cmd_bench(output, fast),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Bench handler
+// ---------------------------------------------------------------------------
+
+fn cmd_bench(output: std::path::PathBuf, fast: bool) -> Result<()> {
+    let scales: Vec<usize> = if fast {
+        vec![100, 500]
+    } else {
+        vec![100, 500, 1000, 5000, 10000]
+    };
+
+    eprintln!("wundler bench: CAS benchmark at scales {:?}", scales);
+    let cas = wundler_bench::cas_bench::run(&scales)?;
+
+    let abs_modules: usize = if fast { 500 } else { 1000 };
+    eprintln!("wundler bench: ABS benchmark at N={} …", abs_modules);
+    let churn_levels = vec![0.005, 0.01, 0.05, 0.10, 0.25, 0.50];
+    let abs = wundler_bench::abs_bench::run(abs_modules, &churn_levels)?;
+
+    wundler_bench::report::write_report(&cas, &abs, &output)?;
+    eprintln!("wundler bench: wrote report to {}", output.display());
+    Ok(())
 }

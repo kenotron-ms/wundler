@@ -3847,6 +3847,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "wundler-bench"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde_json",
+ "tempfile",
+ "wundler-core",
+ "wundler-graph",
+ "wundler-pipeline",
+]
+
+[[package]]
 name = "wundler-cli"
 version = "0.1.0"
 dependencies = [
@@ -3860,6 +3873,7 @@ dependencies = [
  "toml",
  "walkdir",
  "wundler-abs",
+ "wundler-bench",
  "wundler-core",
  "wundler-graph",
  "wundler-pgo",
