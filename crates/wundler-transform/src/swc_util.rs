@@ -88,13 +88,15 @@ pub fn transform_ts_to_js(name: &str, src: &str) -> Result<String> {
         let program = program.apply(resolver(unresolved_mark, top_level_mark, true));
 
         // Step 2: JSX transform — MUST run before TypeScript stripping.
-        // Classic runtime emits `React.createElement(...)` with no extra import.
+        // Automatic runtime emits `import { jsx as _jsx } from "react/jsx-runtime"`
+        // so React never needs to be in scope and the default `import React` is not
+        // accidentally stripped by the subsequent TypeScript strip pass.
         let program = if is_tsx {
             program.apply(react_transform::react::<NoopComments>(
                 cm.clone(),
                 None,
                 ReactOptions {
-                    runtime: Some(Runtime::Classic),
+                    runtime: Some(Runtime::Automatic),
                     ..Default::default()
                 },
                 unresolved_mark,

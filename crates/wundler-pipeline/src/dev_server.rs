@@ -4,10 +4,26 @@
 //! files on every request via SWC (type annotations stripped, no bundling).
 //! It also provides an SSE-based HMR endpoint at `/__wundler__/hmr` and
 //! serves the HMR client script at `/__wundler__/hmr-client.js`.
+//!
+//! ## Root `/` handler
+//!
+//! A request to `/` returns a generated dev-mode `index.html` that:
+//! - Provides an [import map] mapping bare specifiers (`react`, `react-dom`,
+//!   `react-dom/client`, `react/jsx-runtime`) to the esm.sh CDN.
+//! - Loads the HMR client script (`/__wundler__/hmr-client.js`).
+//! - Bootstraps the application via `<script type="module" src="./main.tsx">`.
+//!
+//! ## Extension resolution
+//!
+//! Browser native ESM resolves relative imports without file extensions as-is:
+//! `import App from './App'` → `GET /App`.  Because browsers cannot try
+//! alternative extensions, the server does so on their behalf: if the exact
+//! path is not found and the path has no extension, the server tries `.tsx`,
+//! `.ts`, `.jsx`, `.js` in that order before returning 404.
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -33,6 +49,44 @@ const HMR_CLIENT_JS: &str = r#"(function() {
   es.addEventListener('change', (ev) => { console.log('[wundler] change:', ev.data); location.reload(); });
   es.onerror = () => {};
 })();"#;
+
+// ---------------------------------------------------------------------------
+// Dev index HTML (served at /)
+//
+// Provides an import map for React CDN (esm.sh), injects the HMR client, and
+// bootstraps the app from the source entry point `./main.tsx`.
+// ---------------------------------------------------------------------------
+
+const DEV_INDEX_HTML: &str = r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Wundler Dev — Taskflow</title>
+  <script type="importmap">
+  {
+    "imports": {
+      "react":             "https://esm.sh/react@19.0.0",
+      "react-dom":         "https://esm.sh/react-dom@19.0.0",
+      "react-dom/client":  "https://esm.sh/react-dom@19.0.0/client",
+      "react/jsx-runtime": "https://esm.sh/react@19.0.0/jsx-runtime"
+    }
+  }
+  </script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #f5f5f5; }
+    #root { min-height: 100vh; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <!-- HMR client: subscribes to /__wundler__/hmr SSE and calls location.reload() on change -->
+  <script defer src="/__wundler__/hmr-client.js"></script>
+  <!-- App entry point: SWC transforms .tsx on demand -->
+  <script type="module" src="./main.tsx"></script>
+</body>
+</html>"#;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -116,8 +170,11 @@ impl DevServer {
         });
 
         let app = Router::new()
+            // Serve the generated dev index.html at the root.
+            .route("/", get(index_handler))
             .route("/__wundler__/hmr-client.js", get(hmr_client))
             .route("/__wundler__/hmr", get(hmr_sse))
+            // Catch-all: serve source modules with on-demand TS transform.
             .route("/{*path}", get(serve_module))
             .with_state(state);
 
@@ -143,6 +200,16 @@ impl DevServer {
 // Route handlers
 // ---------------------------------------------------------------------------
 
+/// Serve the generated dev-mode index.html at `/`.
+async fn index_handler() -> Response {
+    (
+        StatusCode::OK,
+        [("Content-Type", "text/html; charset=utf-8")],
+        DEV_INDEX_HTML,
+    )
+        .into_response()
+}
+
 /// Serve the HMR client JavaScript.
 async fn hmr_client() -> Response {
     (
@@ -164,15 +231,21 @@ async fn hmr_sse(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 /// Serve a source file, transforming TypeScript on demand.
+///
+/// Extension resolution: if the exact path is not found and the URL path has
+/// no file extension, the server tries `.tsx`, `.ts`, `.jsx`, `.js` in order.
+/// This lets browsers fetch `import './App'` and receive `App.tsx`.
 async fn serve_module(
     State(state): State<AppState>,
     AxumPath(path): AxumPath<String>,
 ) -> Response {
-    let fs_path = state.root.join(&path);
-
-    if !fs_path.exists() {
-        return (StatusCode::NOT_FOUND, "not found").into_response();
-    }
+    let fs_path = match resolve_module_path(&state.root, &path) {
+        Some(p) => p,
+        None => {
+            return (StatusCode::NOT_FOUND, format!("module not found: {path}"))
+                .into_response()
+        }
+    };
 
     let source = match tokio::fs::read_to_string(&fs_path).await {
         Ok(s) => s,
@@ -185,7 +258,11 @@ async fn serve_module(
         }
     };
 
-    let transformed = match transform_on_demand(&path, &source) {
+    // Use the resolved filesystem path for extension detection so that
+    // extension-less URL requests (e.g. `/App` → `App.tsx`) are transformed
+    // correctly.
+    let fs_name = fs_path.to_string_lossy();
+    let transformed = match transform_on_demand(&fs_name, &source) {
         Ok(s) => s,
         Err(e) => {
             return (
@@ -202,6 +279,33 @@ async fn serve_module(
         transformed,
     )
         .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Extension resolver
+// ---------------------------------------------------------------------------
+
+/// Resolve `path` (a URL path component) against `root`, trying the exact
+/// filename first, then common JS/TS extensions when the path has none.
+///
+/// Returns `None` if no matching file is found.
+fn resolve_module_path(root: &Path, path: &str) -> Option<PathBuf> {
+    let exact = root.join(path);
+    if exact.is_file() {
+        return Some(exact);
+    }
+
+    // Extension-less import — try common JS/TS extensions in priority order.
+    if Path::new(path).extension().is_none() {
+        for ext in &["tsx", "ts", "jsx", "js"] {
+            let candidate = root.join(format!("{path}.{ext}"));
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
 }
 
 // ---------------------------------------------------------------------------
