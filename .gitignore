@@ -1,5 +1,16 @@
-.superpowers/
-.DS_Store
+# Rust
 target/
+
+# macOS
+.DS_Store
+
+# Screenshots / build artifacts
+*.png
+
+# test-app build outputs
+test-app/dist*/
+test-app/node_modules/
+
+# Amplifier / tooling
+.superpowers/
 .playwright-cli/
-test-app-screenshot.png

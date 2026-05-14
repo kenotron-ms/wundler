@@ -6,7 +6,10 @@ pub mod rolldown_adapter;
 pub mod swc_adapter;
 pub mod swc_util;
 
-pub use engine::{ChunkOutput, TransformDecisions, TransformEngine, TransformError};
+pub use engine::{
+    sanitize_entry_key, BatchConfig, ChunkOutput, TransformDecisions, TransformEngine,
+    TransformError,
+};
 pub use rolldown_adapter::{RolldownAdapter, RolldownAdapterConfig};
 pub use swc_adapter::{SwcAdapterConfig, SwcTransformAdapter};
 

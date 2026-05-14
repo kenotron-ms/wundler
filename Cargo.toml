@@ -6,6 +6,8 @@ members = [
     "crates/wundler-graph",
     "crates/wundler-transform",
     "crates/wundler-pipeline",
+    "crates/wundler-abs",
+    "crates/wundler-pgo",
 ]
 
 [workspace.package]

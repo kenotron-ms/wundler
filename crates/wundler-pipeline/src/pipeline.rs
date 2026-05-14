@@ -1,18 +1,17 @@
 //! `BuildPipeline` — orchestrates the full build from summarize → analyze → transform → emit.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use rayon::prelude::*;
 
 use wundler_core::cache::local::LocalCache;
 use wundler_core::summarizer::summarize_directory;
 use wundler_core::types::{BundleGraphNode, ContentHash};
 use wundler_graph::analyzer::{AnalysisResult, GraphAnalyzer};
 use wundler_graph::types::ChunkManifest;
-use wundler_transform::engine::{ChunkOutput, TransformDecisions, TransformEngine};
+use wundler_transform::engine::{BatchConfig, ChunkOutput, TransformEngine};
 use wundler_transform::rolldown_adapter::{RolldownAdapter, RolldownAdapterConfig};
 use wundler_transform::swc_adapter::{SwcAdapterConfig, SwcTransformAdapter};
 
@@ -105,73 +104,20 @@ impl BuildPipeline {
         Ok(result)
     }
 
-    /// Step 3: Run the configured [`TransformEngine`] over every chunk in parallel.
+    /// Step 3: Run the configured [`TransformEngine`] in batch mode.
     ///
-    /// Derives [`TransformDecisions`] from per-node export aliveness (if the
-    /// `Export` type carries an `alive` flag; otherwise the decisions map is
-    /// empty and tree-shaking degrades gracefully to module-level only).
-    ///
-    /// Chunks are processed in parallel via Rayon, returning one [`ChunkOutput`]
-    /// per chunk in the manifest.
+    /// Calls [`TransformEngine::batch_transform`] which, for the SWC engine,
+    /// delegates to `transform_chunk` per chunk, and for the rolldown engine,
+    /// invokes the rolldown CLI once for the whole project.
     pub fn run_transform(&self, analysis: &AnalysisResult) -> Result<Vec<ChunkOutput>> {
-        // Build a fast lookup from content-hash → node reference.
-        let node_index: HashMap<&ContentHash, &BundleGraphNode> =
-            analysis.nodes.iter().map(|n| (&n.id, n)).collect();
-
-        // Build dead_exports from per-export aliveness.
-        // NOTE: The `Export` type does not currently carry an `alive: bool` field
-        // (that requires a future plan).  Until then the map stays empty and
-        // tree-shaking is module-level only — alive nodes are included whole,
-        // dead nodes are excluded from the chunk's module list entirely.
-        let dead_exports: HashMap<ContentHash, HashSet<String>> = {
-            let mut map: HashMap<ContentHash, HashSet<String>> = HashMap::new();
-            for node in &analysis.nodes {
-                if !node.alive {
-                    continue;
-                }
-                // Collect any export names whose `alive` flag is false.
-                // Currently `Export` has no such field, so this block never
-                // inserts anything — see the note above.
-                let dead_names: HashSet<String> = node
-                    .summary
-                    .exports
-                    .iter()
-                    .filter(|_e| {
-                        // Export::alive does not exist yet; always false here.
-                        false
-                    })
-                    .map(|e| e.name.clone())
-                    .collect();
-                if !dead_names.is_empty() {
-                    map.insert(node.id.clone(), dead_names);
-                }
-            }
-            map
+        let batch_config = BatchConfig {
+            root: self.config.root.clone(),
+            entry_points: self.config.entry_points.clone(),
+            out_dir: self.config.out_dir.clone(),
         };
-
-        let decisions = TransformDecisions { dead_exports };
-        let engine = Arc::clone(&self.engine);
-        let chunks = &analysis.manifest.chunks;
-
-        let outputs: Result<Vec<ChunkOutput>> = chunks
-            .par_iter()
-            .map(|chunk| -> Result<ChunkOutput> {
-                // Collect the alive modules that belong to this chunk.
-                let modules: Vec<BundleGraphNode> = chunk
-                    .modules
-                    .iter()
-                    .filter_map(|h| node_index.get(h).map(|n| (*n).clone()))
-                    .collect();
-
-                engine
-                    .transform_chunk(&modules, chunk, &decisions)
-                    .map_err(|e| {
-                        anyhow::anyhow!("transform_chunk({}): {}", chunk.id, e)
-                    })
-            })
-            .collect();
-
-        outputs
+        self.engine
+            .batch_transform(analysis, &batch_config)
+            .map_err(|e| anyhow::anyhow!("{}", e))
     }
 
     // -----------------------------------------------------------------------
@@ -183,8 +129,9 @@ impl BuildPipeline {
     /// 1. Summarize modules under `config.root`.
     /// 2. Load source text for every discovered module.
     /// 3. Analyze the dependency graph.
-    /// 4. Transform each chunk in parallel.
-    /// 5. Write each `ChunkOutput` to `<out_dir>/chunks/<hash>.js`.
+    /// 4. Transform each chunk (batch or per-chunk depending on engine).
+    /// 5. For SWC: write each `ChunkOutput` to `<out_dir>/chunks/<hash>.js`.
+    ///    For rolldown: files are already in `out_dir`; skip `write_chunk`.
     /// 6. Write `<out_dir>/manifest.json`.
     /// 7. Write `<out_dir>/index.html` for every entry point.
     ///
@@ -211,6 +158,9 @@ impl BuildPipeline {
         // ----- Step 3: Transform -----
         let outputs = self.run_transform(&analysis)?;
 
+        // Detect whether the engine wrote files directly (rolldown batch path).
+        let already_written = outputs.iter().any(|o| o.already_written);
+
         // Build a mapping from chunk_id → actual output hash so that
         // write_index_html and write_manifest can reference real file names
         // rather than the analysis-phase hashes stored in the ChunkManifest.
@@ -219,16 +169,34 @@ impl BuildPipeline {
             .map(|o| (o.chunk_id.clone(), o.hash.clone()))
             .collect();
 
-        // ----- Step 4a: Write chunks -----
         let out_dir = &self.config.out_dir;
         let mut chunk_files: Vec<PathBuf> = Vec::with_capacity(outputs.len());
         let mut largest_chunk_bytes: usize = 0;
 
-        for chunk_output in &outputs {
-            let path = output::write_chunk(out_dir, chunk_output)
-                .with_context(|| format!("write_chunk failed for chunk {}", chunk_output.chunk_id))?;
-            largest_chunk_bytes = largest_chunk_bytes.max(chunk_output.code.len());
-            chunk_files.push(path);
+        if already_written {
+            // Rolldown path: files are already in out_dir.
+            // Enumerate them so we can report chunk_files / stats.
+            for dir_entry in std::fs::read_dir(out_dir)
+                .with_context(|| format!("reading out_dir {}", out_dir.display()))?
+            {
+                let dir_entry = dir_entry?;
+                let path = dir_entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("js") {
+                    let size = std::fs::metadata(&path).map(|m| m.len() as usize).unwrap_or(0);
+                    largest_chunk_bytes = largest_chunk_bytes.max(size);
+                    chunk_files.push(path);
+                }
+            }
+        } else {
+            // SWC path: write each ChunkOutput to chunks/<hash>.js.
+            for chunk_output in &outputs {
+                let path = output::write_chunk(out_dir, chunk_output)
+                    .with_context(|| {
+                        format!("write_chunk failed for chunk {}", chunk_output.chunk_id)
+                    })?;
+                largest_chunk_bytes = largest_chunk_bytes.max(chunk_output.code.len());
+                chunk_files.push(path);
+            }
         }
 
         let chunks_written = chunk_files.len();
@@ -239,8 +207,20 @@ impl BuildPipeline {
 
         // ----- Step 4c: Write index.html for every entry point -----
         for (entry, _) in &self.config.entry_points {
-            output::write_index_html(out_dir, &analysis.manifest, entry, &id_to_output_hash)
-                .with_context(|| format!("write_index_html failed for entry '{entry}'"))?;
+            if already_written {
+                // Rolldown path: generate index.html that references rolldown's
+                // actual output files (e.g., `root-abc123.js`) directly.
+                output::write_rolldown_index_html(out_dir, entry)
+                    .with_context(|| {
+                        format!("write_rolldown_index_html failed for entry '{entry}'")
+                    })?;
+            } else {
+                // SWC path: use the manifest-based HTML generator.
+                output::write_index_html(out_dir, &analysis.manifest, entry, &id_to_output_hash)
+                    .with_context(|| {
+                        format!("write_index_html failed for entry '{entry}'")
+                    })?;
+            }
         }
 
         // ----- Compute stats -----

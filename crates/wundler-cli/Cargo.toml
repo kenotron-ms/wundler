@@ -12,11 +12,15 @@ wundler-core = { path = "../wundler-core" }
 wundler-graph = { path = "../wundler-graph" }
 wundler-transform = { path = "../wundler-transform" }
 wundler-pipeline = { path = "../wundler-pipeline" }
+wundler-abs = { path = "../wundler-abs" }
+wundler-pgo = { path = "../wundler-pgo" }
 clap = { version = "4", features = ["derive"] }
 anyhow = { workspace = true }
+serde = { workspace = true }
 indicatif = "0.17"
 tokio = { version = "1", features = ["full"] }
 serde_json = "1"
+toml = "0.8"
 walkdir = "2"
 
 [dev-dependencies]

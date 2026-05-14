@@ -17,6 +17,7 @@ impl TransformEngine for StubEngine {
             hash: ContentHash::from_bytes(b"stub"),
             code: format!("// {} modules\n", modules.len()),
             source_map: None,
+            already_written: false,
         })
     }
 }

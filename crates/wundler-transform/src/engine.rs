@@ -1,8 +1,10 @@
 //! TransformEngine trait — the seam between Wundler's analysis and code generation.
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use wundler_core::types::{BundleGraphNode, ContentHash};
+use wundler_graph::analyzer::AnalysisResult;
 use wundler_graph::types::{Chunk, ChunkId};
 
 // ---------------------------------------------------------------------------
@@ -19,10 +21,35 @@ pub struct ChunkOutput {
     pub hash: ContentHash,
 
     /// The emitted JavaScript source text.
+    ///
+    /// For engines that write their output directly to disk (e.g. `RolldownAdapter`),
+    /// this field is empty and `already_written` is `true`.
     pub code: String,
 
     /// Optional source map JSON, if the engine produced one.
     pub source_map: Option<String>,
+
+    /// When `true`, the file has already been written to `out_dir` by the engine
+    /// (e.g. rolldown subprocess) and the pipeline must NOT call `write_chunk` again.
+    pub already_written: bool,
+}
+
+// ---------------------------------------------------------------------------
+// BatchConfig
+// ---------------------------------------------------------------------------
+
+/// Minimal configuration for a batch-transform pass.
+///
+/// Defined here (not in `wundler-pipeline`) to avoid a circular crate
+/// dependency: `wundler-transform` → `wundler-pipeline` would be circular.
+#[derive(Debug, Clone)]
+pub struct BatchConfig {
+    /// Root directory that was scanned for source modules.
+    pub root: PathBuf,
+    /// Entry-point route → file-path mapping (same as `BuildConfig::entry_points`).
+    pub entry_points: HashMap<String, PathBuf>,
+    /// Absolute (or workspace-relative) path where bundle output is written.
+    pub out_dir: PathBuf,
 }
 
 // ---------------------------------------------------------------------------
@@ -78,4 +105,49 @@ pub trait TransformEngine: Send + Sync {
         chunk: &Chunk,
         decisions: &TransformDecisions,
     ) -> Result<ChunkOutput, TransformError>;
+
+    /// Batch-transform: run all chunks in one pass, returning one
+    /// [`ChunkOutput`] per chunk in `analysis.manifest.chunks`.
+    ///
+    /// The default implementation calls [`transform_chunk`] for each chunk.
+    /// Engines like `RolldownAdapter` override this to invoke a subprocess
+    /// once for the entire project.
+    fn batch_transform(
+        &self,
+        analysis: &AnalysisResult,
+        _config: &BatchConfig,
+    ) -> Result<Vec<ChunkOutput>, TransformError> {
+        let decisions = TransformDecisions::default();
+        analysis
+            .manifest
+            .chunks
+            .iter()
+            .map(|chunk| {
+                let modules: Vec<BundleGraphNode> = chunk
+                    .modules
+                    .iter()
+                    .filter_map(|hash| analysis.nodes.iter().find(|n| &n.id == hash))
+                    .cloned()
+                    .collect();
+                self.transform_chunk(&modules, chunk, &decisions)
+            })
+            .collect()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Utility: sanitize_entry_key
+// ---------------------------------------------------------------------------
+
+/// Convert a route string into a filesystem-safe identifier used as the
+/// rolldown entry name.
+///
+/// * `"/"` → `"root"`
+/// * `"/dashboard"` → `"dashboard"`
+/// * `"/admin/users"` → `"admin-users"`
+pub fn sanitize_entry_key(route: &str) -> String {
+    if route == "/" {
+        return "root".to_string();
+    }
+    route.trim_start_matches('/').replace('/', "-")
 }

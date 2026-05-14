@@ -338,6 +338,7 @@ impl TransformEngine for SwcTransformAdapter {
                 hash: ContentHash::from_bytes(b""),
                 code: format!("// chunk: {} (empty)\n", chunk.id),
                 source_map: None,
+                already_written: false,
             });
         }
 
@@ -438,6 +439,7 @@ impl TransformEngine for SwcTransformAdapter {
             hash,
             code: combined,
             source_map,
+            already_written: false,
         })
     }
 }

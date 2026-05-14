@@ -1,0 +1,15 @@
+[build]
+# Directory wundler will scan for TS/TSX source modules (graph analysis)
+root = "test-app/src"
+# Separate output dir so it doesn't conflict with the SWC build
+out_dir = "test-app/dist-wundler-rolldown"
+# Use the rolldown CLI subprocess engine (Path B)
+engine = "rolldown"
+source_maps = false
+# Promote a module to commons when it appears in ≥2 chunks
+commons_threshold = 2
+
+[entry]
+# Full workspace-relative path so both the analyzer and rolldown config
+# can resolve the entry without ambiguity.
+"/" = "test-app/src/main.tsx"
