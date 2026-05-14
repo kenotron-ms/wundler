@@ -9,4 +9,5 @@
 
 pub mod manifest;
 pub mod state;
+pub mod telemetry;
 pub mod types;
