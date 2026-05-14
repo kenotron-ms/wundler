@@ -5,14 +5,18 @@
 //! * [`write_chunk`]      — writes a `ChunkOutput` to `<out_dir>/chunks/<hash>.js`
 //!                          (and an optional `.js.map` alongside it).
 //! * [`write_manifest`]   — serialises a `ChunkManifest` as pretty JSON to
-//!                          `<out_dir>/manifest.json`.
+//!                          `<out_dir>/manifest.json`, with chunk hashes
+//!                          updated to the actual output-file hashes.
 //! * [`write_index_html`] — generates an `<out_dir>/index.html` stub that
-//!                          loads the initial chunks for a named entry point.
+//!                          loads the initial chunks for a named entry point,
+//!                          referencing the actual output-file hashes.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use wundler_core::types::ContentHash;
 use wundler_graph::types::ChunkManifest;
 use wundler_transform::engine::ChunkOutput;
 
@@ -60,9 +64,28 @@ pub fn write_chunk(out_dir: &Path, output: &ChunkOutput) -> Result<PathBuf> {
 
 /// Serialise `manifest` as pretty-printed JSON and write it to
 /// `<out_dir>/manifest.json`.
-pub fn write_manifest(out_dir: &Path, manifest: &ChunkManifest) -> Result<()> {
+///
+/// `id_to_hash` maps each chunk's logical ID to the content hash of its
+/// actual output file (the hash used in the `.js` filename).  The manifest
+/// is cloned and each chunk's `hash` field is overwritten with the
+/// corresponding output hash before serialisation, so the on-disk
+/// `manifest.json` always reflects real file names.
+pub fn write_manifest(
+    out_dir: &Path,
+    manifest: &ChunkManifest,
+    id_to_hash: &HashMap<String, ContentHash>,
+) -> Result<()> {
     fs::create_dir_all(out_dir)?;
-    let json = serde_json::to_string_pretty(manifest)?;
+
+    // Clone the manifest and update each chunk hash to the actual output hash.
+    let mut updated = manifest.clone();
+    for chunk in &mut updated.chunks {
+        if let Some(output_hash) = id_to_hash.get(&chunk.id) {
+            chunk.hash = output_hash.clone();
+        }
+    }
+
+    let json = serde_json::to_string_pretty(&updated)?;
     fs::write(out_dir.join("manifest.json"), json)?;
     Ok(())
 }
@@ -77,8 +100,18 @@ pub fn write_manifest(out_dir: &Path, manifest: &ChunkManifest) -> Result<()> {
 /// `manifest.entry_chunks[entry]`, with `src` pointing to
 /// `chunks/<hash>.js`.
 ///
+/// `id_to_hash` maps each chunk's logical ID to the content hash of its
+/// actual output file.  This hash — not the analysis-phase hash stored in
+/// `chunk.hash` — is used for the `src` attribute, ensuring the referenced
+/// filename matches the file written by [`write_chunk`].
+///
 /// The file is written to `<out_dir>/index.html`.
-pub fn write_index_html(out_dir: &Path, manifest: &ChunkManifest, entry: &str) -> Result<()> {
+pub fn write_index_html(
+    out_dir: &Path,
+    manifest: &ChunkManifest,
+    entry: &str,
+    id_to_hash: &HashMap<String, ContentHash>,
+) -> Result<()> {
     fs::create_dir_all(out_dir)?;
 
     // Collect script tags for each initial chunk of this entry.
@@ -86,9 +119,10 @@ pub fn write_index_html(out_dir: &Path, manifest: &ChunkManifest, entry: &str) -
 
     if let Some(chunk_ids) = manifest.entry_chunks.get(entry) {
         for chunk_id in chunk_ids {
-            // Find the chunk in the manifest to obtain its content hash.
-            if let Some(chunk) = manifest.chunks.iter().find(|c| &c.id == chunk_id) {
-                let hash_hex = chunk.hash.as_str();
+            // Look up the actual output hash for this chunk (not the
+            // analysis-phase hash stored in the manifest).
+            if let Some(hash) = id_to_hash.get(chunk_id) {
+                let hash_hex = hash.as_str();
                 script_tags.push_str(&format!(
                     "  <script src=\"chunks/{hash_hex}.js\" type=\"module\"></script>\n"
                 ));
