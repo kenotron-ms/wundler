@@ -12,6 +12,15 @@ fn load_fixture() -> ChunkManifest {
     serde_json::from_str(&content).expect("failed to parse fixture JSON")
 }
 
+/// Load the PGO fixture manifest for prefetch tests.
+fn load_pgo_fixture() -> ChunkManifest {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/manifest_with_pgo.json");
+    let content = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read fixture at {}: {}", path.display(), e));
+    serde_json::from_str(&content).expect("failed to parse fixture JSON")
+}
+
 /// Helper: build a ManifestRequest for the given entry with some cached hashes.
 fn req(entry: &str, hashes: Vec<&str>) -> ManifestRequest {
     ManifestRequest {
@@ -221,5 +230,91 @@ fn matching_build_id_honors_client_cache() {
         2,
         "matching build_id should honor client cache (2 chunks remain), got: {:?}",
         response.fetch_urls
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 10: high co_request_score chunk appears in prefetch_urls
+// ---------------------------------------------------------------------------
+
+#[test]
+fn high_co_request_score_chunks_appear_in_prefetch() {
+    let manifest = load_pgo_fixture();
+    // No build_id → cache not trusted, but settings-pane score=0.85 ≥ 0.7
+    let request = req("home", vec![]);
+    let response = compute_delta(&manifest, &request, "https://cdn.example.com");
+
+    let settings_pane_url = "https://cdn.example.com/chunks/bbbb2222.js";
+    assert!(
+        response.prefetch_urls.contains(&settings_pane_url.to_string()),
+        "settings-pane (score=0.85) should appear in prefetch_urls, got: {:?}",
+        response.prefetch_urls
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 11: low co_request_score chunk is NOT in prefetch_urls
+// ---------------------------------------------------------------------------
+
+#[test]
+fn low_co_request_score_chunks_are_not_prefetched() {
+    let manifest = load_pgo_fixture();
+    let request = req("home", vec![]);
+    let response = compute_delta(&manifest, &request, "https://cdn.example.com");
+
+    let rarely_visited_url = "https://cdn.example.com/chunks/bbbb3333.js";
+    assert!(
+        !response.prefetch_urls.contains(&rarely_visited_url.to_string()),
+        "rarely-visited (score=0.15) should NOT appear in prefetch_urls, got: {:?}",
+        response.prefetch_urls
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 12: chunks already in fetch_urls are excluded from prefetch_urls
+// ---------------------------------------------------------------------------
+
+#[test]
+fn prefetch_excludes_chunks_already_in_fetch() {
+    let mut manifest = load_pgo_fixture();
+    // Set home-shell co_request_score=0.95 so it would qualify for prefetch
+    for chunk in &mut manifest.chunks {
+        if chunk.id == "home-shell" {
+            chunk.co_request_score = Some(0.95);
+        }
+    }
+    // home-shell is in entry_chunks["home"] → will appear in fetch_urls
+    let request = req("home", vec![]);
+    let response = compute_delta(&manifest, &request, "https://cdn.example.com");
+
+    let home_shell_url = "https://cdn.example.com/chunks/aaaa1111.js";
+    assert!(
+        response.fetch_urls.contains(&home_shell_url.to_string()),
+        "home-shell should be in fetch_urls, got: {:?}",
+        response.fetch_urls
+    );
+    assert!(
+        !response.prefetch_urls.contains(&home_shell_url.to_string()),
+        "home-shell should NOT appear in prefetch_urls (already in fetch), got: {:?}",
+        response.prefetch_urls
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 13: client already has chunk's modules → excluded from prefetch
+// ---------------------------------------------------------------------------
+
+#[test]
+fn prefetch_excludes_chunks_client_already_has() {
+    let manifest = load_pgo_fixture();
+    // Client has settings_mod_a cached AND matching build_id → settings-pane fully cached
+    let request = req_with_bid("home", vec!["settings_mod_a"], Some("p1g2o3"));
+    let response = compute_delta(&manifest, &request, "https://cdn.example.com");
+
+    let settings_pane_url = "https://cdn.example.com/chunks/bbbb2222.js";
+    assert!(
+        !response.prefetch_urls.contains(&settings_pane_url.to_string()),
+        "settings-pane should NOT appear in prefetch_urls (client already has it), got: {:?}",
+        response.prefetch_urls
     );
 }

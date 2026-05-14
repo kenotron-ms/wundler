@@ -1,0 +1,40 @@
+{
+  "build_id": "p1g2o3",
+  "chunks": [
+    {
+      "id": "home-shell",
+      "modules": ["home_shell_mod"],
+      "hash": "aaaa111100000000000000000000000000000000000000000000000000000000",
+      "load_condition": "Initial",
+      "co_request_score": null,
+      "median_load_order": null,
+      "suggested_merge": null
+    },
+    {
+      "id": "settings-pane",
+      "modules": ["settings_mod_a"],
+      "hash": "bbbb222200000000000000000000000000000000000000000000000000000000",
+      "load_condition": "Lazy",
+      "co_request_score": 0.85,
+      "median_load_order": null,
+      "suggested_merge": null
+    },
+    {
+      "id": "rarely-visited",
+      "modules": ["admin_mod_a"],
+      "hash": "bbbb333300000000000000000000000000000000000000000000000000000000",
+      "load_condition": "Lazy",
+      "co_request_score": 0.15,
+      "median_load_order": null,
+      "suggested_merge": null
+    }
+  ],
+  "entry_chunks": {
+    "home": ["home-shell"]
+  },
+  "module_index": {
+    "home_shell_mod": "home-shell",
+    "settings_mod_a": "settings-pane",
+    "admin_mod_a": "rarely-visited"
+  }
+}

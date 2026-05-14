@@ -15,6 +15,12 @@ use crate::types::{ManifestRequest, ManifestResponse};
 // Public API
 // ---------------------------------------------------------------------------
 
+/// Minimum `co_request_score` for a chunk to be included in `prefetch_urls`.
+///
+/// Chunks with a score at or above this threshold are suggested as prefetch
+/// hints to the client.  The value is tuned by offline validation (Plan 5).
+pub const PREFETCH_THRESHOLD: f64 = 0.7;
+
 /// Compute the delta manifest: which chunks the client still needs to fetch.
 ///
 /// # Algorithm
@@ -31,9 +37,14 @@ use crate::types::{ManifestRequest, ManifestResponse};
 ///    * A chunk with **no modules** is *not* considered fully cached (it is
 ///      always included).
 ///    * Any chunk that is not fully cached has its CDN URL added to
-///      `fetch_urls`.
+///      `fetch_urls` and its ID recorded in `fetched_ids`.
 ///
-/// 4. `prefetch_urls` is always empty (Task 5 adds prefetch logic).
+/// 4. Build `prefetch_urls` by iterating **all** chunks in the manifest:
+///    * Skip chunks already in `fetched_ids`.
+///    * Skip chunks with no `co_request_score`.
+///    * Skip chunks whose score is below [`PREFETCH_THRESHOLD`].
+///    * Skip chunks whose every module is in the client's cached set (same
+///      `trust_cache` gate as step 3).
 ///
 /// 5. `ttl` is always 0; the HTTP handler is responsible for setting the
 ///    actual cache TTL on the response.
@@ -74,23 +85,51 @@ pub fn compute_delta(
         HashSet::new()
     };
 
-    // 4. Filter chunks: exclude only those whose every module is cached.
+    // 4. Filter entry chunks: exclude only those whose every module is cached.
     //    Chunks with zero modules are NOT considered fully cached.
+    //    Also track fetched_ids so the prefetch pass can skip already-queued chunks.
     let mut fetch_urls: Vec<String> = Vec::new();
+    let mut fetched_ids: HashSet<&str> = HashSet::new();
     for chunk_id in chunk_ids {
         if let Some(chunk) = chunks_by_id.get(chunk_id.as_str()) {
             let fully_cached = !chunk.modules.is_empty()
                 && chunk.modules.iter().all(|m| cached_set.contains(m));
             if !fully_cached {
                 fetch_urls.push(chunk_url(cdn_base_url, &chunk.hash));
+                fetched_ids.insert(chunk.id.as_str());
             }
         }
+    }
+
+    // 5. Build prefetch hints from co_request_score across ALL chunks.
+    let mut prefetch_urls: Vec<String> = Vec::new();
+    for chunk in &manifest.chunks {
+        // Skip chunks already queued for fetch.
+        if fetched_ids.contains(chunk.id.as_str()) {
+            continue;
+        }
+        // Skip chunks without a co_request_score.
+        let score = match chunk.co_request_score {
+            Some(s) => s,
+            None => continue,
+        };
+        // Skip chunks whose score is below the threshold.
+        if score < PREFETCH_THRESHOLD {
+            continue;
+        }
+        // Skip chunks the client already has (same trust_cache gate as fetch).
+        let client_has_all = !chunk.modules.is_empty()
+            && chunk.modules.iter().all(|m| cached_set.contains(m));
+        if client_has_all {
+            continue;
+        }
+        prefetch_urls.push(chunk_url(cdn_base_url, &chunk.hash));
     }
 
     ManifestResponse {
         build_id: manifest.build_id.clone(),
         fetch_urls,
-        prefetch_urls: vec![],
+        prefetch_urls,
         ttl: 0,
     }
 }
