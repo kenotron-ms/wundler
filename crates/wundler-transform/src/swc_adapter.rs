@@ -122,14 +122,30 @@ use crate::engine::{ChunkOutput, TransformDecisions, TransformEngine, TransformE
 use wundler_core::types::{BundleGraphNode, ContentHash};
 use wundler_graph::types::Chunk;
 
+/// Configuration for `SwcTransformAdapter`.
+#[derive(Debug, Clone, Default)]
+pub struct SwcAdapterConfig {
+    /// When `true`, a v3 source map JSON is emitted alongside the code.
+    pub source_maps: bool,
+}
+
 /// SWC-backed `TransformEngine` implementation that concatenates N modules
 /// into a single chunk file with IIFE scope isolation per module.
-pub struct SwcTransformAdapter;
+pub struct SwcTransformAdapter {
+    config: SwcAdapterConfig,
+}
 
 impl SwcTransformAdapter {
-    /// Create a new `SwcTransformAdapter`.
+    /// Create a new `SwcTransformAdapter` with default configuration.
     pub fn new() -> Self {
-        Self
+        Self {
+            config: SwcAdapterConfig::default(),
+        }
+    }
+
+    /// Create a new `SwcTransformAdapter` with the given configuration.
+    pub fn with_config(config: SwcAdapterConfig) -> Self {
+        Self { config }
     }
 }
 
@@ -158,6 +174,14 @@ impl TransformEngine for SwcTransformAdapter {
         let mut combined = String::new();
         combined.push_str(&format!("// chunk: {}\n", chunk.id));
 
+        // Track current output line (1-based) for source map segment generation.
+        // After the header line ("// chunk: ...\n"), we are at line 2.
+        let mut current_line: usize = 2;
+
+        // Per-module tracking for source map generation.
+        let mut sources: Vec<String> = Vec::new();
+        let mut mappings_segments: Vec<String> = Vec::new();
+
         for node in modules {
             let source = node.source.as_deref().ok_or_else(|| {
                 TransformError::TransformFailed {
@@ -175,19 +199,66 @@ impl TransformEngine for SwcTransformAdapter {
                 source.to_string()
             };
 
+            // "\n// module: {path}\n" — two lines: blank line + comment
             combined.push_str(&format!("\n// module: {}\n", node.path));
+            current_line += 2; // blank line + comment
+
+            // "(function() {\n"
             combined.push_str("(function() {\n");
+            current_line += 1;
+
+            // Record the line where this module's body begins.
+            let body_start_line = current_line;
+
+            // Body lines
+            let body_lines = stripped.lines().count().max(1);
             combined.push_str(&stripped);
-            combined.push_str("\n})();\n");
+            combined.push('\n');
+            current_line += body_lines;
+
+            // "})();\n"
+            combined.push_str("})();\n");
+            current_line += 1;
+
+            if self.config.source_maps {
+                sources.push(node.path.clone());
+                mappings_segments
+                    .push(format!("{}:{}", node.path, body_start_line));
+            }
         }
 
         let hash = ContentHash::from_bytes(combined.as_bytes());
+
+        let source_map = if self.config.source_maps {
+            Some(build_source_map(&sources, &mappings_segments))
+        } else {
+            None
+        };
 
         Ok(ChunkOutput {
             chunk_id: chunk.id.clone(),
             hash,
             code: combined,
-            source_map: None,
+            source_map,
         })
     }
+}
+
+/// Build a v3-format source map JSON string.
+///
+/// This is a "line-coarse" map: actual column/VLQ mappings are not produced;
+/// instead the per-module body start lines are recorded in the non-standard
+/// `x_wundler_segments` field for tooling that wants to correlate output lines
+/// back to source files.
+fn build_source_map(sources: &[String], segments: &[String]) -> String {
+    let map = serde_json::json!({
+        "version": 3,
+        "file": serde_json::Value::Null,
+        "sources": sources,
+        "sourcesContent": Vec::<&str>::new(),
+        "names": Vec::<&str>::new(),
+        "mappings": "",
+        "x_wundler_segments": segments,
+    });
+    map.to_string()
 }
