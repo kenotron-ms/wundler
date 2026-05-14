@@ -1,5 +1,5 @@
 import type { SwConfig, ManifestRequest } from './types.js';
-import { getCache } from './cache.js';
+import { getCache, STATIC_MANIFEST_KEY } from './cache.js';
 import {
   collectCachedModuleHashes,
   fetchDelta,
@@ -7,6 +7,7 @@ import {
   DEFAULT_ABS_TIMEOUT_MS,
   type NavigationOptions,
 } from './delta.js';
+import { notifyBuildIdChanged } from './buildid.js';
 
 // Declare self as ServiceWorkerGlobalScope for type safety within this module.
 declare const self: ServiceWorkerGlobalScope;
@@ -64,6 +65,23 @@ export async function handleNavigation(
   };
 
   const delta = await fetchDelta(config, request, timeoutMs);
+
+  // Notify clients if ABS has promoted a new build.
+  const buildId = static_?.build_id;
+  if (delta && buildId && delta.build_id !== buildId) {
+    await notifyBuildIdChanged(delta.build_id);
+    // Fire-and-forget: refresh the static manifest cache in the background.
+    void (async () => {
+      try {
+        const resp = await fetch(`${config.cdnBaseUrl}/manifest.json`, { cache: 'no-cache' });
+        if (resp.ok) {
+          await cache.put(STATIC_MANIFEST_KEY, resp);
+        }
+      } catch {
+        // Background refresh is best-effort — ignore errors.
+      }
+    })();
+  }
 
   let requiredUrls: string[];
   let prefetchUrls: string[] = [];

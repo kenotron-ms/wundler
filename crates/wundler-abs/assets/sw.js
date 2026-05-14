@@ -58,6 +58,19 @@
     });
   }
 
+  // src/buildid.ts
+  async function notifyBuildIdChanged(newBuildId) {
+    const c = globalThis.clients;
+    if (!c?.matchAll) return;
+    const clientList = await c.matchAll();
+    for (const client of clientList) {
+      try {
+        client.postMessage({ type: "wundler:build-id-changed", build_id: newBuildId });
+      } catch {
+      }
+    }
+  }
+
   // src/sw.ts
   async function installHandler(config) {
     try {
@@ -88,6 +101,19 @@
       build_id: static_?.build_id
     };
     const delta = await fetchDelta(config, request, timeoutMs);
+    const buildId = static_?.build_id;
+    if (delta && buildId && delta.build_id !== buildId) {
+      await notifyBuildIdChanged(delta.build_id);
+      void (async () => {
+        try {
+          const resp = await fetch(`${config.cdnBaseUrl}/manifest.json`, { cache: "no-cache" });
+          if (resp.ok) {
+            await cache.put(STATIC_MANIFEST_KEY, resp);
+          }
+        } catch {
+        }
+      })();
+    }
     let requiredUrls;
     let prefetchUrls = [];
     if (delta) {
