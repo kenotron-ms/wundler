@@ -62,8 +62,17 @@ pub fn compute_delta(
         .map(|c| (c.id.as_str(), c))
         .collect();
 
-    // 3. Build the set of hashes the client already holds.
-    let cached_set: HashSet<&ContentHash> = request.cached_hashes.iter().collect();
+    // 3. Gate cache trust on build_id match.
+    //    If the client's build_id is absent or doesn't match the current build,
+    //    ignore all cache claims and return the full chunk set.
+    let trust_cache = matches!(&request.build_id, Some(bid) if bid == &manifest.build_id);
+
+    // 4. Build the set of hashes the client already holds (empty if cache is untrusted).
+    let cached_set: HashSet<&ContentHash> = if trust_cache {
+        request.cached_hashes.iter().collect()
+    } else {
+        HashSet::new()
+    };
 
     // 4. Filter chunks: exclude only those whose every module is cached.
     //    Chunks with zero modules are NOT considered fully cached.

@@ -21,6 +21,15 @@ fn req(entry: &str, hashes: Vec<&str>) -> ManifestRequest {
     }
 }
 
+/// Helper: build a ManifestRequest with an explicit build_id (Some or None).
+fn req_with_bid(entry: &str, hashes: Vec<&str>, build_id: Option<&str>) -> ManifestRequest {
+    ManifestRequest {
+        entry_point: entry.to_string(),
+        cached_hashes: hashes.into_iter().map(|s| ContentHash(s.to_string())).collect(),
+        build_id: build_id.map(|s| s.to_string()),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Test 1: empty cache → all 3 chunks returned
 // ---------------------------------------------------------------------------
@@ -40,14 +49,14 @@ fn empty_cache_returns_all_chunks_for_entry() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 2: client has both shell modules → shell excluded, 2 remain
+// Test 2: client has both shell modules + matching build_id → shell excluded, 2 remain
 // ---------------------------------------------------------------------------
 
 #[test]
 fn fully_cached_chunk_is_excluded() {
     let manifest = load_fixture();
-    // Both shell modules are cached → shell chunk should be excluded
-    let request = req("teams.channel", vec!["shell_mod_a", "shell_mod_b"]);
+    // Both shell modules are cached AND build_id matches → shell chunk should be excluded
+    let request = req_with_bid("teams.channel", vec!["shell_mod_a", "shell_mod_b"], Some("b8f3a1c2"));
     let response = compute_delta(&manifest, &request, "https://cdn.example.com");
 
     assert_eq!(
@@ -147,5 +156,70 @@ fn ttl_is_carried_through() {
     assert!(
         response.prefetch_urls.is_empty(),
         "prefetch_urls should be empty (Task 5 adds it)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 7: stale build_id ignores client cache
+// ---------------------------------------------------------------------------
+
+#[test]
+fn stale_build_id_ignores_client_cache() {
+    let manifest = load_fixture();
+    // Client claims all shell modules cached but provides a stale build_id
+    let request = req_with_bid(
+        "teams.channel",
+        vec!["shell_mod_a", "shell_mod_b"],
+        Some("old_build_id"),
+    );
+    let response = compute_delta(&manifest, &request, "https://cdn.example.com");
+
+    assert_eq!(
+        response.fetch_urls.len(),
+        3,
+        "stale build_id should return all 3 chunks despite client claiming shell is cached, got: {:?}",
+        response.fetch_urls
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 8: missing build_id ignores client cache
+// ---------------------------------------------------------------------------
+
+#[test]
+fn missing_build_id_ignores_client_cache() {
+    let manifest = load_fixture();
+    // No build_id — client claims shell modules cached
+    let request = req("teams.channel", vec!["shell_mod_a", "shell_mod_b"]);
+    let response = compute_delta(&manifest, &request, "https://cdn.example.com");
+
+    assert_eq!(
+        response.fetch_urls.len(),
+        3,
+        "missing build_id should return all 3 chunks despite client claiming shell is cached, got: {:?}",
+        response.fetch_urls
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 9: matching build_id honors client cache
+// ---------------------------------------------------------------------------
+
+#[test]
+fn matching_build_id_honors_client_cache() {
+    let manifest = load_fixture();
+    // Correct build_id + shell fully cached → only 2 chunks needed
+    let request = req_with_bid(
+        "teams.channel",
+        vec!["shell_mod_a", "shell_mod_b"],
+        Some("b8f3a1c2"),
+    );
+    let response = compute_delta(&manifest, &request, "https://cdn.example.com");
+
+    assert_eq!(
+        response.fetch_urls.len(),
+        2,
+        "matching build_id should honor client cache (2 chunks remain), got: {:?}",
+        response.fetch_urls
     );
 }
