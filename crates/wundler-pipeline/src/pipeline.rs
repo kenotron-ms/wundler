@@ -1,6 +1,7 @@
 //! `BuildPipeline` — orchestrates the full build from summarize → analyze → transform → emit.
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -10,11 +11,45 @@ use wundler_core::cache::local::LocalCache;
 use wundler_core::summarizer::summarize_directory;
 use wundler_core::types::{BundleGraphNode, ContentHash};
 use wundler_graph::analyzer::{AnalysisResult, GraphAnalyzer};
+use wundler_graph::types::ChunkManifest;
 use wundler_transform::engine::{ChunkOutput, TransformDecisions, TransformEngine};
 use wundler_transform::rolldown_adapter::{RolldownAdapter, RolldownAdapterConfig};
 use wundler_transform::swc_adapter::{SwcAdapterConfig, SwcTransformAdapter};
 
 use crate::config::{BuildConfig, EngineChoice};
+use crate::output;
+
+// ---------------------------------------------------------------------------
+// Build output types
+// ---------------------------------------------------------------------------
+
+/// Statistics produced by a complete [`BuildPipeline::build()`] run.
+#[derive(Debug, Clone)]
+pub struct BuildStats {
+    /// Total number of modules discovered by the summarize step.
+    pub total_modules: usize,
+    /// Number of modules reachable from at least one entry point.
+    pub alive_modules: usize,
+    /// Number of modules NOT reachable from any entry point.
+    pub dead_modules: usize,
+    /// Number of chunk `.js` files written to disk.
+    pub chunks_written: usize,
+    /// Wall-clock build time in milliseconds.
+    pub build_time_ms: u128,
+    /// Size in bytes of the largest emitted chunk.
+    pub largest_chunk_bytes: usize,
+}
+
+/// The result returned by [`BuildPipeline::build()`].
+#[derive(Debug)]
+pub struct BuildOutput {
+    /// The fully-assembled chunk manifest.
+    pub manifest: ChunkManifest,
+    /// Paths of every `.js` chunk file written to disk.
+    pub chunk_files: Vec<PathBuf>,
+    /// High-level build statistics.
+    pub stats: BuildStats,
+}
 
 /// Orchestrates the Wundler build pipeline: summarize → analyze → transform → emit.
 pub struct BuildPipeline {
@@ -137,5 +172,86 @@ impl BuildPipeline {
             .collect();
 
         outputs
+    }
+
+    // -----------------------------------------------------------------------
+    // Step 4 — End-to-end build
+    // -----------------------------------------------------------------------
+
+    /// Run all four pipeline steps and write every artifact to `config.out_dir`.
+    ///
+    /// 1. Summarize modules under `config.root`.
+    /// 2. Load source text for every discovered module.
+    /// 3. Analyze the dependency graph.
+    /// 4. Transform each chunk in parallel.
+    /// 5. Write each `ChunkOutput` to `<out_dir>/chunks/<hash>.js`.
+    /// 6. Write `<out_dir>/manifest.json`.
+    /// 7. Write `<out_dir>/index.html` for every entry point.
+    ///
+    /// Returns a [`BuildOutput`] with the assembled manifest, the paths of all
+    /// written chunk files, and aggregate build statistics.
+    pub fn build(&self) -> Result<BuildOutput> {
+        let build_start = std::time::Instant::now();
+
+        // ----- Step 1: Summarize -----
+        let mut nodes = self.run_summarize()?;
+
+        // ----- Load source for each node -----
+        // The transform engine needs `node.source` to be populated; the
+        // summarizer does not load it (it only produces the summary metadata).
+        for node in &mut nodes {
+            let source = std::fs::read_to_string(&node.path)
+                .unwrap_or_else(|_| "// empty\n".to_string());
+            node.source = Some(source);
+        }
+
+        // ----- Step 2: Analyze -----
+        let analysis = self.run_analyze(nodes)?;
+
+        // ----- Step 3: Transform -----
+        let outputs = self.run_transform(&analysis)?;
+
+        // ----- Step 4a: Write chunks -----
+        let out_dir = &self.config.out_dir;
+        let mut chunk_files: Vec<PathBuf> = Vec::with_capacity(outputs.len());
+        let mut largest_chunk_bytes: usize = 0;
+
+        for chunk_output in &outputs {
+            let path = output::write_chunk(out_dir, chunk_output)
+                .with_context(|| format!("write_chunk failed for chunk {}", chunk_output.chunk_id))?;
+            largest_chunk_bytes = largest_chunk_bytes.max(chunk_output.code.len());
+            chunk_files.push(path);
+        }
+
+        let chunks_written = chunk_files.len();
+
+        // ----- Step 4b: Write manifest -----
+        output::write_manifest(out_dir, &analysis.manifest)
+            .context("write_manifest failed")?;
+
+        // ----- Step 4c: Write index.html for every entry point -----
+        for (entry, _) in &self.config.entry_points {
+            output::write_index_html(out_dir, &analysis.manifest, entry)
+                .with_context(|| format!("write_index_html failed for entry '{entry}'"))?;
+        }
+
+        // ----- Compute stats -----
+        let total_modules = analysis.nodes.len();
+        let alive_modules = analysis.nodes.iter().filter(|n| n.alive).count();
+        let dead_modules = total_modules - alive_modules;
+        let build_time_ms = build_start.elapsed().as_millis();
+
+        Ok(BuildOutput {
+            manifest: analysis.manifest,
+            chunk_files,
+            stats: BuildStats {
+                total_modules,
+                alive_modules,
+                dead_modules,
+                chunks_written,
+                build_time_ms,
+                largest_chunk_bytes,
+            },
+        })
     }
 }
