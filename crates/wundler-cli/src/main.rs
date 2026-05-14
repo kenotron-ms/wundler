@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -7,6 +7,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use walkdir::WalkDir;
 use wundler_core::{cache::local::LocalCache, validation::run_validate_scale, ModuleSummarizer};
 use wundler_graph::GraphAnalyzer;
+use wundler_pipeline::{BuildConfig, BuildPipeline, DevServer, EngineChoice};
 
 const JS_EXTENSIONS: &[&str] = &["ts", "tsx", "js", "jsx", "mjs", "cjs"];
 
@@ -63,6 +64,28 @@ enum Commands {
         /// the shared commons chunk. Defaults to 2.
         #[arg(long = "commons-threshold", default_value_t = 2)]
         commons_threshold: usize,
+    },
+
+    /// Build the project using wundler.toml configuration.
+    Build {
+        /// Path to the wundler.toml configuration file.
+        #[arg(long, default_value = "wundler.toml")]
+        config: PathBuf,
+
+        /// Override the bundling engine (swc|rolldown|rspack).
+        #[arg(long)]
+        engine: Option<String>,
+    },
+
+    /// Start the development server.
+    Dev {
+        /// Path to the wundler.toml configuration file.
+        #[arg(long, default_value = "wundler.toml")]
+        config: PathBuf,
+
+        /// Port to bind on.
+        #[arg(long, default_value_t = 3000)]
+        port: u16,
     },
 }
 
@@ -128,6 +151,58 @@ fn parse_entry_arg(s: &str) -> Result<(String, PathBuf)> {
     }
 
     Ok((route.to_string(), PathBuf::from(path)))
+}
+
+// ---------------------------------------------------------------------------
+// Build / Dev handlers
+// ---------------------------------------------------------------------------
+
+fn run_build(config_path: &Path, engine_override: Option<String>) -> Result<()> {
+    let mut cfg = BuildConfig::load(config_path)?;
+    if let Some(name) = engine_override {
+        cfg.engine = match name.as_str() {
+            "swc" => EngineChoice::Swc,
+            "rolldown" => EngineChoice::Rolldown,
+            "rspack" => EngineChoice::Rspack,
+            other => anyhow::bail!(
+                "unknown engine {:?}; expected one of: swc, rolldown, rspack",
+                other
+            ),
+        };
+    }
+
+    let bar = ProgressBar::new_spinner();
+    bar.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.cyan} {msg}")
+            .unwrap_or_else(|_| ProgressStyle::default_spinner()),
+    );
+    bar.enable_steady_tick(std::time::Duration::from_millis(100));
+    bar.set_message("building\u{2026}");
+
+    let pipeline = BuildPipeline::new(cfg);
+    let out = pipeline.build()?;
+
+    bar.finish_and_clear();
+    println!(
+        "built {} chunks ({} modules alive, {} dead) in {} ms \u{2014} largest chunk {} bytes",
+        out.stats.chunks_written,
+        out.stats.alive_modules,
+        out.stats.dead_modules,
+        out.stats.build_time_ms,
+        out.stats.largest_chunk_bytes,
+    );
+    Ok(())
+}
+
+async fn run_dev(config_path: &Path, port: u16) -> Result<()> {
+    let cfg = BuildConfig::load(config_path)?;
+    println!(
+        "wundler dev: serving {} on http://127.0.0.1:{}",
+        cfg.root.display(),
+        port
+    );
+    DevServer { root: cfg.root, port }.start().await
 }
 
 // ---------------------------------------------------------------------------
@@ -297,5 +372,9 @@ fn main() -> Result<()> {
             entry,
             commons_threshold,
         } => run_analyze(path, entry, commons_threshold),
+        Commands::Build { config, engine } => run_build(&config, engine),
+        Commands::Dev { config, port } => {
+            tokio::runtime::Runtime::new()?.block_on(run_dev(&config, port))
+        }
     }
 }

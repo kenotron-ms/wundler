@@ -3128,9 +3128,12 @@ dependencies = [
  "indicatif",
  "serde_json",
  "tempfile",
+ "tokio",
  "walkdir",
  "wundler-core",
  "wundler-graph",
+ "wundler-pipeline",
+ "wundler-transform",
 ]
 
 [[package]]
