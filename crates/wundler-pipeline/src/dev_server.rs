@@ -2,7 +2,10 @@
 //!
 //! `DevServer` serves source modules as native ESM, transforming `.ts`/`.tsx`
 //! files on every request via SWC (type annotations stripped, no bundling).
+//! It also provides an SSE-based HMR endpoint at `/__wundler__/hmr` and
+//! serves the HMR client script at `/__wundler__/hmr-client.js`.
 
+use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,11 +13,26 @@ use std::sync::Arc;
 use anyhow::Result;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::StatusCode;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
+use futures_util::StreamExt;
+use notify::{EventKind, RecursiveMode, Watcher};
 use tokio::net::TcpListener;
-use tokio::sync::oneshot;
+use tokio::sync::{broadcast, oneshot};
+use tokio_stream::wrappers::BroadcastStream;
+
+// ---------------------------------------------------------------------------
+// HMR client JavaScript (served at /__wundler__/hmr-client.js)
+// ---------------------------------------------------------------------------
+
+const HMR_CLIENT_JS: &str = r#"(function() {
+  if (typeof EventSource === 'undefined') return;
+  const es = new EventSource('/__wundler__/hmr');
+  es.addEventListener('change', (ev) => { console.log('[wundler] change:', ev.data); location.reload(); });
+  es.onerror = () => {};
+})();"#;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -37,6 +55,7 @@ pub struct DevServer {
 #[derive(Clone)]
 struct AppState {
     root: Arc<PathBuf>,
+    hmr_tx: broadcast::Sender<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -58,11 +77,47 @@ impl DevServer {
     ///
     /// Uses port `0` to let the OS pick a free port when `self.port == 0`.
     pub async fn start_for_test(&self) -> Result<(SocketAddr, oneshot::Sender<()>)> {
+        let (hmr_tx, _hmr_rx) = broadcast::channel::<String>(64);
+
         let state = AppState {
             root: Arc::new(self.root.clone()),
+            hmr_tx: hmr_tx.clone(),
         };
 
+        // Spawn a std::thread for the notify file watcher so we don't block
+        // the async runtime.  On Modify/Create/Remove events, the relative
+        // path is broadcast through the HMR channel.
+        let watch_root = self.root.clone();
+        let watcher_tx = hmr_tx.clone();
+        std::thread::spawn(move || -> anyhow::Result<()> {
+            let (tx, rx) = std::sync::mpsc::channel::<notify::Event>();
+            let mut watcher = notify::recommended_watcher(move |res| {
+                if let Ok(ev) = res {
+                    let _ = tx.send(ev);
+                }
+            })?;
+            watcher.watch(&watch_root, RecursiveMode::Recursive)?;
+            for ev in rx {
+                if matches!(
+                    ev.kind,
+                    EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
+                ) {
+                    for p in &ev.paths {
+                        let rel = p
+                            .strip_prefix(&watch_root)
+                            .unwrap_or(p)
+                            .display()
+                            .to_string();
+                        let _ = watcher_tx.send(rel);
+                    }
+                }
+            }
+            Ok(())
+        });
+
         let app = Router::new()
+            .route("/__wundler__/hmr-client.js", get(hmr_client))
+            .route("/__wundler__/hmr", get(hmr_sse))
             .route("/{*path}", get(serve_module))
             .with_state(state);
 
@@ -85,9 +140,30 @@ impl DevServer {
 }
 
 // ---------------------------------------------------------------------------
-// Route handler
+// Route handlers
 // ---------------------------------------------------------------------------
 
+/// Serve the HMR client JavaScript.
+async fn hmr_client() -> Response {
+    (
+        StatusCode::OK,
+        [("Content-Type", "application/javascript; charset=utf-8")],
+        HMR_CLIENT_JS,
+    )
+        .into_response()
+}
+
+/// SSE endpoint — broadcasts file-change events to connected clients.
+async fn hmr_sse(State(state): State<AppState>) -> impl IntoResponse {
+    let rx = state.hmr_tx.subscribe();
+    let stream = BroadcastStream::new(rx).map(|item| {
+        let path = item.unwrap_or_default();
+        Ok::<_, Infallible>(Event::default().event("change").data(path))
+    });
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+/// Serve a source file, transforming TypeScript on demand.
 async fn serve_module(
     State(state): State<AppState>,
     AxumPath(path): AxumPath<String>,
