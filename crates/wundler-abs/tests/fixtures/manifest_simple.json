@@ -1,0 +1,42 @@
+{
+  "build_id": "b8f3a1c2",
+  "chunks": [
+    {
+      "id": "shell",
+      "modules": ["shell_mod_a", "shell_mod_b"],
+      "hash": "aabbccdd1234567890abcdef1234567890abcdef1234567890abcdef12345678",
+      "load_condition": "Initial",
+      "co_request_score": null,
+      "median_load_order": null,
+      "suggested_merge": null
+    },
+    {
+      "id": "vendor",
+      "modules": ["vendor_mod_a"],
+      "hash": "11223344567890abcdef1234567890abcdef1234567890abcdef1234567890ab",
+      "load_condition": "Initial",
+      "co_request_score": null,
+      "median_load_order": null,
+      "suggested_merge": null
+    },
+    {
+      "id": "channel",
+      "modules": ["channel_mod_a", "channel_mod_b"],
+      "hash": "deadbeef1234567890abcdef1234567890abcdef1234567890abcdef12345678",
+      "load_condition": "Lazy",
+      "co_request_score": null,
+      "median_load_order": null,
+      "suggested_merge": null
+    }
+  ],
+  "entry_chunks": {
+    "teams.channel": ["shell", "vendor", "channel"]
+  },
+  "module_index": {
+    "shell_mod_a": "shell",
+    "shell_mod_b": "shell",
+    "vendor_mod_a": "vendor",
+    "channel_mod_a": "channel",
+    "channel_mod_b": "channel"
+  }
+}
