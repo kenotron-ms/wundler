@@ -7,8 +7,11 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use ed25519_dalek::Signature;
 use tokio::sync::RwLock;
 use wundler_graph::ChunkManifest;
+
+use crate::signing::ManifestVerifier;
 
 /// Shared application state carried by every Axum handler.
 ///
@@ -28,16 +31,27 @@ pub struct AppState {
 
 impl AppState {
     /// Load a [`ChunkManifest`] from a JSON file on disk and wrap it in
-    /// [`AppState`].
+    /// [`AppState`], optionally verifying a cryptographic signature.
+    ///
+    /// When `verify` is `Some((verifier, sig))` the loaded manifest is checked
+    /// against `sig` using `verifier`.  If verification fails the function
+    /// returns an error; the `AppState` is never constructed from a manifest
+    /// whose signature is invalid.
+    ///
+    /// When `verify` is `None` no signature check is performed and any
+    /// well-formed manifest is accepted.
     ///
     /// # Errors
     ///
-    /// Returns an error if the file cannot be read or if the bytes are not
-    /// valid `ChunkManifest` JSON.
-    pub async fn load_from_disk(
+    /// Returns an error if:
+    /// * the file cannot be read,
+    /// * the bytes are not valid `ChunkManifest` JSON, or
+    /// * `verify` is `Some` and signature verification fails.
+    pub async fn load_signed_from_disk(
         manifest_path: &Path,
         cdn_base_url: String,
         ttl_seconds: u64,
+        verify: Option<(&ManifestVerifier, &Signature)>,
     ) -> Result<Self> {
         let bytes = tokio::fs::read(manifest_path)
             .await
@@ -50,10 +64,34 @@ impl AppState {
             )
         })?;
 
+        if let Some((verifier, sig)) = verify {
+            verifier
+                .verify(&manifest, sig)
+                .context("manifest signature verification failed")?;
+        }
+
         Ok(Self {
             manifest: Arc::new(RwLock::new(manifest)),
             cdn_base_url: Arc::new(cdn_base_url),
             ttl_seconds,
         })
+    }
+
+    /// Load a [`ChunkManifest`] from a JSON file on disk and wrap it in
+    /// [`AppState`].
+    ///
+    /// This is a convenience wrapper around [`Self::load_signed_from_disk`]
+    /// that skips signature verification.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read or if the bytes are not
+    /// valid `ChunkManifest` JSON.
+    pub async fn load_from_disk(
+        manifest_path: &Path,
+        cdn_base_url: String,
+        ttl_seconds: u64,
+    ) -> Result<Self> {
+        Self::load_signed_from_disk(manifest_path, cdn_base_url, ttl_seconds, None).await
     }
 }
