@@ -49,3 +49,62 @@ fn empty_sequence_inserts_no_rows() {
     assert_eq!(rows, 0, "empty sequence inserts 0 rows");
     assert_eq!(store.session_count().unwrap(), 0, "no session with empty sequence");
 }
+
+#[test]
+fn duplicate_session_chunk_pair_is_ignored() {
+    let store = PgoStore::open_in_memory().unwrap();
+    let first = store
+        .insert_session(&rec("s1", "home", &["a", "b", "c"]))
+        .unwrap();
+    assert_eq!(first, 3, "first insert should add 3 rows");
+
+    let second = store
+        .insert_session(&rec("s1", "home", &["a", "b", "c"]))
+        .unwrap();
+    assert_eq!(second, 0, "re-inserting identical session should return 0");
+
+    assert_eq!(store.session_count().unwrap(), 1, "still only one distinct session");
+    assert_eq!(store.chunk_load_count("a").unwrap(), 1, "chunk 'a' counted once");
+}
+
+#[test]
+fn partial_overlap_only_adds_new_rows() {
+    let store = PgoStore::open_in_memory().unwrap();
+    let first = store
+        .insert_session(&rec("s1", "home", &["a", "b"]))
+        .unwrap();
+    assert_eq!(first, 2, "first insert should add 2 rows");
+
+    let second = store
+        .insert_session(&rec("s1", "home", &["a", "b", "c"]))
+        .unwrap();
+    assert_eq!(second, 1, "second insert should add only the new chunk 'c'");
+
+    assert_eq!(store.chunk_load_count("a").unwrap(), 1, "chunk 'a' counted once");
+    assert_eq!(store.chunk_load_count("c").unwrap(), 1, "chunk 'c' counted once");
+}
+
+#[test]
+fn idempotent_across_reopens() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("pgo_test.db");
+
+    // First open: insert session
+    {
+        let store = PgoStore::open(&db_path).unwrap();
+        let rows = store
+            .insert_session(&rec("s1", "home", &["a", "b", "c"]))
+            .unwrap();
+        assert_eq!(rows, 3, "initial insert should add 3 rows");
+    } // store dropped here, connection closed
+
+    // Second open: insert same session again
+    {
+        let store = PgoStore::open(&db_path).unwrap();
+        let rows = store
+            .insert_session(&rec("s1", "home", &["a", "b", "c"]))
+            .unwrap();
+        assert_eq!(rows, 0, "re-insert after reopen should return 0");
+        assert_eq!(store.session_count().unwrap(), 1, "still only one distinct session");
+    }
+}
