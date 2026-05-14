@@ -5,10 +5,8 @@
 //! [`ManifestVerifier`].
 
 use anyhow::{anyhow, Context, Result};
-use ed25519_dalek::pkcs8::{
-    DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey,
-};
-use ed25519_dalek::pkcs8::der::pem::LineEnding;
+use ed25519_dalek::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey};
+use pkcs8::LineEnding;
 use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
 use wundler_graph::ChunkManifest;

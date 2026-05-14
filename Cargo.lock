@@ -3773,6 +3773,7 @@ dependencies = [
  "axum",
  "axum-test",
  "ed25519-dalek",
+ "pkcs8",
  "rand 0.8.6",
  "serde",
  "serde_json",
