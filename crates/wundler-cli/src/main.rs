@@ -4,7 +4,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
+use serde::Deserialize;
 use walkdir::WalkDir;
+use wundler_abs::server::AbsConfig;
+use wundler_abs::signing::{generate_keypair, ManifestSigner};
 use wundler_core::{cache::local::LocalCache, validation::run_validate_scale, ModuleSummarizer};
 use wundler_graph::GraphAnalyzer;
 use wundler_pipeline::{BuildConfig, BuildPipeline, DevServer, EngineChoice};
@@ -75,6 +78,14 @@ enum Commands {
         /// Override the bundling engine (swc|rolldown|rspack).
         #[arg(long)]
         engine: Option<String>,
+
+        /// Sign the output manifest with an Ed25519 private key.
+        #[arg(long)]
+        sign: bool,
+
+        /// Path to the Ed25519 signing key PEM file (required when --sign is set).
+        #[arg(long)]
+        key: Option<PathBuf>,
     },
 
     /// Start the development server.
@@ -87,6 +98,83 @@ enum Commands {
         #[arg(long, default_value_t = 3000)]
         port: u16,
     },
+
+    /// Asset Bundling Server commands.
+    Abs(AbsArgs),
+}
+
+// ---------------------------------------------------------------------------
+// ABS subcommand types
+// ---------------------------------------------------------------------------
+
+/// Arguments for the `abs` subcommand.
+#[derive(Parser)]
+struct AbsArgs {
+    #[command(subcommand)]
+    command: AbsCmd,
+}
+
+/// Subcommands nested under `abs`.
+#[derive(Subcommand)]
+enum AbsCmd {
+    /// Start the ABS HTTP server.
+    Serve(AbsServeArgs),
+    /// Generate an Ed25519 key pair for manifest signing.
+    Keygen(AbsKeygenArgs),
+}
+
+/// Arguments for `wundler abs serve`.
+#[derive(Parser)]
+struct AbsServeArgs {
+    /// Path to the ABS TOML configuration file.
+    #[arg(long, default_value = "abs.toml")]
+    config: PathBuf,
+}
+
+/// Arguments for `wundler abs keygen`.
+#[derive(Parser)]
+struct AbsKeygenArgs {
+    /// Output path for the Ed25519 signing (private) key PEM file.
+    #[arg(long, default_value = "signing.pem")]
+    signing_out: PathBuf,
+
+    /// Output path for the Ed25519 verifying (public) key PEM file.
+    #[arg(long, default_value = "verifying.pem")]
+    verifying_out: PathBuf,
+}
+
+// ---------------------------------------------------------------------------
+// ABS TOML configuration schema
+// ---------------------------------------------------------------------------
+
+/// Schema for an `abs.toml` configuration file.
+///
+/// This is the on-disk representation; it is deserialized from TOML and then
+/// converted into [`AbsConfig`] for the server.
+#[derive(Deserialize)]
+struct AbsTomlConfig {
+    /// Path to the `ChunkManifest` JSON file on disk.
+    manifest_path: PathBuf,
+    /// Base URL of the CDN that serves chunk assets.
+    cdn_base_url: String,
+    /// Path to the append-only JSONL telemetry log.
+    telemetry_log: PathBuf,
+    /// Path to an Ed25519 signing key PEM file, or absent to disable signing.
+    signing_key_pem: Option<PathBuf>,
+    /// TCP port the server listens on (default: 8080).
+    #[serde(default = "default_abs_port")]
+    port: u16,
+    /// How long clients should cache a manifest response, in seconds (default: 300).
+    #[serde(default = "default_abs_ttl")]
+    ttl_seconds: u64,
+}
+
+fn default_abs_port() -> u16 {
+    8080
+}
+
+fn default_abs_ttl() -> u64 {
+    300
 }
 
 // ---------------------------------------------------------------------------
@@ -157,8 +245,15 @@ fn parse_entry_arg(s: &str) -> Result<(String, PathBuf)> {
 // Build / Dev handlers
 // ---------------------------------------------------------------------------
 
-fn run_build(config_path: &Path, engine_override: Option<String>) -> Result<()> {
+fn run_build(
+    config_path: &Path,
+    engine_override: Option<String>,
+    sign: bool,
+    key: Option<PathBuf>,
+) -> Result<()> {
     let mut cfg = BuildConfig::load(config_path)?;
+    let out_dir = cfg.out_dir.clone();
+
     if let Some(name) = engine_override {
         cfg.engine = match name.as_str() {
             "swc" => EngineChoice::Swc,
@@ -192,6 +287,21 @@ fn run_build(config_path: &Path, engine_override: Option<String>) -> Result<()> 
         out.stats.build_time_ms,
         out.stats.largest_chunk_bytes,
     );
+
+    // Optionally sign the manifest.
+    if sign {
+        let key_path = key
+            .ok_or_else(|| anyhow::anyhow!("--sign requires --key <path> to the signing PEM"))?;
+        let pem = std::fs::read_to_string(&key_path)
+            .with_context(|| format!("failed to read signing key: {}", key_path.display()))?;
+        let signer = ManifestSigner::from_pem(&pem)?;
+        let sig = signer.sign_manifest(&out.manifest);
+        let sig_path = out_dir.join("manifest.sig");
+        std::fs::write(&sig_path, sig.to_bytes())
+            .with_context(|| format!("failed to write manifest.sig to {}", sig_path.display()))?;
+        eprintln!("signed manifest → {}", sig_path.display());
+    }
+
     Ok(())
 }
 
@@ -203,6 +313,66 @@ async fn run_dev(config_path: &Path, port: u16) -> Result<()> {
         port
     );
     DevServer { root: cfg.root, port }.start().await
+}
+
+// ---------------------------------------------------------------------------
+// ABS handlers
+// ---------------------------------------------------------------------------
+
+async fn run_abs_serve(config_path: &Path) -> Result<()> {
+    let content = std::fs::read_to_string(config_path)
+        .with_context(|| format!("failed to read ABS config: {}", config_path.display()))?;
+    let toml_cfg: AbsTomlConfig =
+        toml::from_str(&content).context("failed to parse ABS TOML config")?;
+
+    let config = AbsConfig {
+        manifest_path: toml_cfg.manifest_path,
+        cdn_base_url: toml_cfg.cdn_base_url,
+        telemetry_log: toml_cfg.telemetry_log,
+        signing_key_pem: toml_cfg.signing_key_pem,
+        port: toml_cfg.port,
+        ttl_seconds: toml_cfg.ttl_seconds,
+    };
+
+    wundler_abs::server::run(config).await
+}
+
+fn run_abs_keygen(signing_out: &Path, verifying_out: &Path) -> Result<()> {
+    let keypair = generate_keypair();
+
+    // Create parent directories if needed. Guard against the empty-string
+    // parent that `Path::parent()` returns for a bare filename like "key.pem".
+    fn ensure_parent(p: &Path) -> Result<()> {
+        if let Some(parent) = p.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).with_context(|| {
+                    format!("failed to create directory {}", parent.display())
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    ensure_parent(signing_out)?;
+    ensure_parent(verifying_out)?;
+
+    std::fs::write(signing_out, &keypair.signing_key_pem).with_context(|| {
+        format!(
+            "failed to write signing key to {}",
+            signing_out.display()
+        )
+    })?;
+    std::fs::write(verifying_out, &keypair.verifying_key_pem).with_context(|| {
+        format!(
+            "failed to write verifying key to {}",
+            verifying_out.display()
+        )
+    })?;
+
+    eprintln!("wrote signing key → {}", signing_out.display());
+    eprintln!("wrote verifying key → {}", verifying_out.display());
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -260,7 +430,7 @@ fn cmd_validate_scale(path: PathBuf, cache_dir: Option<PathBuf>) -> Result<()> {
     println!();
     println!("┌──────────────────────────────────────────────────────────────┐");
     println!("│ Wundler Phase 1 Validation Gate                              │");
-    println!("├──────────────────────────────────────┬───────────────────────┤");
+    println!("├──────────────────────────────────────────┬───────────────────────┤");
     println!(
         "│ Modules                              │ {:<21} │",
         stats.module_count
@@ -285,7 +455,7 @@ fn cmd_validate_scale(path: PathBuf, cache_dir: Option<PathBuf>) -> Result<()> {
         "│ Dead-code estimate                   │ {:<21} │",
         format!("{:.1} %", stats.dead_code_estimate_pct)
     );
-    println!("└──────────────────────────────────────┴───────────────────────┘");
+    println!("└──────────────────────────────────────────┴───────────────────────┘");
     println!();
 
     // -----------------------------------------------------------------------
@@ -372,9 +542,20 @@ fn main() -> Result<()> {
             entry,
             commons_threshold,
         } => run_analyze(path, entry, commons_threshold),
-        Commands::Build { config, engine } => run_build(&config, engine),
+        Commands::Build {
+            config,
+            engine,
+            sign,
+            key,
+        } => run_build(&config, engine, sign, key),
         Commands::Dev { config, port } => {
             tokio::runtime::Runtime::new()?.block_on(run_dev(&config, port))
         }
+        Commands::Abs(abs_args) => match abs_args.command {
+            AbsCmd::Serve(args) => {
+                tokio::runtime::Runtime::new()?.block_on(run_abs_serve(&args.config))
+            }
+            AbsCmd::Keygen(args) => run_abs_keygen(&args.signing_out, &args.verifying_out),
+        },
     }
 }
