@@ -1,5 +1,12 @@
-import type { SwConfig } from './types.js';
-import { getCache, STATIC_MANIFEST_KEY } from './cache.js';
+import type { SwConfig, ManifestRequest } from './types.js';
+import { getCache } from './cache.js';
+import {
+  collectCachedModuleHashes,
+  fetchDelta,
+  staticFallbackUrls,
+  DEFAULT_ABS_TIMEOUT_MS,
+  type NavigationOptions,
+} from './delta.js';
 
 // Declare self as ServiceWorkerGlobalScope for type safety within this module.
 declare const self: ServiceWorkerGlobalScope;
@@ -15,7 +22,7 @@ export async function installHandler(config: SwConfig): Promise<void> {
     });
     if (response.ok) {
       const cache = await getCache(config.cache);
-      await cache.put(STATIC_MANIFEST_KEY, response);
+      await cache.put('wundler:static-manifest', response);
     }
   } catch (err) {
     console.warn('[wundler-sw] install: manifest fetch failed', err);
@@ -33,6 +40,73 @@ export async function activateHandler(): Promise<void> {
   if (c?.claim) {
     await c.claim();
   }
+}
+
+/**
+ * Pre-fetches the JS chunks needed for a navigation by querying ABS (or
+ * falling back to the static manifest) and caching any missing files.
+ * Returns the list of required chunk URLs.
+ */
+export async function handleNavigation(
+  config: SwConfig,
+  entryPoint: string,
+  opts?: NavigationOptions,
+): Promise<string[]> {
+  const timeoutMs = opts?.absTimeoutMs ?? DEFAULT_ABS_TIMEOUT_MS;
+  const cache = await getCache(config.cache);
+
+  const { static_, hashes } = await collectCachedModuleHashes(cache, config.cdnBaseUrl);
+
+  const request: ManifestRequest = {
+    entry_point: entryPoint,
+    cached_hashes: hashes,
+    build_id: static_?.build_id,
+  };
+
+  const delta = await fetchDelta(config, request, timeoutMs);
+
+  let requiredUrls: string[];
+  let prefetchUrls: string[] = [];
+
+  if (delta) {
+    requiredUrls = delta.fetch_urls;
+    prefetchUrls = delta.prefetch_urls;
+  } else if (static_) {
+    requiredUrls = staticFallbackUrls(static_, entryPoint, config.cdnBaseUrl);
+  } else {
+    requiredUrls = [];
+  }
+
+  // Fetch all required URLs into cache in parallel.
+  // Skip URLs already in cache; only store responses that are ok.
+  await Promise.all(
+    requiredUrls.map(async (url) => {
+      const existing = await cache.match(url);
+      if (existing) return;
+      const resp = await fetch(url);
+      if (resp.ok) {
+        await cache.put(url, resp);
+      }
+    }),
+  );
+
+  // Prefetch additional URLs fire-and-forget with the same skip-if-cached logic.
+  for (const url of prefetchUrls) {
+    void (async () => {
+      try {
+        const existing = await cache.match(url);
+        if (existing) return;
+        const resp = await fetch(url);
+        if (resp.ok) {
+          await cache.put(url, resp);
+        }
+      } catch {
+        // Ignore prefetch errors — they are best-effort.
+      }
+    })();
+  }
+
+  return requiredUrls;
 }
 
 // ---------------------------------------------------------------------------
@@ -54,5 +128,17 @@ if (typeof ServiceWorkerGlobalScope !== 'undefined') {
 
   self.addEventListener('activate', (event) => {
     event.waitUntil(activateHandler());
+  });
+
+  self.addEventListener('fetch', (event) => {
+    if (event.request.mode !== 'navigate') return;
+
+    const url = new URL(event.request.url);
+    const stripped = url.pathname.replace(/^\//, '');
+    const entryPoint = stripped.replace(/\//g, '.') || 'home';
+
+    event.respondWith(
+      handleNavigation(CONFIG, entryPoint).then(() => fetch(event.request)),
+    );
   });
 }

@@ -9,6 +9,55 @@
     return cache;
   }
 
+  // src/delta.ts
+  var DEFAULT_ABS_TIMEOUT_MS = 100;
+  async function collectCachedModuleHashes(cache, cdnBaseUrl) {
+    const manifestResponse = await cache.match(STATIC_MANIFEST_KEY);
+    if (!manifestResponse) {
+      return { static_: null, hashes: [] };
+    }
+    const static_ = await manifestResponse.json();
+    const hashes = [];
+    for (const chunk of static_.chunks) {
+      const chunkUrl = `${cdnBaseUrl}/chunks/${chunk.hash.slice(0, 8)}.js`;
+      const cached = await cache.match(chunkUrl);
+      if (cached) {
+        hashes.push(...chunk.modules);
+      }
+    }
+    return { static_, hashes };
+  }
+  async function fetchDelta(config, request, timeoutMs) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const fetchPromise = fetch(`${config.absBaseUrl}/manifest`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(request),
+        signal: controller.signal
+      });
+      const timeoutPromise = new Promise((resolve) => {
+        controller.signal.addEventListener("abort", () => resolve(null), { once: true });
+      });
+      const response = await Promise.race([fetchPromise, timeoutPromise]);
+      if (!response || !response.ok) return null;
+      return await response.json();
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  function staticFallbackUrls(static_, entryPoint, cdnBaseUrl) {
+    const chunkIds = static_.entry_chunks[entryPoint] ?? [];
+    return chunkIds.flatMap((id) => {
+      const chunk = static_.chunks.find((c) => c.id === id);
+      if (!chunk) return [];
+      return [`${cdnBaseUrl}/chunks/${chunk.hash.slice(0, 8)}.js`];
+    });
+  }
+
   // src/sw.ts
   async function installHandler(config) {
     try {
@@ -17,7 +66,7 @@
       });
       if (response.ok) {
         const cache = await getCache(config.cache);
-        await cache.put(STATIC_MANIFEST_KEY, response);
+        await cache.put("wundler:static-manifest", response);
       }
     } catch (err) {
       console.warn("[wundler-sw] install: manifest fetch failed", err);
@@ -28,6 +77,51 @@
     if (c?.claim) {
       await c.claim();
     }
+  }
+  async function handleNavigation(config, entryPoint, opts) {
+    const timeoutMs = opts?.absTimeoutMs ?? DEFAULT_ABS_TIMEOUT_MS;
+    const cache = await getCache(config.cache);
+    const { static_, hashes } = await collectCachedModuleHashes(cache, config.cdnBaseUrl);
+    const request = {
+      entry_point: entryPoint,
+      cached_hashes: hashes,
+      build_id: static_?.build_id
+    };
+    const delta = await fetchDelta(config, request, timeoutMs);
+    let requiredUrls;
+    let prefetchUrls = [];
+    if (delta) {
+      requiredUrls = delta.fetch_urls;
+      prefetchUrls = delta.prefetch_urls;
+    } else if (static_) {
+      requiredUrls = staticFallbackUrls(static_, entryPoint, config.cdnBaseUrl);
+    } else {
+      requiredUrls = [];
+    }
+    await Promise.all(
+      requiredUrls.map(async (url) => {
+        const existing = await cache.match(url);
+        if (existing) return;
+        const resp = await fetch(url);
+        if (resp.ok) {
+          await cache.put(url, resp);
+        }
+      })
+    );
+    for (const url of prefetchUrls) {
+      void (async () => {
+        try {
+          const existing = await cache.match(url);
+          if (existing) return;
+          const resp = await fetch(url);
+          if (resp.ok) {
+            await cache.put(url, resp);
+          }
+        } catch {
+        }
+      })();
+    }
+    return requiredUrls;
   }
   if (typeof ServiceWorkerGlobalScope !== "undefined") {
     const CONFIG = {
@@ -41,6 +135,15 @@
     });
     self.addEventListener("activate", (event) => {
       event.waitUntil(activateHandler());
+    });
+    self.addEventListener("fetch", (event) => {
+      if (event.request.mode !== "navigate") return;
+      const url = new URL(event.request.url);
+      const stripped = url.pathname.replace(/^\//, "");
+      const entryPoint = stripped.replace(/\//g, ".") || "home";
+      event.respondWith(
+        handleNavigation(CONFIG, entryPoint).then(() => fetch(event.request))
+      );
     });
   }
 })();
