@@ -17,6 +17,7 @@ wundler-core    = { path = "../wundler-core" }
 wundler-graph   = { path = "../wundler-graph" }
 wundler-pipeline = { path = "../wundler-pipeline" }
 anyhow          = { workspace = true }
+serde           = { workspace = true }
 serde_json      = { workspace = true }
 tempfile        = "3"
 clap            = { version = "4", features = ["derive"] }

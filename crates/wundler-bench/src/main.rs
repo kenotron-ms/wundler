@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 // ---------------------------------------------------------------------------
 // CLI arguments
@@ -17,8 +17,12 @@ use clap::Parser;
     version
 )]
 struct Args {
+    /// Subcommand (optional — if absent, runs the full benchmark suite).
+    #[command(subcommand)]
+    command: Option<Commands>,
+
     /// Output file path for the Markdown report.
-    #[arg(long, default_value = "BENCHMARK_RESULTS.md")]
+    #[arg(long, default_value = "BENCHMARK_RESULTS.md", global = false)]
     output: PathBuf,
 
     /// Module counts for the full-pipeline CAS benchmark (comma-separated).
@@ -54,11 +58,70 @@ struct Args {
 }
 
 // ---------------------------------------------------------------------------
+// Subcommands
+// ---------------------------------------------------------------------------
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Measure structural scale of a git repository using git metadata and
+    /// filesystem byte/line counts.  Outputs a bounded summary — not file lists.
+    ///
+    /// Example:
+    ///   wundler-bench repo-scale --path ~/workspace/office-bohemia --output markdown
+    RepoScale {
+        /// Path to the git repository to measure.
+        #[arg(long)]
+        path: PathBuf,
+
+        /// Number of top-level directories to include in the report.
+        #[arg(long, value_name = "N", default_value = "20")]
+        top_dirs: usize,
+
+        /// Number of extensions to include in the report.
+        #[arg(long, value_name = "N", default_value = "30")]
+        top_extensions: usize,
+
+        /// Also walk the filesystem for files not tracked by git (ignores
+        /// node_modules, .git, target, dist, build, etc.).
+        #[arg(long)]
+        include_untracked: bool,
+
+        /// Output format.
+        #[arg(long, value_name = "FORMAT", default_value = "markdown")]
+        output: RepoScaleOutputFormat,
+
+        /// Write the report to this file instead of stdout.
+        #[arg(long, value_name = "FILE")]
+        out: Option<PathBuf>,
+    },
+}
+
+/// Output format for the `repo-scale` subcommand.
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum RepoScaleOutputFormat {
+    Json,
+    Markdown,
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
 fn main() -> Result<()> {
     let args = Args::parse();
+
+    // ── repo-scale subcommand ─────────────────────────────────────────────────
+    if let Some(Commands::RepoScale {
+        path,
+        top_dirs,
+        top_extensions,
+        include_untracked,
+        output: fmt,
+        out,
+    }) = args.command
+    {
+        return run_repo_scale(path, top_dirs, top_extensions, include_untracked, fmt, out);
+    }
 
     // ── Early exit: persist a synthetic app and stop ───────────────────────
     if let Some(dest) = &args.persist_to {
@@ -217,4 +280,49 @@ fn format_n(n: usize) -> String {
     } else {
         n.to_string()
     }
+}
+
+// ---------------------------------------------------------------------------
+// repo-scale subcommand handler
+// ---------------------------------------------------------------------------
+
+fn run_repo_scale(
+    path: PathBuf,
+    top_dirs: usize,
+    top_extensions: usize,
+    include_untracked: bool,
+    fmt: RepoScaleOutputFormat,
+    out: Option<PathBuf>,
+) -> Result<()> {
+    use wundler_bench::repo_scale::{measure_repo, render_json, render_markdown, RepoScaleOptions};
+
+    let opts = RepoScaleOptions {
+        path,
+        top_dirs,
+        top_extensions,
+        include_untracked,
+    };
+
+    eprintln!("wundler-bench repo-scale: measuring {} …", opts.path.display());
+    let report = measure_repo(&opts)
+        .map_err(|e| anyhow::anyhow!("repo-scale measurement failed: {e}"))?;
+
+    let rendered = match fmt {
+        RepoScaleOutputFormat::Json => render_json(&report),
+        RepoScaleOutputFormat::Markdown => render_markdown(&report),
+    };
+
+    match out {
+        Some(ref file_path) => {
+            std::fs::write(file_path, &rendered)
+                .map_err(|e| anyhow::anyhow!("failed to write {}: {e}", file_path.display()))?;
+            eprintln!("wundler-bench repo-scale: wrote report to {}", file_path.display());
+        }
+        None => {
+            println!("{rendered}");
+        }
+    }
+
+    eprintln!("wundler-bench repo-scale: done ✓");
+    Ok(())
 }
