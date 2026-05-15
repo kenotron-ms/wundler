@@ -41,6 +41,16 @@ struct Args {
     /// Skip slow benchmarks — caps all scale lists at N=500.
     #[arg(long)]
     fast: bool,
+
+    /// Write a persistent synthetic TypeScript app to this directory and exit
+    /// (skips all benchmark runs).  Use together with `--persist-modules` to
+    /// control the module count (default: 10 000).
+    #[arg(long, value_name = "PATH")]
+    persist_to: Option<PathBuf>,
+
+    /// Number of synthetic modules to generate when `--persist-to` is set.
+    #[arg(long, value_name = "N", default_value = "10000")]
+    persist_modules: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -49,6 +59,22 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+
+    // ── Early exit: persist a synthetic app and stop ───────────────────────
+    if let Some(dest) = &args.persist_to {
+        let n = args.persist_modules;
+        eprintln!(
+            "wundler-bench: generating {n}-module synthetic app → {}",
+            dest.display()
+        );
+        wundler_bench::synthetic::SyntheticApp::generate_at(n, dest)?;
+        eprintln!(
+            "wundler-bench: done ✓  ({} files in {}/src/)",
+            n + 1,          // modules + main.tsx
+            dest.display()
+        );
+        return Ok(());
+    }
 
     // ── Parse scale lists ──────────────────────────────────────────────────
     let mut cas_scales: Vec<usize> = parse_scales(&args.scales);
