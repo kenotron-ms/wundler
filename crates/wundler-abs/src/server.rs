@@ -212,7 +212,7 @@ pub async fn run(config: AbsConfig) -> Result<()> {
     let local_addr = listener.local_addr()?;
     tracing::info!("wundler-abs listening on {}", local_addr);
 
-    axum::serve(listener, router).await?;
+    axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await?;
 
     Ok(())
 }

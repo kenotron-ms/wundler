@@ -95,3 +95,76 @@ async fn test_reload_loads_new_manifest() {
         "/health must reflect the swapped manifest"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Test: reject missing file with 422
+// ---------------------------------------------------------------------------
+
+/// `POST /reload` with a path to a nonexistent file must return 422 and
+/// leave the existing manifest unchanged.
+#[tokio::test]
+async fn test_reload_rejects_missing_file() {
+    let (server, _dir) = make_server().await;
+
+    let resp = server
+        .post("/reload")
+        .json(&serde_json::json!({
+            "manifest_path": "/tmp/this-file-absolutely-does-not-exist-wundler-test.json"
+        }))
+        .await;
+
+    resp.assert_status(axum::http::StatusCode::UNPROCESSABLE_ENTITY);
+    let body: serde_json::Value = resp.json();
+    assert!(
+        body["error"].as_str().unwrap_or("").contains("failed to read"),
+        "error message must describe the read failure, got: {}",
+        body["error"]
+    );
+
+    // Existing manifest must still be in place.
+    let health = server.get("/health").await;
+    health.assert_status_ok();
+    let health_body: serde_json::Value = health.json();
+    assert_eq!(
+        health_body["build_id"], "initial-id",
+        "manifest must not change on failed reload"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test: reject invalid JSON with 422
+// ---------------------------------------------------------------------------
+
+/// `POST /reload` with a file containing invalid JSON must return 422 and
+/// leave the existing manifest unchanged.
+#[tokio::test]
+async fn test_reload_rejects_invalid_json() {
+    let (server, _dir) = make_server().await;
+
+    // Write a file that is not valid JSON.
+    let mut tmp = NamedTempFile::new().expect("create temp file");
+    tmp.write_all(b"this is { not valid json }").expect("write bad bytes");
+
+    let resp = server
+        .post("/reload")
+        .json(&serde_json::json!({
+            "manifest_path": tmp.path().to_str().expect("valid UTF-8 path")
+        }))
+        .await;
+
+    resp.assert_status(axum::http::StatusCode::UNPROCESSABLE_ENTITY);
+    let body: serde_json::Value = resp.json();
+    assert!(
+        body["error"].as_str().unwrap_or("").contains("invalid manifest JSON"),
+        "error message must describe the JSON parse failure, got: {}",
+        body["error"]
+    );
+
+    // Existing manifest must still be in place.
+    let health = server.get("/health").await;
+    let health_body: serde_json::Value = health.json();
+    assert_eq!(
+        health_body["build_id"], "initial-id",
+        "manifest must not change on parse failure"
+    );
+}
