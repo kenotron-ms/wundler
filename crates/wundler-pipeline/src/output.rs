@@ -2,16 +2,14 @@
 //!
 //! Provides four public functions:
 //!
-//! * [`write_chunk`]              — writes a `ChunkOutput` to `<out_dir>/chunks/<hash>.js`
-//!                                  (and an optional `.js.map` alongside it).
-//! * [`write_manifest`]           — serialises a `ChunkManifest` as pretty JSON to
-//!                                  `<out_dir>/manifest.json`, with chunk hashes
-//!                                  updated to the actual output-file hashes.
-//! * [`write_index_html`]         — generates an `<out_dir>/index.html` stub that
-//!                                  loads the initial chunks for a named entry point,
-//!                                  referencing the actual output-file hashes.
+//! * [`write_chunk`] — writes a `ChunkOutput` to `<out_dir>/chunks/<hash>.js`
+//!   (and an optional `.js.map` alongside it).
+//! * [`write_manifest`] — serialises a `ChunkManifest` as pretty JSON to
+//!   `<out_dir>/manifest.json`, with chunk hashes updated to the actual output-file hashes.
+//! * [`write_index_html`] — generates an `<out_dir>/index.html` stub that
+//!   loads the initial chunks for a named entry point, referencing the actual output-file hashes.
 //! * [`write_rolldown_index_html`] — generates an `<out_dir>/index.html` that references
-//!                                  rolldown's output files directly (e.g. `root-abc123.js`).
+//!   rolldown's output files directly (e.g. `root-abc123.js`).
 
 use std::collections::HashMap;
 use std::fs;

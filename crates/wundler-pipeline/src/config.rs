@@ -11,18 +11,13 @@ use serde::Deserialize;
 // ---------------------------------------------------------------------------
 
 /// Which bundling engine to use.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum EngineChoice {
+    #[default]
     Swc,
     Rolldown,
     Rspack,
-}
-
-impl Default for EngineChoice {
-    fn default() -> Self {
-        EngineChoice::Swc
-    }
 }
 
 /// Parsed, validated build configuration loaded from `wundler.toml`.
