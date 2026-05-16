@@ -7,6 +7,7 @@
 //! request and which to warm the cache with, without ever shipping source
 //! bytes itself.
 
+pub mod archive;
 pub mod manifest;
 pub mod security;
 pub mod server;

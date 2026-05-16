@@ -227,6 +227,7 @@ pub(crate) fn build_app(
             m.insert("/".to_string(), PathBuf::from("src/main.tsx"));
             m
         },
+        budget: None,
     };
 
     let pipeline = BuildPipeline::new(config);

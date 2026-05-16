@@ -29,6 +29,7 @@ pub struct BuildConfig {
     pub commons_threshold: usize,
     pub engine: EngineChoice,
     pub entry_points: HashMap<String, PathBuf>,
+    pub budget: Option<crate::budget::BudgetConfig>,
 }
 
 // ---------------------------------------------------------------------------
@@ -39,6 +40,8 @@ pub struct BuildConfig {
 struct RawConfig {
     build: RawBuild,
     entry: HashMap<String, PathBuf>,
+    #[serde(default)]
+    budget: Option<crate::budget::BudgetConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,6 +87,7 @@ impl BuildConfig {
             commons_threshold: raw.build.commons_threshold,
             engine: raw.build.engine,
             entry_points: raw.entry,
+            budget: raw.budget,
         })
     }
 }

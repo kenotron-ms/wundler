@@ -26,6 +26,7 @@ use wundler_graph::ChunkManifest;
 
 use crate::manifest::compute_delta;
 use crate::security::auth::require_bearer;
+use crate::security::cors::build_cors;
 use crate::security::{ResolvedSecurity, SecurityConfig};
 use crate::state::AppState;
 use crate::telemetry::TelemetryLogger;
@@ -71,6 +72,12 @@ pub struct AbsConfig {
     /// How long clients should cache a manifest response, in seconds.
     pub ttl_seconds: u64,
 
+    /// Directory where the manifest archive stores versioned JSON files.
+    pub archive_dir: PathBuf,
+
+    /// Maximum number of manifest versions to retain in the archive.
+    pub archive_retention: usize,
+
     /// Bearer-token authentication configuration.
     pub security: SecurityConfig,
 }
@@ -84,6 +91,8 @@ impl Default for AbsConfig {
             signing_key_pem: None,
             port: 8080,
             ttl_seconds: 300,
+            archive_dir: PathBuf::from("dist/.archive"),
+            archive_retention: 10,
             security: SecurityConfig::default(),
         }
     }
@@ -152,11 +161,19 @@ struct ReloadRequest {
     manifest_path: String,
 }
 
+/// Request body for `POST /select`.
+#[derive(Debug, Deserialize)]
+struct SelectRequest {
+    build_id: String,
+}
+
 /// Success response body for `POST /reload`.
 #[derive(Debug, Serialize)]
-struct ReloadResponse {
-    /// The `build_id` of the newly loaded manifest.
-    build_id: String,
+struct SwapResponseBody {
+    /// The `build_id` of the manifest that was active before the swap.
+    previous: String,
+    /// The `build_id` of the manifest now active.
+    current: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -196,13 +213,32 @@ pub fn build_router(
     security: Arc<ResolvedSecurity>,
 ) -> Router {
     let state = RouterState { app, telemetry };
+    let cors = build_cors(&security);
+
+    // POST /manifest route, optionally rate-limited per source IP.
+    // `.route_layer()` keeps the limiter scoped to this route only; /health
+    // and /sw.js are never affected.
+    let manifest_route = match security.rate_limiter.clone() {
+        None => Router::new().route("/manifest", post(post_manifest)),
+        Some(limiter) => Router::new()
+            .route("/manifest", post(post_manifest))
+            .route_layer(axum::middleware::from_fn_with_state(
+                limiter,
+                crate::security::ratelimit::rate_limit_mw,
+            )),
+    };
 
     Router::new()
-        .route("/manifest", post(post_manifest))
+        .merge(manifest_route)
         .route("/health", get(get_health))
         .route("/sw.js", get(get_service_worker))
         .route("/reload", post(post_reload))
+        .route("/select", post(post_select))
+        .route("/versions", get(get_versions))
+        // Inner: bearer-token authentication.
         .layer(middleware::from_fn_with_state(security, require_bearer))
+        // Outer: CORS — applied last so it wraps the auth layer.
+        .layer(cors)
         .with_state(state)
 }
 
@@ -215,10 +251,17 @@ pub fn build_router(
 /// Binds to `0.0.0.0:{config.port}`, logs the listening address, then drives
 /// the Axum server to completion (or until the process is signalled).
 pub async fn run(config: AbsConfig) -> Result<()> {
+    let archive = crate::archive::ManifestArchive::open(
+        &config.archive_dir,
+        config.archive_retention,
+    )
+    .context("failed to open manifest archive")?;
+
     let app = AppState::load_from_disk(
         &config.manifest_path,
         config.cdn_base_url.clone(),
         config.ttl_seconds,
+        archive,
     )
     .await?;
 
@@ -250,15 +293,15 @@ async fn post_manifest(
     State(state): State<RouterState>,
     Json(req): Json<ManifestRequest>,
 ) -> Result<Json<ManifestResponse>, ManifestError> {
-    let manifest_guard = state.app.manifest.read().await;
+    let manifest = state.app.snapshot().await;
 
-    let mut resp = compute_delta(&manifest_guard, &req, &state.app.cdn_base_url);
+    let mut resp = compute_delta(&manifest, &req, &state.app.cdn_base_url);
 
     // Override TTL with the server-configured value.
     resp.ttl = state.app.ttl_seconds;
 
     // Determine which chunk IDs will be served for telemetry purposes.
-    let chunks_served: Vec<String> = manifest_guard
+    let chunks_served: Vec<String> = manifest
         .entry_chunks
         .get(&req.entry_point)
         .cloned()
@@ -286,10 +329,10 @@ async fn post_manifest(
 
 /// `GET /health` — return a liveness check with the current build ID.
 async fn get_health(State(state): State<RouterState>) -> Json<HealthResponse> {
-    let manifest_guard = state.app.manifest.read().await;
+    let manifest = state.app.snapshot().await;
     Json(HealthResponse {
         status: "ok",
-        build_id: manifest_guard.build_id.clone(),
+        build_id: manifest.build_id.clone(),
     })
 }
 
@@ -327,6 +370,18 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+/// `GET /versions` — list all archived manifest versions, newest first.
+async fn get_versions(State(state): State<RouterState>) -> Response {
+    match state.app.archive.list() {
+        Ok(entries) => (StatusCode::OK, Json(entries)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("failed to list archive: {e}")})),
+        )
+            .into_response(),
+    }
 }
 
 /// `POST /reload` — hot-swap the in-memory manifest from a file on disk.
@@ -390,8 +445,327 @@ async fn post_reload(
         }
     };
 
-    // Atomically swap the manifest.
-    let build_id = state.app.reload_manifest(new_manifest).await;
+    // Install into the archive (idempotent), then swap to it.
+    let build_id = new_manifest.build_id.clone();
+    if let Err(e) = state.app.archive.install(&new_manifest) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("failed to install manifest into archive: {e}")
+            })),
+        )
+            .into_response();
+    }
 
-    (StatusCode::OK, Json(ReloadResponse { build_id })).into_response()
+    let report = match state.app.swap_to(&build_id).await {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("failed to swap to new manifest: {e}")
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    (StatusCode::OK, Json(SwapResponseBody {
+        previous: report.previous,
+        current: report.current,
+    }))
+        .into_response()
+}
+
+/// `POST /select` — operator-driven rollback to an already-archived build.
+///
+/// Swaps the in-memory manifest to a build that is already present in the
+/// archive, without requiring a file path on disk.  Useful for rolling back
+/// to a previously installed version.
+///
+/// Body: `{ "build_id": "<target_build_id>" }`
+/// Success: `200 OK` `{ "previous": "...", "current": "..." }`
+/// Errors:
+///   `404 Not Found`    if `build_id` is not in the archive
+///   `409 Conflict`     if another swap is already in progress
+///   `403 Forbidden`    if the request originates from a non-loopback address
+async fn post_select(
+    MaybeConnectAddr(addr): MaybeConnectAddr,
+    State(state): State<RouterState>,
+    Json(body): Json<SelectRequest>,
+) -> Response {
+    // Loopback enforcement (same as /reload).
+    if let Some(addr) = addr {
+        if !addr.ip().is_loopback() {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "select is only permitted from loopback addresses"
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    // 404 — fail fast before touching the lock.
+    let archive_entries = match state.app.archive.list() {
+        Ok(e) => e,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("failed to list archive: {e}")})),
+            )
+                .into_response();
+        }
+    };
+    if !archive_entries.iter().any(|e| e.build_id == body.build_id) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!("build_id {} is not present in archive", body.build_id)
+            })),
+        )
+            .into_response();
+    }
+
+    // 409 — try_lock fails iff another swap is in progress.
+    match state.app.reload_lock.try_lock() {
+        Ok(probe) => drop(probe),
+        Err(_) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({"error": "swap already in progress"})),
+            )
+                .into_response();
+        }
+    }
+
+    // Execute the swap.
+    let report = match state.app.swap_to(&body.build_id).await {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("swap failed: {e}")})),
+            )
+                .into_response();
+        }
+    };
+
+    (
+        StatusCode::OK,
+        Json(SwapResponseBody {
+            previous: report.previous,
+            current: report.current,
+        }),
+    )
+        .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use std::num::NonZeroU32;
+    use std::sync::Arc;
+
+    use axum::{
+        body::Body,
+        extract::ConnectInfo,
+        http::{Request, StatusCode},
+        middleware,
+    };
+    use tokio::sync::RwLock;
+    use tower::ServiceExt;
+    use wundler_graph::ChunkManifest;
+
+    use crate::security::ratelimit::build_limiter;
+    use crate::security::ResolvedSecurity;
+    use crate::state::AppState;
+    use crate::telemetry::TelemetryLogger;
+
+    /// Build a minimal `AppState` + `TelemetryLogger` pair suitable for unit tests.
+    ///
+    /// Uses an in-memory `ChunkManifest` (no disk I/O) and a temp file for the
+    /// telemetry log.  The `NamedTempFile` drops at the end of this function, but
+    /// the open `File` descriptor inside `TelemetryLogger` remains valid (Unix
+    /// unlink semantics).  The archive `TempDir` is intentionally leaked so the
+    /// directory outlives the test function.
+    fn test_state() -> (AppState, TelemetryLogger) {
+        let manifest = ChunkManifest {
+            build_id: "test-build".to_string(),
+            chunks: vec![],
+            entry_chunks: HashMap::new(),
+            module_index: HashMap::new(),
+        };
+
+        // Leak the TempDir so the archive directory stays alive for the test process.
+        let archive_tmp = Box::leak(Box::new(tempfile::TempDir::new().expect("archive tempdir")));
+        let archive = crate::archive::ManifestArchive::open(archive_tmp.path(), 10)
+            .expect("open archive");
+
+        let app = AppState {
+            manifest: Arc::new(RwLock::new(Arc::new(manifest))),
+            archive: Arc::new(archive),
+            reload_lock: Arc::new(tokio::sync::Mutex::new(())),
+            cdn_base_url: Arc::new("https://cdn.example.com".to_string()),
+            ttl_seconds: 60,
+        };
+
+        let tmp = tempfile::NamedTempFile::new().expect("tmp file for telemetry");
+        let telemetry = TelemetryLogger::new(tmp.path()).expect("telemetry logger");
+        // `tmp` drops here; the unlinked path is fine — the open FD inside
+        // TelemetryLogger keeps the inode alive for the duration of the test.
+        (app, telemetry)
+    }
+
+    /// Wrap `build_router` with an outermost middleware that injects a synthetic
+    /// `ConnectInfo<SocketAddr>` so the rate-limiter sees a real IP.
+    fn router_with_ip(
+        app: AppState,
+        telemetry: TelemetryLogger,
+        security: Arc<ResolvedSecurity>,
+        ip: IpAddr,
+    ) -> axum::Router {
+        let inner = super::build_router(app, telemetry, security);
+        inner.layer(middleware::from_fn(
+            move |mut req: Request<Body>, next: middleware::Next| async move {
+                let ci: ConnectInfo<SocketAddr> = ConnectInfo(SocketAddr::new(ip, 49_152));
+                req.extensions_mut().insert(ci);
+                next.run(req).await
+            },
+        ))
+    }
+
+    // P1.3 — rate limiter integration tests
+
+    /// Burst-2 limiter: first two POSTs pass, third returns 429 with JSON body.
+    #[tokio::test]
+    async fn manifest_post_is_rate_limited() {
+        let limiter = build_limiter(NonZeroU32::new(2).unwrap(), NonZeroU32::new(2).unwrap());
+        let security = Arc::new(ResolvedSecurity {
+            token: None,
+            allowed_origins: vec![],
+            rate_limiter: Some(limiter),
+        });
+        let (app, telemetry) = test_state();
+        let router = router_with_ip(
+            app,
+            telemetry,
+            security,
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+        );
+
+        // First two POSTs fit in the burst.
+        for i in 0..2 {
+            let resp = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/manifest")
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_ne!(
+                resp.status(),
+                StatusCode::TOO_MANY_REQUESTS,
+                "request #{i} should not be rate limited"
+            );
+        }
+
+        // Third must be 429.
+        let resp = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/manifest")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        let bytes = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["error"], "rate limit exceeded");
+    }
+
+    /// A tight rate limit on /manifest must never bleed over to /health.
+    #[tokio::test]
+    async fn health_is_not_rate_limited() {
+        let limiter = build_limiter(NonZeroU32::new(1).unwrap(), NonZeroU32::new(1).unwrap());
+        let security = Arc::new(ResolvedSecurity {
+            token: None,
+            allowed_origins: vec![],
+            rate_limiter: Some(limiter),
+        });
+        let (app, telemetry) = test_state();
+        let router = router_with_ip(
+            app,
+            telemetry,
+            security,
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+        );
+
+        for i in 0..20 {
+            let resp = router
+                .clone()
+                .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                resp.status(),
+                StatusCode::OK,
+                "/health request #{i} must not be rate limited"
+            );
+        }
+    }
+
+    /// When `ResolvedSecurity.rate_limiter` is `None`, no request should be 429.
+    #[tokio::test]
+    async fn default_config_has_no_rate_limit() {
+        let security = Arc::new(ResolvedSecurity {
+            token: None,
+            allowed_origins: vec![],
+            rate_limiter: None,
+        });
+        let (app, telemetry) = test_state();
+        let router = router_with_ip(
+            app,
+            telemetry,
+            security,
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+        );
+
+        for _ in 0..50 {
+            let resp = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/manifest")
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_ne!(
+                resp.status(),
+                StatusCode::TOO_MANY_REQUESTS,
+                "no rate limit must be applied"
+            );
+        }
+    }
 }

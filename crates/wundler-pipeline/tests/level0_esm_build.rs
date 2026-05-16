@@ -71,6 +71,7 @@ fn make_ts_project(tag: &str) -> (TempDir, TempDir, BuildConfig) {
             m.insert("main".to_string(), PathBuf::from("src/entry.ts"));
             m
         },
+        budget: None,
     };
 
     (project_dir, out_dir, config)

@@ -35,9 +35,17 @@ async fn loads_manifest_from_disk() {
     tmp.write_all(valid_manifest_json().as_bytes())
         .expect("write manifest JSON");
 
-    let state = AppState::load_from_disk(tmp.path(), "https://cdn.example.com".to_string(), 3600)
-        .await
-        .expect("load_from_disk should succeed for valid JSON");
+    let archive_dir = tempfile::TempDir::new().expect("archive tempdir");
+    let archive = wundler_abs::archive::ManifestArchive::open(archive_dir.path(), 10)
+        .expect("open archive");
+    let state = AppState::load_from_disk(
+        tmp.path(),
+        "https://cdn.example.com".to_string(),
+        3600,
+        archive,
+    )
+    .await
+    .expect("load_from_disk should succeed for valid JSON");
 
     let manifest = state.manifest.read().await;
     assert_eq!(manifest.build_id, "b8f3a1c2");
@@ -51,10 +59,14 @@ async fn loads_manifest_from_disk() {
 
 #[tokio::test]
 async fn missing_manifest_file_returns_error() {
+    let archive_dir = tempfile::TempDir::new().expect("archive tempdir");
+    let archive = wundler_abs::archive::ManifestArchive::open(archive_dir.path(), 10)
+        .expect("open archive");
     let result = AppState::load_from_disk(
         Path::new("/nonexistent/path/that/does/not/exist/manifest.json"),
         "https://cdn.example.com".to_string(),
         3600,
+        archive,
     )
     .await;
 
@@ -67,8 +79,16 @@ async fn malformed_manifest_returns_error() {
     tmp.write_all(b"this is not valid json {{{")
         .expect("write bad bytes");
 
-    let result =
-        AppState::load_from_disk(tmp.path(), "https://cdn.example.com".to_string(), 3600).await;
+    let archive_dir = tempfile::TempDir::new().expect("archive tempdir");
+    let archive = wundler_abs::archive::ManifestArchive::open(archive_dir.path(), 10)
+        .expect("open archive");
+    let result = AppState::load_from_disk(
+        tmp.path(),
+        "https://cdn.example.com".to_string(),
+        3600,
+        archive,
+    )
+    .await;
 
     assert!(result.is_err(), "expected error for malformed JSON");
 }
@@ -79,9 +99,17 @@ async fn state_exposes_module_lookup() {
     tmp.write_all(valid_manifest_json().as_bytes())
         .expect("write manifest JSON");
 
-    let state = AppState::load_from_disk(tmp.path(), "https://cdn.example.com".to_string(), 3600)
-        .await
-        .expect("load_from_disk should succeed");
+    let archive_dir = tempfile::TempDir::new().expect("archive tempdir");
+    let archive = wundler_abs::archive::ManifestArchive::open(archive_dir.path(), 10)
+        .expect("open archive");
+    let state = AppState::load_from_disk(
+        tmp.path(),
+        "https://cdn.example.com".to_string(),
+        3600,
+        archive,
+    )
+    .await
+    .expect("load_from_disk should succeed");
 
     let manifest = state.manifest.read().await;
     let hash = ContentHash("abc123".to_string());
@@ -111,24 +139,34 @@ fn make_minimal_manifest(build_id: &str) -> ChunkManifest {
 }
 
 fn make_app_state(manifest: ChunkManifest) -> wundler_abs::state::AppState {
+    // Leak the TempDir so the archive directory outlives this helper function.
+    let tmp = Box::leak(Box::new(tempfile::TempDir::new().expect("make_app_state tempdir")));
+    let archive = wundler_abs::archive::ManifestArchive::open(tmp.path(), 10)
+        .expect("open archive");
     wundler_abs::state::AppState {
-        manifest: Arc::new(RwLock::new(manifest)),
+        manifest: Arc::new(RwLock::new(Arc::new(manifest))),
+        archive: Arc::new(archive),
+        reload_lock: Arc::new(tokio::sync::Mutex::new(())),
         cdn_base_url: Arc::new("https://cdn.example.com".to_string()),
         ttl_seconds: 300,
     }
 }
 
-/// reload_manifest must swap the manifest and return the new build_id.
+/// Direct manifest write must swap and be reflected on the next read.
 #[tokio::test]
 async fn reload_manifest_swaps_and_returns_build_id() {
     let state = make_app_state(make_minimal_manifest("original-id"));
 
     let new_manifest = make_minimal_manifest("new-id-after-reload");
-    let returned_id = state.reload_manifest(new_manifest).await;
+    let expected_id = new_manifest.build_id.clone();
+    {
+        let mut guard = state.manifest.write().await;
+        *guard = Arc::new(new_manifest);
+    }
 
     assert_eq!(
-        returned_id, "new-id-after-reload",
-        "reload_manifest must return the new manifest's build_id"
+        expected_id, "new-id-after-reload",
+        "direct write must swap to the new manifest's build_id"
     );
 
     let guard = state.manifest.read().await;
@@ -138,7 +176,7 @@ async fn reload_manifest_swaps_and_returns_build_id() {
     );
 }
 
-/// reload_manifest must replace the chunk list, not merge it.
+/// Direct manifest write must replace the chunk list completely, not merge it.
 #[tokio::test]
 async fn reload_manifest_replaces_chunks_completely() {
     let initial = make_minimal_manifest("v1");
@@ -161,9 +199,68 @@ async fn reload_manifest_replaces_chunks_completely() {
         module_index: HashMap::new(),
     };
 
-    state.reload_manifest(new_manifest).await;
+    {
+        let mut guard = state.manifest.write().await;
+        *guard = Arc::new(new_manifest);
+    }
 
     let guard = state.manifest.read().await;
     assert_eq!(guard.chunks.len(), 1, "reloaded manifest must have exactly 1 chunk");
     assert_eq!(guard.chunks[0].id, "chunk-new");
+}
+
+// ---------------------------------------------------------------------------
+// VRC C2: snapshot() and swap_to()
+// ---------------------------------------------------------------------------
+
+use tempfile::TempDir;
+use wundler_abs::archive::ManifestArchive;
+
+fn make_app_state_with_archive(initial: ChunkManifest, dir: &std::path::Path) -> AppState {
+    let archive = ManifestArchive::open(dir, 10).expect("open archive");
+    archive.install(&initial).expect("seed archive");
+    archive.set_current(&initial.build_id).expect("point current at seed");
+    AppState {
+        manifest: Arc::new(RwLock::new(Arc::new(initial))),
+        archive: Arc::new(archive),
+        reload_lock: Arc::new(tokio::sync::Mutex::new(())),
+        cdn_base_url: Arc::new("https://cdn.example.com".to_string()),
+        ttl_seconds: 300,
+    }
+}
+
+#[tokio::test]
+async fn snapshot_clones_inner_arc_without_blocking_writer() {
+    let tmp = TempDir::new().expect("tempdir");
+    let state = make_app_state_with_archive(make_minimal_manifest("v1"), tmp.path());
+    let snap = state.snapshot().await;
+    assert_eq!(snap.build_id, "v1");
+
+    let v2 = make_minimal_manifest("v2");
+    state.archive.install(&v2).expect("install v2");
+    let report = state.swap_to("v2").await.expect("swap");
+    assert_eq!(report.previous, "v1");
+    assert_eq!(report.current, "v2");
+
+    assert_eq!(snap.build_id, "v1", "in-flight snapshot must be unaffected");
+    let fresh = state.snapshot().await;
+    assert_eq!(fresh.build_id, "v2");
+}
+
+#[tokio::test]
+async fn swap_to_unknown_build_id_returns_error() {
+    let tmp = TempDir::new().expect("tempdir");
+    let state = make_app_state_with_archive(make_minimal_manifest("v1"), tmp.path());
+    let err = state.swap_to("never-installed").await.expect_err("must fail");
+    assert!(err.to_string().contains("never-installed"), "error: {err}");
+}
+
+#[tokio::test]
+async fn swap_to_updates_archive_current_pointer() {
+    let tmp = TempDir::new().expect("tempdir");
+    let state = make_app_state_with_archive(make_minimal_manifest("v1"), tmp.path());
+    let v2 = make_minimal_manifest("v2");
+    state.archive.install(&v2).expect("install v2");
+    state.swap_to("v2").await.expect("swap");
+    assert_eq!(state.archive.current().expect("current"), Some("v2".to_string()));
 }

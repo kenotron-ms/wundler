@@ -65,6 +65,7 @@ fn make_five_module_config(project_dir: &Path, out_dir: &Path) -> BuildConfig {
         commons_threshold: 2,
         engine: EngineChoice::Swc,
         entry_points,
+        budget: None,
     }
 }
 

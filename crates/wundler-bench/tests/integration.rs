@@ -32,6 +32,7 @@ fn build_app(app: &SyntheticApp) -> anyhow::Result<(TempDir, PathBuf)> {
             m.insert("/".to_string(), PathBuf::from("src/main.tsx"));
             m
         },
+        budget: None,
     };
 
     let pipeline = BuildPipeline::new(config);

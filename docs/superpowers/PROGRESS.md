@@ -33,31 +33,35 @@
 
 ---
 
-### Phase 2 — Plans written, ready to execute
+### Phase 2 — COMPLETE
 
 #### Security P1.2 — CORS allowlist
 - **Plan:** `docs/superpowers/plans/2026-05-16-security-p1-cors.md`
 - **Design:** `docs/designs/security-baseline.md` §P1.2
-- **Status:** ⬜ Not started — 0 / 3 tasks
-- **Next task:** Task 1 — add `allowed_origins` field to `SecurityConfig` + `ResolvedSecurity`; update `from_config` to parse origins into `Vec<HeaderValue>`
+- **Status:** ✅ **COMPLETE** — 3 / 3 tasks
+- **Branch:** `feat/phase2-roadmap`
+- **Commits:** `ce02096`, `3448869`, `67e5b41`
 
 #### Security P1.3 — per-IP rate limiter
 - **Plan:** `docs/superpowers/plans/2026-05-16-security-p1-rate-limit.md`
 - **Design:** `docs/designs/security-baseline.md` §P1.3
-- **Status:** ⬜ Not started — 0 / 3 tasks
-- **Next task:** Task 1 — add `governor = "0.7"` dep + `manifest_rate_per_sec`/`burst` fields to `SecurityConfig`
+- **Status:** ✅ **COMPLETE** — 3 / 3 tasks
+- **Branch:** `feat/phase2-roadmap`
+- **Commits:** `c8c7aa8`, `d53a003`, `29cdae9`, `1c43717`
 
 #### VRC C2 — manifest archive + GET /versions + POST /select
 - **Plan:** `docs/superpowers/plans/2026-05-16-vrc-c2.md`
 - **Design:** `docs/designs/versioned-runtime-control.md` §C2
-- **Status:** ⬜ Not started — 0 / 6 tasks
-- **Next task:** Task 1 — create `crates/wundler-abs/src/archive.rs` with `ManifestArchive::open/install/list`
+- **Status:** ✅ **COMPLETE** — 6 / 6 tasks
+- **Branch:** `feat/phase2-roadmap`
+- **Commits:** `80d3ee3`, `4c1bf56`, `74a6b6d`, `6bf86b5`, `2399817`, `b6732b4`
 
 #### Observability P1 full — extended BuildStats + budget enforcement
 - **Plan:** `docs/superpowers/plans/2026-05-16-observability-p1-full.md`
 - **Design:** `docs/designs/observability.md` §P1 full
-- **Status:** ⬜ Not started — 0 / 6 tasks
-- **Next task:** Task 1 — add `chrono` dep, scaffold `build_stats.rs` with all schema types
+- **Status:** ✅ **COMPLETE** — 6 / 6 tasks
+- **Branch:** `feat/phase2-roadmap`
+- **Commits:** `6ce40cc`, `feace19`, `c49d8db`, `de34a95`, `4d568d0`, `ed80549`
 
 ### Phase 3 — After Phase 2 (plans not yet written)
 
@@ -114,6 +118,42 @@ Phase 4 (Performance + Web Vitals)
 ---
 
 ## Session Log
+
+### 2026-05-16 — Phase 2 complete (18 tasks)
+
+**Completed — all four Phase 2 plans (18 tasks total):**
+
+**Observability P1 Full (6 tasks):**
+- `BuildStatsArtifact` schema (schema_version=1) with per-chunk breakdown, timing, entry-point records, budget result, previous-build delta
+- Atomic `write_build_stats` + `read_previous_stats` in `output.rs`
+- Per-phase `Instant` timing wired into `BuildPipeline::build()`
+- `budget.rs` with `check()`, `BudgetViolation::actionable_message()`, `build_budget_result()`; opt-in via `[budget]` in `wundler.toml`
+- Real delta computation: `SizeDelta`, set-diff chunk added/removed
+
+**Security P1.2 CORS (3 tasks):**
+- `SecurityConfig.allowed_origins: Vec<String>` with wildcard rejection
+- `security/cors.rs` with `build_cors()` using `tower_http::cors::AllowOrigin::list`
+- Wired as outermost layer in `build_router`; 5 integration tests including 401-still-carries-CORS
+
+**Security P1.3 Rate Limiter (3 tasks):**
+- `governor = "0.7"` dep; `manifest_rate_per_sec`/`burst` config fields
+- `security/ratelimit.rs`: `IpRateLimiter` alias + `build_limiter()` + `rate_limit_mw` middleware
+- Wired as `.route_layer()` on `POST /manifest` only — `/health` and `/sw.js` exempt by construction
+
+**VRC C2 — Manifest Archive (6 tasks):**
+- `ManifestArchive`: `open`, `install` (atomic + idempotent), `list` (newest-first), `load`, `set_current` (atomic symlink swap), `prune` (retention bound, current entry protected)
+- `AppState` migrated to double-Arc pattern (`Arc<RwLock<Arc<ChunkManifest>>>`), + `archive: Arc<ManifestArchive>`, + `reload_lock: Arc<Mutex<()>>`; `snapshot()` + `swap_to()` + `reload_from_current()`
+- `POST /reload` now installs to archive before swapping; returns `{previous, current}`
+- `GET /versions` — lists archive entries with `is_current` flag
+- `POST /select` — operator rollback; loopback enforcement; 404 on unknown build_id; 409 on concurrent swap
+
+**Branch:** `feat/phase2-roadmap` — merged to main
+
+**Next session:**
+- Phase 3 plans not yet written; Phase 3 requires Phase 2 to be complete (now done)
+- Consider writing Phase 3 plans: Security P2 (ed25519 signing), Scale Benchmark Foundation, Observability P2 (chunk errors)
+
+---
 
 ### 2026-05-16 — Overnight session (Phase 1 complete)
 

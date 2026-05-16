@@ -96,6 +96,7 @@ fn test_token_file_present_security_is_enabled() {
 
     let config = SecurityConfig {
         bearer_token_file: Some(tmp.path().to_path_buf()),
+        ..Default::default()
     };
     let security = ResolvedSecurity::from_config(&config).expect("from_config should succeed");
     assert!(
@@ -109,10 +110,11 @@ fn test_token_file_present_security_is_enabled() {
 #[test]
 fn test_token_file_with_trailing_newline_is_trimmed() {
     let mut tmp = NamedTempFile::new().expect("create token file");
-    write!(tmp, "trimmed-token\n").expect("write token");
+    writeln!(tmp, "trimmed-token").expect("write token");
 
     let config = SecurityConfig {
         bearer_token_file: Some(tmp.path().to_path_buf()),
+        ..Default::default()
     };
     let security = ResolvedSecurity::from_config(&config).expect("from_config should succeed");
     // The stored token should verify against the trimmed string, not the newline-terminated one.
@@ -131,6 +133,7 @@ fn test_token_file_with_trailing_newline_is_trimmed() {
 fn test_missing_token_file_returns_error() {
     let config = SecurityConfig {
         bearer_token_file: Some("/nonexistent/path/that/does/not/exist/token.txt".into()),
+        ..Default::default()
     };
     let result = ResolvedSecurity::from_config(&config);
     assert!(
@@ -179,10 +182,18 @@ async fn make_open_server() -> (TestServer, TempDir) {
     let manifest = auth_test_manifest();
     let tmp_dir = TempDir::new().expect("create temp dir");
     let log_path = tmp_dir.path().join("telemetry.jsonl");
+    let archive_path = tmp_dir.path().join("archive");
 
-    let app = AppState::load_from_disk(manifest.path(), "https://cdn.example.com".to_string(), 300)
-        .await
-        .expect("load AppState");
+    let archive = wundler_abs::archive::ManifestArchive::open(&archive_path, 10)
+        .expect("open archive");
+    let app = AppState::load_from_disk(
+        manifest.path(),
+        "https://cdn.example.com".to_string(),
+        300,
+        archive,
+    )
+    .await
+    .expect("load AppState");
     let telemetry = TelemetryLogger::new(&log_path).expect("TelemetryLogger");
     let security = ResolvedSecurity::from_config(&SecurityConfig::default())
         .expect("default security");
@@ -197,16 +208,25 @@ async fn make_secured_server(token: &str) -> (TestServer, TempDir, NamedTempFile
     let manifest = auth_test_manifest();
     let tmp_dir = TempDir::new().expect("create temp dir");
     let log_path = tmp_dir.path().join("telemetry.jsonl");
+    let archive_path = tmp_dir.path().join("archive");
 
     let mut token_file = NamedTempFile::new().expect("create token file");
     write!(token_file, "{token}").expect("write token");
 
-    let app = AppState::load_from_disk(manifest.path(), "https://cdn.example.com".to_string(), 300)
-        .await
-        .expect("load AppState");
+    let archive = wundler_abs::archive::ManifestArchive::open(&archive_path, 10)
+        .expect("open archive");
+    let app = AppState::load_from_disk(
+        manifest.path(),
+        "https://cdn.example.com".to_string(),
+        300,
+        archive,
+    )
+    .await
+    .expect("load AppState");
     let telemetry = TelemetryLogger::new(&log_path).expect("TelemetryLogger");
     let config = SecurityConfig {
         bearer_token_file: Some(token_file.path().to_path_buf()),
+        ..Default::default()
     };
     let security = ResolvedSecurity::from_config(&config).expect("ResolvedSecurity");
 

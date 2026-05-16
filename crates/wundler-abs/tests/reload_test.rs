@@ -36,9 +36,11 @@ fn manifest_json(build_id: &str) -> String {
 }
 
 /// Build a `TestServer` loaded with a manifest whose build_id is `"initial-id"`.
+/// Returns the server and the `TempDir` so callers can inspect the archive on disk.
 async fn make_server() -> (TestServer, TempDir) {
     let tmp_dir = TempDir::new().expect("create temp dir");
     let log_path = tmp_dir.path().join("telemetry.jsonl");
+    let archive_path = tmp_dir.path().join("archive");
 
     let initial = ChunkManifest {
         build_id: "initial-id".to_string(),
@@ -46,8 +48,12 @@ async fn make_server() -> (TestServer, TempDir) {
         entry_chunks: HashMap::new(),
         module_index: HashMap::new(),
     };
+    let archive = wundler_abs::archive::ManifestArchive::open(&archive_path, 10)
+        .expect("open archive");
     let app = AppState {
-        manifest: Arc::new(RwLock::new(initial)),
+        manifest: Arc::new(RwLock::new(Arc::new(initial))),
+        archive: Arc::new(archive),
+        reload_lock: Arc::new(tokio::sync::Mutex::new(())),
         cdn_base_url: Arc::new("https://cdn.example.com".to_string()),
         ttl_seconds: 300,
     };
@@ -68,12 +74,12 @@ async fn make_server() -> (TestServer, TempDir) {
 // ---------------------------------------------------------------------------
 
 /// `POST /reload` with a valid manifest file swaps the manifest and returns
-/// the new `build_id` in the response body.
+/// `{ previous, current }` in the response body.  The archive on disk must
+/// contain the newly installed manifest file.
 #[tokio::test]
 async fn test_reload_loads_new_manifest() {
-    let (server, _dir) = make_server().await;
+    let (server, dir) = make_server().await;
 
-    // Write a new manifest to a temp file.
     let mut tmp = NamedTempFile::new().expect("create temp manifest file");
     write!(tmp, "{}", manifest_json("new-build-after-reload")).expect("write manifest");
 
@@ -86,19 +92,19 @@ async fn test_reload_loads_new_manifest() {
 
     resp.assert_status_ok();
     let body: serde_json::Value = resp.json();
-    assert_eq!(
-        body["build_id"], "new-build-after-reload",
-        "response must contain new manifest's build_id"
-    );
+    assert_eq!(body["previous"], "initial-id");
+    assert_eq!(body["current"], "new-build-after-reload");
 
-    // Verify the server now serves the new manifest via /health.
+    // /health now reflects the swap.
     let health = server.get("/health").await;
     health.assert_status_ok();
     let health_body: serde_json::Value = health.json();
-    assert_eq!(
-        health_body["build_id"], "new-build-after-reload",
-        "/health must reflect the swapped manifest"
-    );
+    assert_eq!(health_body["build_id"], "new-build-after-reload");
+
+    // The archive on disk now contains the new build.
+    let archive_dir = dir.path().join("archive");
+    let entry = archive_dir.join("new-build-after-reload.json");
+    assert!(entry.is_file(), "archive must contain installed manifest");
 }
 
 // ---------------------------------------------------------------------------

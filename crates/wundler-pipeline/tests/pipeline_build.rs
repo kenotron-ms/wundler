@@ -57,6 +57,7 @@ fn make_project_and_config(tag: &str) -> (TempDir, TempDir, BuildConfig) {
             m.insert("main".to_string(), PathBuf::from("src/index.ts"));
             m
         },
+        budget: None,
     };
 
     (project_dir, out_dir, config)
