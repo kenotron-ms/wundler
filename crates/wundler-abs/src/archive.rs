@@ -85,6 +85,49 @@ impl ManifestArchive {
         }
     }
 
+    /// Load and deserialize the archived manifest for `build_id`.
+    pub fn load(&self, build_id: &str) -> Result<ChunkManifest> {
+        let path = self.path_for(build_id);
+        let bytes = fs::read(&path)
+            .with_context(|| format!("read archive entry {}", path.display()))?;
+        let manifest: ChunkManifest = serde_json::from_slice(&bytes)
+            .with_context(|| format!("parse archive entry {}", path.display()))?;
+        Ok(manifest)
+    }
+
+    /// Point `<archive_dir>/current` at `<build_id>.json` atomically.
+    ///
+    /// Creates a sibling symlink at `.current.tmp-<uuid>`, then `rename(2)` it
+    /// over `current`. Fails if `<build_id>.json` does not exist.
+    pub fn set_current(&self, build_id: &str) -> Result<()> {
+        let target = self.path_for(build_id);
+        if !target.exists() {
+            return Err(anyhow!(
+                "set_current: build_id {build_id} is not present in archive {}",
+                self.archive_dir.display()
+            ));
+        }
+
+        let link = self.archive_dir.join("current");
+        let rel_target = format!("{build_id}.json");
+        let tmp_name = format!(".current.tmp-{}", uuid::Uuid::new_v4());
+        let tmp_link = self.archive_dir.join(&tmp_name);
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&rel_target, &tmp_link).with_context(|| {
+            format!("create temp symlink {} -> {}", tmp_link.display(), rel_target)
+        })?;
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(&rel_target, &tmp_link).with_context(|| {
+            format!("create temp symlink {} -> {}", tmp_link.display(), rel_target)
+        })?;
+
+        fs::rename(&tmp_link, &link).with_context(|| {
+            format!("rename {} -> {}", tmp_link.display(), link.display())
+        })?;
+        Ok(())
+    }
+
     fn path_for(&self, build_id: &str) -> PathBuf {
         self.archive_dir.join(format!("{build_id}.json"))
     }
