@@ -13,20 +13,23 @@
 #### VRC SCA — deterministic `build_id` + `POST /reload`
 - **Plan:** `docs/superpowers/plans/2026-05-15-vrc-sca.md`
 - **Design:** `docs/designs/versioned-runtime-control.md` → §Simplest Credible Alternative
-- **Status:** ⬜ Not started — 0 / 8 tasks
-- **Next task:** Task 1 — create `crates/wundler-pipeline/src/build_id.rs` stub + `pub mod build_id;` in lib.rs
+- **Status:** ✅ **COMPLETE** — 8 / 8 tasks
+- **Branch:** `feat/phase1-roadmap`
+- **Commits:** `9ab1ec4`, `da08fca`, `6e311e9`, `feb3ade`, `08e654f`
 
 #### Security P1.1 — bearer token middleware
 - **Plan:** `docs/superpowers/plans/2026-05-15-security-p1-bearer-token.md`
 - **Design:** `docs/designs/security-baseline.md` → §Phase 1 → C2 → P1.1
-- **Status:** ⬜ Not started — 0 / 6 tasks
-- **Next task:** Task 1 — add `subtle = "2"` to Cargo.toml, create `crates/wundler-abs/src/security/` module skeleton
+- **Status:** ✅ **COMPLETE** — 6 / 6 tasks
+- **Branch:** `feat/phase1-roadmap`
+- **Commits:** `c1174c5`, `6a663f1`, `2d2146d`, `1cf797c`, `f8f85f9`
 
 #### Observability SCA — `build-stats.json`
 - **Plan:** `docs/superpowers/plans/2026-05-15-observability-sca.md`
 - **Design:** `docs/designs/observability.md` → §Priority 1 → SCA
-- **Status:** ⬜ Not started — 0 / 5 tasks
-- **Next task:** Task 1 — write 4 failing tests in `crates/wundler-pipeline/tests/build_stats_json_test.rs`
+- **Status:** ✅ **COMPLETE** — 5 / 5 tasks
+- **Branch:** `feat/phase1-roadmap`
+- **Commits:** `0c42c9d`
 
 ---
 
@@ -94,6 +97,42 @@ Phase 4 (Performance + Web Vitals)
 ---
 
 ## Session Log
+
+### 2026-05-16 — Overnight session (Phase 1 complete)
+
+**Completed — all three Phase 1 plans (19 tasks total):**
+
+**Observability SCA (5 tasks) — commit `0c42c9d`:**
+- Added `serde::Serialize` to `BuildStats`
+- Write `build-stats.json` to `out_dir` after every successful build (non-fatal)
+- 4 tests in `crates/wundler-pipeline/tests/build_stats_json_test.rs`
+- Fixed pre-existing Clippy lints: `derivable-impls` on `EngineChoice`, `doc-overindented-list-items` in `output.rs`, `for-kv-map` in `pipeline.rs`, `needless-splitn` in `rolldown_adapter.rs`
+
+**VRC SCA (8 tasks) — commits `9ab1ec4` through `08e654f`:**
+- New `crates/wundler-pipeline/src/build_id.rs` with `canonical_bytes()` + `compute_build_id()` (SHA-256, 16-char hex)
+- `BuildPipeline::build()` now overwrites graph-layer `build_id` with content-based ID
+- `AppState::reload_manifest()` for atomic manifest hot-swap
+- `POST /reload` endpoint with file read, JSON parse, loopback enforcement via custom `MaybeConnectAddr` extractor (Axum 0.8 compatibility)
+- 10 new tests across 3 test files
+
+**Security P1.1 (6 tasks) — commits `c1174c5` through `f8f85f9`:**
+- `crates/wundler-abs/src/security/` module: `SecretToken` (constant-time verify, Debug/Display redacted), `SecurityConfig`, `SecurityError`, `ResolvedSecurity`
+- `require_bearer` Axum middleware with exempt paths (`/health`, `/sw.js`)
+- `build_router` updated to `build_router(app, telemetry, Arc<ResolvedSecurity>)` with middleware wired
+- `AbsConfig` gains optional `security` field (zero breaking change for existing configs)
+- 17 new tests in `auth_test.rs`
+
+**Also fixed:**
+- Pre-existing `wundler-cli` compile error: `write_report` signature mismatch and missing `AbsConfig.security` field — commit `7142e05`
+
+**Branch:** `feat/phase1-roadmap` — all work is on this branch, ready for PR
+
+**Next session:**
+- Open a PR: `feat/phase1-roadmap` → `main`
+- Phase 2 plans are now unblocked (see Phase 2 table above)
+- Write Phase 2 plans: Security P1.2 (CORS), P1.3 (rate limiter), VRC C2 (archive + `/versions` + `/select`)
+
+---
 
 ### 2026-05-15 — Session d98b7357
 
