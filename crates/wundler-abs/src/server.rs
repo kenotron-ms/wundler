@@ -163,9 +163,11 @@ struct ReloadRequest {
 
 /// Success response body for `POST /reload`.
 #[derive(Debug, Serialize)]
-struct ReloadResponse {
-    /// The `build_id` of the newly loaded manifest.
-    build_id: String,
+struct SwapResponseBody {
+    /// The `build_id` of the manifest that was active before the swap.
+    previous: String,
+    /// The `build_id` of the manifest now active.
+    current: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -423,14 +425,36 @@ async fn post_reload(
         }
     };
 
-    // Atomically swap the manifest (temporary direct-write; Task 4 will use swap_to).
+    // Install into the archive (idempotent), then swap to it.
     let build_id = new_manifest.build_id.clone();
-    {
-        let mut guard = state.app.manifest.write().await;
-        *guard = Arc::new(new_manifest);
+    if let Err(e) = state.app.archive.install(&new_manifest) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("failed to install manifest into archive: {e}")
+            })),
+        )
+            .into_response();
     }
 
-    (StatusCode::OK, Json(ReloadResponse { build_id })).into_response()
+    let report = match state.app.swap_to(&build_id).await {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("failed to swap to new manifest: {e}")
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    (StatusCode::OK, Json(SwapResponseBody {
+        previous: report.previous,
+        current: report.current,
+    }))
+        .into_response()
 }
 
 // ---------------------------------------------------------------------------
