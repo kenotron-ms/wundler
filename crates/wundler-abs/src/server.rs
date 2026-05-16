@@ -199,8 +199,21 @@ pub fn build_router(
     let state = RouterState { app, telemetry };
     let cors = build_cors(&security);
 
+    // POST /manifest route, optionally rate-limited per source IP.
+    // `.route_layer()` keeps the limiter scoped to this route only; /health
+    // and /sw.js are never affected.
+    let manifest_route = match security.rate_limiter.clone() {
+        None => Router::new().route("/manifest", post(post_manifest)),
+        Some(limiter) => Router::new()
+            .route("/manifest", post(post_manifest))
+            .route_layer(axum::middleware::from_fn_with_state(
+                limiter,
+                crate::security::ratelimit::rate_limit_mw,
+            )),
+    };
+
     Router::new()
-        .route("/manifest", post(post_manifest))
+        .merge(manifest_route)
         .route("/health", get(get_health))
         .route("/sw.js", get(get_service_worker))
         .route("/reload", post(post_reload))
@@ -399,4 +412,204 @@ async fn post_reload(
     let build_id = state.app.reload_manifest(new_manifest).await;
 
     (StatusCode::OK, Json(ReloadResponse { build_id })).into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use std::num::NonZeroU32;
+    use std::sync::Arc;
+
+    use axum::{
+        body::Body,
+        extract::ConnectInfo,
+        http::{Request, StatusCode},
+        middleware,
+    };
+    use tokio::sync::RwLock;
+    use tower::ServiceExt;
+    use wundler_graph::ChunkManifest;
+
+    use crate::security::ratelimit::build_limiter;
+    use crate::security::ResolvedSecurity;
+    use crate::state::AppState;
+    use crate::telemetry::TelemetryLogger;
+
+    /// Build a minimal `AppState` + `TelemetryLogger` pair suitable for unit tests.
+    ///
+    /// Uses an in-memory `ChunkManifest` (no disk I/O) and a temp file for the
+    /// telemetry log.  The `NamedTempFile` drops at the end of this function, but
+    /// the open `File` descriptor inside `TelemetryLogger` remains valid (Unix
+    /// unlink semantics).
+    fn test_state() -> (AppState, TelemetryLogger) {
+        let manifest = ChunkManifest {
+            build_id: "test-build".to_string(),
+            chunks: vec![],
+            entry_chunks: HashMap::new(),
+            module_index: HashMap::new(),
+        };
+
+        let app = AppState {
+            manifest: Arc::new(RwLock::new(manifest)),
+            cdn_base_url: Arc::new("https://cdn.example.com".to_string()),
+            ttl_seconds: 60,
+        };
+
+        let tmp = tempfile::NamedTempFile::new().expect("tmp file for telemetry");
+        let telemetry = TelemetryLogger::new(tmp.path()).expect("telemetry logger");
+        // `tmp` drops here; the unlinked path is fine — the open FD inside
+        // TelemetryLogger keeps the inode alive for the duration of the test.
+        (app, telemetry)
+    }
+
+    /// Wrap `build_router` with an outermost middleware that injects a synthetic
+    /// `ConnectInfo<SocketAddr>` so the rate-limiter sees a real IP.
+    fn router_with_ip(
+        app: AppState,
+        telemetry: TelemetryLogger,
+        security: Arc<ResolvedSecurity>,
+        ip: IpAddr,
+    ) -> axum::Router {
+        let inner = super::build_router(app, telemetry, security);
+        inner.layer(middleware::from_fn(
+            move |mut req: Request<Body>, next: middleware::Next| async move {
+                let ci: ConnectInfo<SocketAddr> = ConnectInfo(SocketAddr::new(ip, 49_152));
+                req.extensions_mut().insert(ci);
+                next.run(req).await
+            },
+        ))
+    }
+
+    // P1.3 — rate limiter integration tests
+
+    /// Burst-2 limiter: first two POSTs pass, third returns 429 with JSON body.
+    #[tokio::test]
+    async fn manifest_post_is_rate_limited() {
+        let limiter = build_limiter(NonZeroU32::new(2).unwrap(), NonZeroU32::new(2).unwrap());
+        let security = Arc::new(ResolvedSecurity {
+            token: None,
+            allowed_origins: vec![],
+            rate_limiter: Some(limiter),
+        });
+        let (app, telemetry) = test_state();
+        let router = router_with_ip(
+            app,
+            telemetry,
+            security,
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+        );
+
+        // First two POSTs fit in the burst.
+        for i in 0..2 {
+            let resp = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/manifest")
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_ne!(
+                resp.status(),
+                StatusCode::TOO_MANY_REQUESTS,
+                "request #{i} should not be rate limited"
+            );
+        }
+
+        // Third must be 429.
+        let resp = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/manifest")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        let bytes = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["error"], "rate limit exceeded");
+    }
+
+    /// A tight rate limit on /manifest must never bleed over to /health.
+    #[tokio::test]
+    async fn health_is_not_rate_limited() {
+        let limiter = build_limiter(NonZeroU32::new(1).unwrap(), NonZeroU32::new(1).unwrap());
+        let security = Arc::new(ResolvedSecurity {
+            token: None,
+            allowed_origins: vec![],
+            rate_limiter: Some(limiter),
+        });
+        let (app, telemetry) = test_state();
+        let router = router_with_ip(
+            app,
+            telemetry,
+            security,
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+        );
+
+        for i in 0..20 {
+            let resp = router
+                .clone()
+                .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                resp.status(),
+                StatusCode::OK,
+                "/health request #{i} must not be rate limited"
+            );
+        }
+    }
+
+    /// When `ResolvedSecurity.rate_limiter` is `None`, no request should be 429.
+    #[tokio::test]
+    async fn default_config_has_no_rate_limit() {
+        let security = Arc::new(ResolvedSecurity {
+            token: None,
+            allowed_origins: vec![],
+            rate_limiter: None,
+        });
+        let (app, telemetry) = test_state();
+        let router = router_with_ip(
+            app,
+            telemetry,
+            security,
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+        );
+
+        for _ in 0..50 {
+            let resp = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/manifest")
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_ne!(
+                resp.status(),
+                StatusCode::TOO_MANY_REQUESTS,
+                "no rate limit must be applied"
+            );
+        }
+    }
 }
