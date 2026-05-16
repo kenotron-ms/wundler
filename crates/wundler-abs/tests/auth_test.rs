@@ -70,3 +70,77 @@ fn test_verify_empty_string_returns_false() {
         "verify() should return false for an empty provided string"
     );
 }
+
+// ── SecurityConfig / ResolvedSecurity unit tests ──────────────────────────
+
+use std::io::Write as _;
+use tempfile::NamedTempFile;
+use wundler_abs::security::{ResolvedSecurity, SecurityConfig, SecurityError};
+
+/// When no `bearer_token_file` is set, security is disabled (pass-through).
+#[test]
+fn test_no_config_security_is_not_enabled() {
+    let config = SecurityConfig::default();
+    let security = ResolvedSecurity::from_config(&config).expect("from_config should succeed");
+    assert!(
+        !security.is_enabled(),
+        "security should be disabled when no token file is configured"
+    );
+}
+
+/// When a token file exists and is non-empty, security is enabled.
+#[test]
+fn test_token_file_present_security_is_enabled() {
+    let mut tmp = NamedTempFile::new().expect("create token file");
+    write!(tmp, "my-bearer-token").expect("write token");
+
+    let config = SecurityConfig {
+        bearer_token_file: Some(tmp.path().to_path_buf()),
+    };
+    let security = ResolvedSecurity::from_config(&config).expect("from_config should succeed");
+    assert!(
+        security.is_enabled(),
+        "security should be enabled when a token file is configured"
+    );
+}
+
+/// Token files may have a trailing newline (common from `echo` or editors).
+/// The token is trimmed before storage.
+#[test]
+fn test_token_file_with_trailing_newline_is_trimmed() {
+    let mut tmp = NamedTempFile::new().expect("create token file");
+    write!(tmp, "trimmed-token\n").expect("write token");
+
+    let config = SecurityConfig {
+        bearer_token_file: Some(tmp.path().to_path_buf()),
+    };
+    let security = ResolvedSecurity::from_config(&config).expect("from_config should succeed");
+    // The stored token should verify against the trimmed string, not the newline-terminated one.
+    assert!(
+        security.token.as_ref().unwrap().verify("trimmed-token"),
+        "token should be trimmed of trailing whitespace"
+    );
+    assert!(
+        !security.token.as_ref().unwrap().verify("trimmed-token\n"),
+        "token should not verify against the un-trimmed version"
+    );
+}
+
+/// A non-existent token file path produces a `SecurityError::TokenFileRead`.
+#[test]
+fn test_missing_token_file_returns_error() {
+    let config = SecurityConfig {
+        bearer_token_file: Some("/nonexistent/path/that/does/not/exist/token.txt".into()),
+    };
+    let result = ResolvedSecurity::from_config(&config);
+    assert!(
+        result.is_err(),
+        "from_config should fail when the token file does not exist"
+    );
+    // The error message should reference the path.
+    let err_str = result.unwrap_err().to_string();
+    assert!(
+        err_str.contains("nonexistent"),
+        "error message should mention the path; got: {err_str}"
+    );
+}
