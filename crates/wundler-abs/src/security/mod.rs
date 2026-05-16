@@ -29,6 +29,13 @@ pub struct SecurityConfig {
     ///
     /// If this field is absent, bearer-token authentication is disabled.
     pub bearer_token_file: Option<PathBuf>,
+
+    /// Allowlist of cross-origin request `Origin` header values.
+    ///
+    /// Empty (default) means no cross-origin requests are accepted.
+    /// Wildcards ("*") are never accepted.
+    #[serde(default)]
+    pub allowed_origins: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -41,6 +48,9 @@ pub enum SecurityError {
     /// The bearer token file could not be read.
     #[error("failed to read bearer token file at {0}: {1}")]
     TokenFileRead(PathBuf, std::io::Error),
+
+    #[error("invalid allowed_origins entry: {0:?}")]
+    InvalidOrigin(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -55,6 +65,8 @@ pub enum SecurityError {
 pub struct ResolvedSecurity {
     /// The bearer token, or `None` if authentication is disabled.
     pub token: Option<SecretToken>,
+    /// Parsed and validated CORS allowlist origins.
+    pub allowed_origins: Vec<axum::http::HeaderValue>,
 }
 
 impl ResolvedSecurity {
@@ -67,6 +79,8 @@ impl ResolvedSecurity {
     /// # Errors
     ///
     /// Returns [`SecurityError::TokenFileRead`] if the file cannot be read.
+    /// Returns [`SecurityError::InvalidOrigin`] if any entry in
+    /// `config.allowed_origins` is `"*"` or is not a valid HTTP header value.
     pub fn from_config(config: &SecurityConfig) -> Result<Self, SecurityError> {
         let token = match &config.bearer_token_file {
             None => None,
@@ -76,11 +90,78 @@ impl ResolvedSecurity {
                 Some(SecretToken::new(raw.trim().as_bytes().to_vec()))
             }
         };
-        Ok(Self { token })
+
+        let mut allowed_origins = Vec::with_capacity(config.allowed_origins.len());
+        for origin in &config.allowed_origins {
+            if origin == "*" {
+                return Err(SecurityError::InvalidOrigin(origin.clone()));
+            }
+            let hv = axum::http::HeaderValue::from_str(origin)
+                .map_err(|_| SecurityError::InvalidOrigin(origin.clone()))?;
+            allowed_origins.push(hv);
+        }
+
+        Ok(Self { token, allowed_origins })
     }
 
     /// Returns `true` if bearer-token authentication is active.
     pub fn is_enabled(&self) -> bool {
         self.token.is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_origins_resolve_to_empty_vec() {
+        let cfg = SecurityConfig::default();
+        let resolved = ResolvedSecurity::from_config(&cfg).expect("resolve");
+        assert!(resolved.allowed_origins.is_empty());
+    }
+
+    #[test]
+    fn valid_origins_parse_to_header_values() {
+        let cfg = SecurityConfig {
+            bearer_token_file: None,
+            allowed_origins: vec![
+                "https://app.example.com".to_string(),
+                "https://staging.example.com".to_string(),
+            ],
+        };
+        let resolved = ResolvedSecurity::from_config(&cfg).expect("resolve");
+        assert_eq!(resolved.allowed_origins.len(), 2);
+        assert_eq!(
+            resolved.allowed_origins[0].to_str().unwrap(),
+            "https://app.example.com"
+        );
+        assert_eq!(
+            resolved.allowed_origins[1].to_str().unwrap(),
+            "https://staging.example.com"
+        );
+    }
+
+    #[test]
+    fn wildcard_origin_is_rejected() {
+        let cfg = SecurityConfig {
+            bearer_token_file: None,
+            allowed_origins: vec!["*".to_string()],
+        };
+        let err = ResolvedSecurity::from_config(&cfg).expect_err("wildcard must fail");
+        match err {
+            SecurityError::InvalidOrigin(s) => assert_eq!(s, "*"),
+            other => panic!("expected InvalidOrigin, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invalid_header_value_origin_is_rejected() {
+        let cfg = SecurityConfig {
+            bearer_token_file: None,
+            allowed_origins: vec!["https://app.example.com\n".to_string()],
+        };
+        let err = ResolvedSecurity::from_config(&cfg).expect_err("newline must fail");
+        assert!(matches!(err, SecurityError::InvalidOrigin(_)));
     }
 }

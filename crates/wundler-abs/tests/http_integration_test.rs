@@ -265,6 +265,7 @@ async fn test_bearer_auth_enforced_when_security_enabled() {
 
     let config = SecurityConfig {
         bearer_token_file: Some(token_file.path().to_path_buf()),
+        ..Default::default()
     };
     let security = Arc::new(ResolvedSecurity::from_config(&config).expect("resolve security"));
 
