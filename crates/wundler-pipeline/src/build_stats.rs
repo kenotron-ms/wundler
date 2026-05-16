@@ -344,30 +344,63 @@ fn build_entry_point_records(
         .collect()
 }
 
-/// Stub implementation — fills zeroed deltas.  Full delta logic is Task 6.
 fn compute_previous_build_info(
     prev: &BuildStatsArtifact,
-    _summary: &SummaryBlock,
-    _chunks: &[ChunkRecord],
+    summary: &SummaryBlock,
+    chunks: &[ChunkRecord],
 ) -> PreviousBuildInfo {
+    // Compute size deltas
+    let total_prev = prev.summary.total_bundle_bytes;
+    let total_curr = summary.total_bundle_bytes;
+    let total_delta = total_curr as i64 - total_prev as i64;
+    let total_pct = if total_prev > 0 {
+        (total_delta as f64 / total_prev as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    let init_prev = prev.summary.initial_bundle_bytes;
+    let init_curr = summary.initial_bundle_bytes;
+    let init_delta = init_curr as i64 - init_prev as i64;
+    let init_pct = if init_prev > 0 {
+        (init_delta as f64 / init_prev as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    // Compute chunk diffs via set operations on chunk ids
+    let prev_ids: std::collections::HashSet<&str> =
+        prev.chunks.iter().map(|c| c.id.as_str()).collect();
+    let curr_ids: std::collections::HashSet<&str> =
+        chunks.iter().map(|c| c.id.as_str()).collect();
+
+    let chunks_added: Vec<String> = curr_ids
+        .difference(&prev_ids)
+        .map(|s| s.to_string())
+        .collect();
+    let chunks_removed: Vec<String> = prev_ids
+        .difference(&curr_ids)
+        .map(|s| s.to_string())
+        .collect();
+
     PreviousBuildInfo {
         present: true,
         build_id: prev.build_id.clone(),
         delta: BuildDelta {
             total_bundle_bytes: SizeDelta {
-                prev: 0,
-                curr: 0,
-                delta: 0,
-                pct: 0.0,
+                prev: total_prev,
+                curr: total_curr,
+                delta: total_delta,
+                pct: (total_pct * 10.0).round() / 10.0,
             },
             initial_bundle_bytes: SizeDelta {
-                prev: 0,
-                curr: 0,
-                delta: 0,
-                pct: 0.0,
+                prev: init_prev,
+                curr: init_curr,
+                delta: init_delta,
+                pct: (init_pct * 10.0).round() / 10.0,
             },
-            chunks_added: Vec::new(),
-            chunks_removed: Vec::new(),
+            chunks_added,
+            chunks_removed,
         },
     }
 }
