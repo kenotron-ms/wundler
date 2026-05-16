@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
+use wundler_abs::security::{ResolvedSecurity, SecurityConfig};
 use wundler_abs::server::{build_router, AbsConfig};
 use wundler_abs::state::AppState;
 use wundler_abs::telemetry::TelemetryLogger;
@@ -32,7 +33,11 @@ fn router_builds_without_panic() {
     let telemetry = TelemetryLogger::new(tmp.path()).expect("failed to create TelemetryLogger");
 
     // Should not panic.
-    let _router = build_router(app, telemetry);
+    let _router = build_router(
+        app,
+        telemetry,
+        Arc::new(ResolvedSecurity::from_config(&SecurityConfig::default()).unwrap()),
+    );
 }
 
 /// Verify that `AbsConfig::default()` produces the expected port and TTL.

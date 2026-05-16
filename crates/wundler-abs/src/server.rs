@@ -8,12 +8,14 @@
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::{
     extract::{ConnectInfo, FromRequestParts, State},
     http::{header, request::Parts, StatusCode},
+    middleware,
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -23,6 +25,8 @@ use tracing::warn;
 use wundler_graph::ChunkManifest;
 
 use crate::manifest::compute_delta;
+use crate::security::auth::require_bearer;
+use crate::security::{ResolvedSecurity, SecurityConfig};
 use crate::state::AppState;
 use crate::telemetry::TelemetryLogger;
 use crate::types::{ManifestRequest, ManifestResponse, TelemetryEvent};
@@ -66,6 +70,9 @@ pub struct AbsConfig {
 
     /// How long clients should cache a manifest response, in seconds.
     pub ttl_seconds: u64,
+
+    /// Bearer-token authentication configuration.
+    pub security: SecurityConfig,
 }
 
 impl Default for AbsConfig {
@@ -77,6 +84,7 @@ impl Default for AbsConfig {
             signing_key_pem: None,
             port: 8080,
             ttl_seconds: 300,
+            security: SecurityConfig::default(),
         }
     }
 }
@@ -177,7 +185,16 @@ impl IntoResponse for ManifestError {
 ///
 /// Separating router construction from server startup makes the router
 /// independently testable without needing a live TCP socket.
-pub fn build_router(app: AppState, telemetry: TelemetryLogger) -> Router {
+///
+/// The `security` parameter controls bearer-token authentication. When
+/// `security.is_enabled()` is `false` (the default when no `[security]`
+/// section is present in `wundler.toml`) the middleware is a transparent
+/// pass-through and existing behaviour is unchanged.
+pub fn build_router(
+    app: AppState,
+    telemetry: TelemetryLogger,
+    security: Arc<ResolvedSecurity>,
+) -> Router {
     let state = RouterState { app, telemetry };
 
     Router::new()
@@ -185,6 +202,7 @@ pub fn build_router(app: AppState, telemetry: TelemetryLogger) -> Router {
         .route("/health", get(get_health))
         .route("/sw.js", get(get_service_worker))
         .route("/reload", post(post_reload))
+        .layer(middleware::from_fn_with_state(security, require_bearer))
         .with_state(state)
 }
 
@@ -205,7 +223,9 @@ pub async fn run(config: AbsConfig) -> Result<()> {
     .await?;
 
     let telemetry = TelemetryLogger::new(&config.telemetry_log)?;
-    let router = build_router(app, telemetry);
+    let security = ResolvedSecurity::from_config(&config.security)
+        .context("failed to initialise security config")?;
+    let router = build_router(app, telemetry, Arc::new(security));
 
     let addr = format!("0.0.0.0:{}", config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;

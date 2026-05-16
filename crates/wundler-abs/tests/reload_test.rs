@@ -14,6 +14,7 @@ use std::sync::Arc;
 use axum_test::TestServer;
 use tempfile::{NamedTempFile, TempDir};
 use tokio::sync::RwLock;
+use wundler_abs::security::{ResolvedSecurity, SecurityConfig};
 use wundler_abs::server::build_router;
 use wundler_abs::state::AppState;
 use wundler_abs::telemetry::TelemetryLogger;
@@ -52,7 +53,11 @@ async fn make_server() -> (TestServer, TempDir) {
     };
 
     let telemetry = TelemetryLogger::new(&log_path).expect("create TelemetryLogger");
-    let router = build_router(app, telemetry);
+    let router = build_router(
+        app,
+        telemetry,
+        Arc::new(ResolvedSecurity::from_config(&SecurityConfig::default()).unwrap()),
+    );
     let server = TestServer::new(router);
 
     (server, tmp_dir)
