@@ -17,3 +17,5 @@ test-app/node_modules/
 
 # Generated bench fixtures (too large to commit)
 bench/app-10k/
+\n# Git worktrees\n.worktrees/
+.worktrees/
