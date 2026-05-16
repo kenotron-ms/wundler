@@ -33,14 +33,31 @@
 
 ---
 
-### Phase 2 — After Phase 1 complete (plans not yet written)
+### Phase 2 — Plans written, ready to execute
 
-| Item | Design Doc | Blocked on |
-|---|---|---|
-| Security P1.2 — CORS allowlist | `security-baseline.md` §P1.2 | Phase 1 done |
-| Security P1.3 — per-IP rate limiter | `security-baseline.md` §P1.3 | Phase 1 done |
-| VRC full C2 — archive + `/select` + `/versions` | `versioned-runtime-control.md` §C2 | Phase 1 done |
-| Observability P1 full — extended BuildStats + CI budgets | `observability.md` §P1 full | Phase 1 done |
+#### Security P1.2 — CORS allowlist
+- **Plan:** `docs/superpowers/plans/2026-05-16-security-p1-cors.md`
+- **Design:** `docs/designs/security-baseline.md` §P1.2
+- **Status:** ⬜ Not started — 0 / 3 tasks
+- **Next task:** Task 1 — add `allowed_origins` field to `SecurityConfig` + `ResolvedSecurity`; update `from_config` to parse origins into `Vec<HeaderValue>`
+
+#### Security P1.3 — per-IP rate limiter
+- **Plan:** `docs/superpowers/plans/2026-05-16-security-p1-rate-limit.md`
+- **Design:** `docs/designs/security-baseline.md` §P1.3
+- **Status:** ⬜ Not started — 0 / 3 tasks
+- **Next task:** Task 1 — add `governor = "0.7"` dep + `manifest_rate_per_sec`/`burst` fields to `SecurityConfig`
+
+#### VRC C2 — manifest archive + GET /versions + POST /select
+- **Plan:** `docs/superpowers/plans/2026-05-16-vrc-c2.md`
+- **Design:** `docs/designs/versioned-runtime-control.md` §C2
+- **Status:** ⬜ Not started — 0 / 6 tasks
+- **Next task:** Task 1 — create `crates/wundler-abs/src/archive.rs` with `ManifestArchive::open/install/list`
+
+#### Observability P1 full — extended BuildStats + budget enforcement
+- **Plan:** `docs/superpowers/plans/2026-05-16-observability-p1-full.md`
+- **Design:** `docs/designs/observability.md` §P1 full
+- **Status:** ⬜ Not started — 0 / 6 tasks
+- **Next task:** Task 1 — add `chrono` dep, scaffold `build_stats.rs` with all schema types
 
 ### Phase 3 — After Phase 2 (plans not yet written)
 
