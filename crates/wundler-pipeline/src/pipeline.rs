@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 
@@ -16,6 +17,7 @@ use wundler_transform::rolldown_adapter::{RolldownAdapter, RolldownAdapterConfig
 use wundler_transform::swc_adapter::{SwcAdapterConfig, SwcTransformAdapter};
 
 use crate::build_id;
+use crate::build_stats::{BuildStatsArtifact, BuildTiming};
 use crate::config::{BuildConfig, EngineChoice};
 use crate::output;
 
@@ -135,16 +137,17 @@ impl BuildPipeline {
     ///    For rolldown: files are already in `out_dir`; skip `write_chunk`.
     /// 6. Write `<out_dir>/manifest.json`.
     /// 7. Write `<out_dir>/index.html` for every entry point.
+    /// 8. Write `<out_dir>/build-stats.json` with the extended schema.
     ///
     /// Returns a [`BuildOutput`] with the assembled manifest, the paths of all
     /// written chunk files, and aggregate build statistics.
     pub fn build(&self) -> Result<BuildOutput> {
-        let build_start = std::time::Instant::now();
+        let build_start = Instant::now();
 
-        // ----- Step 1: Summarize -----
+        // ----- Phase 1: Summarize -----
+        let phase_start = Instant::now();
         let mut nodes = self.run_summarize()?;
 
-        // ----- Load source for each node -----
         // The transform engine needs `node.source` to be populated; the
         // summarizer does not load it (it only produces the summary metadata).
         for node in &mut nodes {
@@ -152,16 +155,24 @@ impl BuildPipeline {
                 .unwrap_or_else(|_| "// empty\n".to_string());
             node.source = Some(source);
         }
+        let summarize_ms = phase_start.elapsed().as_millis() as u64;
 
-        // ----- Step 2: Analyze -----
+        // ----- Phase 2: Analyze -----
+        let phase_start = Instant::now();
         let mut analysis = self.run_analyze(nodes)?;
 
         // Override the graph-layer build_id (entry-route hash) with a
         // content-based ID derived from the full assembled manifest.
         analysis.manifest.build_id = build_id::compute_build_id(&analysis.manifest);
+        let analyze_ms = phase_start.elapsed().as_millis() as u64;
 
-        // ----- Step 3: Transform -----
+        // ----- Phase 3: Transform -----
+        let phase_start = Instant::now();
         let outputs = self.run_transform(&analysis)?;
+        let transform_ms = phase_start.elapsed().as_millis() as u64;
+
+        // ----- Phase 4: Emit -----
+        let phase_start = Instant::now();
 
         // Detect whether the engine wrote files directly (rolldown batch path).
         let already_written = outputs.iter().any(|o| o.already_written);
@@ -228,6 +239,19 @@ impl BuildPipeline {
             }
         }
 
+        let emit_ms = phase_start.elapsed().as_millis() as u64;
+
+        // Update the in-memory manifest chunk hashes to match the actual
+        // transform-phase hashes used in the written file names.  The
+        // `write_manifest` call above already does this for the on-disk copy;
+        // we mirror it here so that `BuildOutput.manifest` reflects the real
+        // file system layout (required by `BuildStatsArtifact::from_build`).
+        for chunk in &mut analysis.manifest.chunks {
+            if let Some(output_hash) = id_to_output_hash.get(&chunk.id) {
+                chunk.hash = output_hash.clone();
+            }
+        }
+
         // ----- Compute stats -----
         let total_modules = analysis.nodes.len();
         let alive_modules = analysis.nodes.iter().filter(|n| n.alive).count();
@@ -243,23 +267,26 @@ impl BuildPipeline {
             largest_chunk_bytes,
         };
 
-        // ----- Step 4d: Write build-stats.json (non-fatal) -----
-        let stats_path = out_dir.join("build-stats.json");
-        match std::fs::File::create(&stats_path) {
-            Ok(f) => {
-                if let Err(e) = serde_json::to_writer_pretty(f, &stats) {
-                    eprintln!("warning: failed to write build-stats.json: {e}");
-                }
-            }
-            Err(e) => {
-                eprintln!("warning: failed to create build-stats.json: {e}");
-            }
+        let output = BuildOutput { manifest: analysis.manifest, chunk_files, stats };
+
+        // Read previous build (best effort)
+        let previous = output::read_previous_stats(out_dir);
+
+        // Build the extended artifact
+        let timing = BuildTiming {
+            summarize_ms,
+            analyze_ms,
+            transform_ms,
+            emit_ms,
+            total_ms: build_time_ms as u64,
+        };
+        let artifact = BuildStatsArtifact::from_build(&output, previous.as_ref(), timing);
+
+        // Write build-stats.json (non-fatal)
+        if let Err(e) = output::write_build_stats(out_dir, &artifact) {
+            eprintln!("warning: failed to write build-stats.json: {e}");
         }
 
-        Ok(BuildOutput {
-            manifest: analysis.manifest,
-            chunk_files,
-            stats,
-        })
+        Ok(output)
     }
 }

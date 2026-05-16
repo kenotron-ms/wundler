@@ -2,6 +2,7 @@
 
 pub mod build_id;
 pub mod build_stats;
+pub mod budget;
 pub mod config;
 pub mod dev_server;
 pub mod output;
@@ -14,7 +15,7 @@ pub use build_stats::{
 };
 pub use config::{BuildConfig, EngineChoice};
 pub use dev_server::DevServer;
-pub use pipeline::{BuildOutput, BuildPipeline, BuildStats};
+pub use pipeline::{BuildOutput, BuildPipeline};
 
 pub fn hello() -> &'static str {
     "wundler-pipeline"

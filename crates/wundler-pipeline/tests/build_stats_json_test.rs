@@ -52,6 +52,7 @@ fn make_project(tag: &str) -> (TempDir, TempDir, BuildConfig) {
             m.insert("main".to_string(), PathBuf::from("src/index.ts"));
             m
         },
+        budget: None,
     };
 
     (project_dir, out_dir, config)
@@ -100,20 +101,38 @@ fn test_build_stats_json_contains_expected_fields() {
     let value: serde_json::Value = serde_json::from_str(&contents)
         .expect("build-stats.json must be valid JSON");
 
-    let expected_keys = [
-        "total_modules",
-        "alive_modules",
-        "dead_modules",
-        "chunks_written",
-        "build_time_ms",
-        "largest_chunk_bytes",
+    // The extended schema (BuildStatsArtifact) uses top-level envelope fields
+    // and nested sub-blocks rather than flat top-level keys.
+    let expected_top_keys = [
+        "schema_version",
+        "build_id",
+        "wundler_version",
+        "generated_at",
+        "summary",
+        "timing",
+        "chunks",
+        "entry_points",
     ];
-    for key in &expected_keys {
+    for key in &expected_top_keys {
         assert!(
             value.get(key).is_some(),
             "build-stats.json is missing required key: {key}"
         );
     }
+    // Summary sub-block carries the module/chunk counters.
+    let summary = &value["summary"];
+    for key in &["total_modules", "alive_modules", "dead_modules", "chunks_written"] {
+        assert!(
+            summary.get(key).is_some(),
+            "build-stats.json summary is missing field: {key}"
+        );
+    }
+    // Timing sub-block carries the wall-clock counters.
+    let timing = &value["timing"];
+    assert!(
+        timing.get("build_time_ms").is_some(),
+        "build-stats.json timing is missing field: build_time_ms"
+    );
 }
 
 #[test]

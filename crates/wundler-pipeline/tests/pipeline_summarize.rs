@@ -20,6 +20,7 @@ fn make_config(root: PathBuf) -> BuildConfig {
             m.insert("main".to_string(), PathBuf::from("src/index.ts"));
             m
         },
+        budget: None,
     }
 }
 
