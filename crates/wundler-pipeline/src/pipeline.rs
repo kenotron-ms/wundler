@@ -15,6 +15,7 @@ use wundler_transform::engine::{BatchConfig, ChunkOutput, TransformEngine};
 use wundler_transform::rolldown_adapter::{RolldownAdapter, RolldownAdapterConfig};
 use wundler_transform::swc_adapter::{SwcAdapterConfig, SwcTransformAdapter};
 
+use crate::build_id;
 use crate::config::{BuildConfig, EngineChoice};
 use crate::output;
 
@@ -23,7 +24,7 @@ use crate::output;
 // ---------------------------------------------------------------------------
 
 /// Statistics produced by a complete [`BuildPipeline::build()`] run.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct BuildStats {
     /// Total number of modules discovered by the summarize step.
     pub total_modules: usize,
@@ -153,7 +154,11 @@ impl BuildPipeline {
         }
 
         // ----- Step 2: Analyze -----
-        let analysis = self.run_analyze(nodes)?;
+        let mut analysis = self.run_analyze(nodes)?;
+
+        // Override the graph-layer build_id (entry-route hash) with a
+        // content-based ID derived from the full assembled manifest.
+        analysis.manifest.build_id = build_id::compute_build_id(&analysis.manifest);
 
         // ----- Step 3: Transform -----
         let outputs = self.run_transform(&analysis)?;
@@ -206,7 +211,7 @@ impl BuildPipeline {
             .context("write_manifest failed")?;
 
         // ----- Step 4c: Write index.html for every entry point -----
-        for (entry, _) in &self.config.entry_points {
+        for entry in self.config.entry_points.keys() {
             if already_written {
                 // Rolldown path: generate index.html that references rolldown's
                 // actual output files (e.g., `root-abc123.js`) directly.
@@ -229,17 +234,32 @@ impl BuildPipeline {
         let dead_modules = total_modules - alive_modules;
         let build_time_ms = build_start.elapsed().as_millis();
 
+        let stats = BuildStats {
+            total_modules,
+            alive_modules,
+            dead_modules,
+            chunks_written,
+            build_time_ms,
+            largest_chunk_bytes,
+        };
+
+        // ----- Step 4d: Write build-stats.json (non-fatal) -----
+        let stats_path = out_dir.join("build-stats.json");
+        match std::fs::File::create(&stats_path) {
+            Ok(f) => {
+                if let Err(e) = serde_json::to_writer_pretty(f, &stats) {
+                    eprintln!("warning: failed to write build-stats.json: {e}");
+                }
+            }
+            Err(e) => {
+                eprintln!("warning: failed to create build-stats.json: {e}");
+            }
+        }
+
         Ok(BuildOutput {
             manifest: analysis.manifest,
             chunk_files,
-            stats: BuildStats {
-                total_modules,
-                alive_modules,
-                dead_modules,
-                chunks_written,
-                build_time_ms,
-                largest_chunk_bytes,
-            },
+            stats,
         })
     }
 }

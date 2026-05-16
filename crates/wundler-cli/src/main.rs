@@ -420,6 +420,7 @@ async fn run_abs_serve(config_path: &Path) -> Result<()> {
         signing_key_pem: toml_cfg.signing_key_pem,
         port: toml_cfg.port,
         ttl_seconds: toml_cfg.ttl_seconds,
+        security: wundler_abs::security::SecurityConfig::default(),
     };
 
     wundler_abs::server::run(config).await
@@ -778,15 +779,17 @@ fn cmd_bench(output: std::path::PathBuf, fast: bool) -> Result<()> {
         vec![100, 500, 1000, 5000, 10000]
     };
 
+    eprintln!("wundler bench: analysis benchmark at scales {:?}", scales);
+    let analysis = wundler_bench::analysis_bench::run(&scales)?;
+
     eprintln!("wundler bench: CAS benchmark at scales {:?}", scales);
     let cas = wundler_bench::cas_bench::run(&scales)?;
 
-    let abs_modules: usize = if fast { 500 } else { 1000 };
-    eprintln!("wundler bench: ABS benchmark at N={} …", abs_modules);
     let churn_levels = vec![0.005, 0.01, 0.05, 0.10, 0.25, 0.50];
-    let abs = wundler_bench::abs_bench::run(abs_modules, &churn_levels)?;
+    eprintln!("wundler bench: ABS benchmark at scales {:?}", scales);
+    let abs_scales = wundler_bench::abs_bench::run_scales(&scales, &churn_levels)?;
 
-    wundler_bench::report::write_report(&cas, &abs, &output)?;
+    wundler_bench::report::write_report(&analysis, &cas, &abs_scales, &output)?;
     eprintln!("wundler bench: wrote report to {}", output.display());
     Ok(())
 }

@@ -8,6 +8,7 @@
 //! bytes itself.
 
 pub mod manifest;
+pub mod security;
 pub mod server;
 pub mod signing;
 pub mod state;

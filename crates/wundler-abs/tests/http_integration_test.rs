@@ -5,9 +5,11 @@
 //! socket.
 
 use std::io::Write as _;
+use std::sync::Arc;
 
 use axum_test::TestServer;
 use tempfile::{NamedTempFile, TempDir};
+use wundler_abs::security::{ResolvedSecurity, SecurityConfig};
 use wundler_abs::server::build_router;
 use wundler_abs::state::AppState;
 use wundler_abs::telemetry::TelemetryLogger;
@@ -84,7 +86,11 @@ async fn make_server() -> (TestServer, TempDir) {
     .expect("failed to load AppState from manifest");
 
     let telemetry = TelemetryLogger::new(&log_path).expect("failed to create TelemetryLogger");
-    let router = build_router(app, telemetry);
+    let router = build_router(
+        app,
+        telemetry,
+        Arc::new(ResolvedSecurity::from_config(&SecurityConfig::default()).unwrap()),
+    );
     let server = TestServer::new(router);
 
     // Prevent the NamedTempFile destructor from deleting the manifest file
@@ -245,4 +251,60 @@ async fn telemetry_is_written_on_each_request() {
         lines.len(),
         lines
     );
+}
+
+/// When security is enabled with a bearer token:
+/// - Unauthenticated requests to non-exempt paths return 401.
+/// - Requests with the correct Bearer token succeed (200).
+/// - Exempt paths (`/health`, `/sw.js`) are always accessible without auth.
+#[tokio::test]
+async fn test_bearer_auth_enforced_when_security_enabled() {
+    // Write a known token to a temp file.
+    let mut token_file = NamedTempFile::new().expect("create token file");
+    write!(token_file, "test-secret-token").expect("write token");
+
+    let config = SecurityConfig {
+        bearer_token_file: Some(token_file.path().to_path_buf()),
+    };
+    let security = Arc::new(ResolvedSecurity::from_config(&config).expect("resolve security"));
+
+    let manifest_f = manifest_file();
+    let tmp_dir = TempDir::new().expect("temp dir");
+    let log_path = tmp_dir.path().join("telemetry.jsonl");
+
+    let app = AppState::load_from_disk(
+        manifest_f.path(),
+        "https://cdn.example.com".to_string(),
+        300,
+    )
+    .await
+    .expect("load app state");
+
+    let telemetry = TelemetryLogger::new(&log_path).expect("create TelemetryLogger");
+    // RED: build_router does not yet accept a third `Arc<ResolvedSecurity>` parameter.
+    let router = build_router(app, telemetry, security);
+    let server = TestServer::new(router);
+    std::mem::forget(manifest_f);
+
+    let req = ManifestRequest {
+        entry_point: "teams.channel".to_string(),
+        cached_hashes: vec![],
+        build_id: Some("INT-TEST-BUILD".to_string()),
+    };
+
+    // Without auth: 401 Unauthorized.
+    let resp = server.post("/manifest").json(&req).await;
+    resp.assert_status(axum::http::StatusCode::UNAUTHORIZED);
+
+    // With the correct Bearer token: 200 OK.
+    let resp = server
+        .post("/manifest")
+        .authorization_bearer("test-secret-token")
+        .json(&req)
+        .await;
+    resp.assert_status_ok();
+
+    // /health is exempt — no auth required.
+    let resp = server.get("/health").await;
+    resp.assert_status_ok();
 }

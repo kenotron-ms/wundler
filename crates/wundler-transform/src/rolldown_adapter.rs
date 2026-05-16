@@ -379,7 +379,7 @@ impl RolldownAdapter {
                 .and_then(|s| s.to_str())
                 .unwrap_or("chunk");
             let chunk_id = stem
-                .splitn(2, '-')
+                .split('-')
                 .next()
                 .unwrap_or(stem)
                 .to_string();

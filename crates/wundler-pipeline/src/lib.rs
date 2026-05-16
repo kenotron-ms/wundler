@@ -1,5 +1,6 @@
 //! Wundler Build Pipeline — orchestrates summarize → analyze → transform → emit.
 
+pub mod build_id;
 pub mod config;
 pub mod dev_server;
 pub mod output;
