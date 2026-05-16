@@ -75,7 +75,7 @@ fn test_verify_empty_string_returns_false() {
 
 use std::io::Write as _;
 use tempfile::NamedTempFile;
-use wundler_abs::security::{ResolvedSecurity, SecurityConfig, SecurityError};
+use wundler_abs::security::{ResolvedSecurity, SecurityConfig};
 
 /// When no `bearer_token_file` is set, security is disabled (pass-through).
 #[test]
@@ -143,4 +143,247 @@ fn test_missing_token_file_returns_error() {
         err_str.contains("nonexistent"),
         "error message should mention the path; got: {err_str}"
     );
+}
+
+// ── HTTP integration tests ────────────────────────────────────────────────
+//
+// These tests exercise the require_bearer middleware end-to-end through the
+// Axum router stack, without opening a TCP socket.
+
+use std::sync::Arc;
+use axum::http::{header, HeaderValue, StatusCode};
+use axum_test::TestServer;
+use tempfile::TempDir;
+use wundler_abs::server::build_router;
+use wundler_abs::state::AppState;
+use wundler_abs::telemetry::TelemetryLogger;
+use wundler_abs::types::ManifestRequest;
+
+// ── Test helpers ────────────────────────────────────────────────────────────
+
+/// Minimal manifest JSON fixture for auth tests.
+fn auth_test_manifest() -> NamedTempFile {
+    let json = serde_json::json!({
+        "build_id": "auth-test-build",
+        "chunks": [],
+        "entry_chunks": {},
+        "module_index": {}
+    });
+    let mut file = NamedTempFile::new().expect("create temp manifest");
+    write!(file, "{}", json).expect("write manifest");
+    file
+}
+
+/// Build a `TestServer` with security **disabled** (no token required).
+async fn make_open_server() -> (TestServer, TempDir) {
+    let manifest = auth_test_manifest();
+    let tmp_dir = TempDir::new().expect("create temp dir");
+    let log_path = tmp_dir.path().join("telemetry.jsonl");
+
+    let app = AppState::load_from_disk(manifest.path(), "https://cdn.example.com".to_string(), 300)
+        .await
+        .expect("load AppState");
+    let telemetry = TelemetryLogger::new(&log_path).expect("TelemetryLogger");
+    let security = ResolvedSecurity::from_config(&SecurityConfig::default())
+        .expect("default security");
+
+    let router = build_router(app, telemetry, Arc::new(security));
+    std::mem::forget(manifest);
+    (TestServer::new(router), tmp_dir)
+}
+
+/// Build a `TestServer` with security **enabled** using `token` as the bearer token.
+async fn make_secured_server(token: &str) -> (TestServer, TempDir, NamedTempFile) {
+    let manifest = auth_test_manifest();
+    let tmp_dir = TempDir::new().expect("create temp dir");
+    let log_path = tmp_dir.path().join("telemetry.jsonl");
+
+    let mut token_file = NamedTempFile::new().expect("create token file");
+    write!(token_file, "{token}").expect("write token");
+
+    let app = AppState::load_from_disk(manifest.path(), "https://cdn.example.com".to_string(), 300)
+        .await
+        .expect("load AppState");
+    let telemetry = TelemetryLogger::new(&log_path).expect("TelemetryLogger");
+    let config = SecurityConfig {
+        bearer_token_file: Some(token_file.path().to_path_buf()),
+    };
+    let security = ResolvedSecurity::from_config(&config).expect("ResolvedSecurity");
+
+    let router = build_router(app, telemetry, Arc::new(security));
+    std::mem::forget(manifest);
+    (TestServer::new(router), tmp_dir, token_file)
+}
+
+// ── Tests ───────────────────────────────────────────────────────────────────
+
+/// When no `[security]` config is present, unauthenticated requests to
+/// `/manifest` are accepted — exactly today's behaviour.
+#[tokio::test]
+async fn test_no_security_config_allows_unauthenticated_requests() {
+    let (server, _dir) = make_open_server().await;
+
+    let req = ManifestRequest {
+        entry_point: "app".to_string(),
+        cached_hashes: vec![],
+        build_id: None,
+    };
+    let resp = server.post("/manifest").json(&req).await;
+
+    assert_ne!(
+        resp.status_code(),
+        StatusCode::UNAUTHORIZED,
+        "unauthenticated request should not receive 401 when security is disabled"
+    );
+}
+
+/// A correct `Authorization: Bearer <token>` header is accepted.
+#[tokio::test]
+async fn test_valid_bearer_token_allows_request() {
+    let (server, _dir, _token_file) = make_secured_server("my-secret-token").await;
+
+    let req = ManifestRequest {
+        entry_point: "app".to_string(),
+        cached_hashes: vec![],
+        build_id: None,
+    };
+    let resp = server
+        .post("/manifest")
+        .add_header(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer my-secret-token"),
+        )
+        .json(&req)
+        .await;
+
+    assert_ne!(
+        resp.status_code(),
+        StatusCode::UNAUTHORIZED,
+        "correct bearer token should not receive 401"
+    );
+}
+
+/// A missing `Authorization` header returns 401.
+#[tokio::test]
+async fn test_missing_authorization_header_returns_401() {
+    let (server, _dir, _token_file) = make_secured_server("my-secret-token").await;
+
+    let req = ManifestRequest {
+        entry_point: "app".to_string(),
+        cached_hashes: vec![],
+        build_id: None,
+    };
+    let resp = server.post("/manifest").json(&req).await;
+
+    assert_eq!(
+        resp.status_code(),
+        StatusCode::UNAUTHORIZED,
+        "missing Authorization header should return 401"
+    );
+    assert_eq!(resp.text(), "Unauthorized");
+}
+
+/// A wrong bearer token returns 401 with the same body as a missing header.
+#[tokio::test]
+async fn test_wrong_bearer_token_returns_401() {
+    let (server, _dir, _token_file) = make_secured_server("my-secret-token").await;
+
+    let req = ManifestRequest {
+        entry_point: "app".to_string(),
+        cached_hashes: vec![],
+        build_id: None,
+    };
+    let resp = server
+        .post("/manifest")
+        .add_header(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer wrong-token"),
+        )
+        .json(&req)
+        .await;
+
+    assert_eq!(
+        resp.status_code(),
+        StatusCode::UNAUTHORIZED,
+        "wrong bearer token should return 401"
+    );
+    assert_eq!(resp.text(), "Unauthorized");
+}
+
+/// An `Authorization: Basic ...` header (wrong scheme) returns 401.
+#[tokio::test]
+async fn test_wrong_auth_scheme_returns_401() {
+    let (server, _dir, _token_file) = make_secured_server("my-secret-token").await;
+
+    let req = ManifestRequest {
+        entry_point: "app".to_string(),
+        cached_hashes: vec![],
+        build_id: None,
+    };
+    let resp = server
+        .post("/manifest")
+        .add_header(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Basic dXNlcjpwYXNz"),
+        )
+        .json(&req)
+        .await;
+
+    assert_eq!(
+        resp.status_code(),
+        StatusCode::UNAUTHORIZED,
+        "Basic auth scheme should return 401"
+    );
+}
+
+/// `GET /health` is always accessible, even when security is enabled.
+#[tokio::test]
+async fn test_health_always_accessible_without_token() {
+    let (server, _dir, _token_file) = make_secured_server("my-secret-token").await;
+
+    let resp = server.get("/health").await;
+
+    assert_ne!(
+        resp.status_code(),
+        StatusCode::UNAUTHORIZED,
+        "/health should be exempt from auth"
+    );
+    resp.assert_status_ok();
+}
+
+/// `GET /sw.js` is always accessible, even when security is enabled.
+#[tokio::test]
+async fn test_sw_js_always_accessible_without_token() {
+    let (server, _dir, _token_file) = make_secured_server("my-secret-token").await;
+
+    let resp = server.get("/sw.js").await;
+
+    assert_ne!(
+        resp.status_code(),
+        StatusCode::UNAUTHORIZED,
+        "/sw.js should be exempt from auth"
+    );
+    resp.assert_status_ok();
+}
+
+/// The 401 response carries a `WWW-Authenticate: Bearer` header.
+#[tokio::test]
+async fn test_401_response_carries_www_authenticate_header() {
+    let (server, _dir, _token_file) = make_secured_server("my-secret-token").await;
+
+    let req = ManifestRequest {
+        entry_point: "app".to_string(),
+        cached_hashes: vec![],
+        build_id: None,
+    };
+    let resp = server.post("/manifest").json(&req).await;
+
+    assert_eq!(resp.status_code(), StatusCode::UNAUTHORIZED);
+    let www_auth = resp
+        .headers()
+        .get("www-authenticate")
+        .expect("WWW-Authenticate header should be present on 401")
+        .to_str()
+        .expect("WWW-Authenticate should be valid UTF-8");
+    assert_eq!(www_auth, "Bearer", "WWW-Authenticate value should be 'Bearer'");
 }
