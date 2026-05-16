@@ -6,6 +6,7 @@
 //! behaviour is unchanged.
 
 pub mod auth;
+pub mod cors;
 
 use std::path::PathBuf;
 
