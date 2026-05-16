@@ -280,7 +280,17 @@ impl BuildPipeline {
             emit_ms,
             total_ms: build_time_ms as u64,
         };
-        let artifact = BuildStatsArtifact::from_build(&output, previous.as_ref(), timing);
+        let mut artifact = BuildStatsArtifact::from_build(&output, previous.as_ref(), timing);
+
+        // Budget check (opt-in via [budget] in wundler.toml)
+        if let Some(budget_cfg) = &self.config.budget {
+            if budget_cfg.any_limit_set() {
+                artifact.budget = Some(crate::budget::build_budget_result(&artifact, budget_cfg));
+                if let Err(violation) = crate::budget::check(&artifact, budget_cfg) {
+                    eprintln!("{}", violation.actionable_message());
+                }
+            }
+        }
 
         // Write build-stats.json (non-fatal)
         if let Err(e) = output::write_build_stats(out_dir, &artifact) {
