@@ -94,4 +94,20 @@ impl AppState {
     ) -> Result<Self> {
         Self::load_signed_from_disk(manifest_path, cdn_base_url, ttl_seconds, None).await
     }
+
+    /// Atomically swap the in-memory manifest for `new_manifest`.
+    ///
+    /// Acquires the write lock, replaces the manifest, releases the lock, and
+    /// returns the `build_id` of the newly loaded manifest. In-flight readers
+    /// that already hold a read snapshot are unaffected.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `RwLock` is poisoned (should never happen in practice).
+    pub async fn reload_manifest(&self, new_manifest: ChunkManifest) -> String {
+        let build_id = new_manifest.build_id.clone();
+        let mut guard = self.manifest.write().await;
+        *guard = new_manifest;
+        build_id
+    }
 }
