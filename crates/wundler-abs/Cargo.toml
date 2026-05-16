@@ -27,3 +27,4 @@ governor = "0.7"
 axum-test = "20"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tower = { version = "0.5", features = ["util"] }
