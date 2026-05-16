@@ -7,8 +7,11 @@
 
 pub mod auth;
 pub mod cors;
+pub mod ratelimit;
 
+use std::num::NonZeroU32;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::security::auth::SecretToken;
 
@@ -37,6 +40,13 @@ pub struct SecurityConfig {
     /// Wildcards ("*") are never accepted.
     #[serde(default)]
     pub allowed_origins: Vec<String>,
+
+    /// Sustained per-IP request rate for `POST /manifest`, in rps.
+    /// None or Some(0) = disabled.
+    pub manifest_rate_per_sec: Option<u32>,
+
+    /// Burst budget for `POST /manifest`. Defaults to rate when None.
+    pub manifest_rate_burst: Option<u32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -68,6 +78,8 @@ pub struct ResolvedSecurity {
     pub token: Option<SecretToken>,
     /// Parsed and validated CORS allowlist origins.
     pub allowed_origins: Vec<axum::http::HeaderValue>,
+    /// Per-IP rate limiter for `POST /manifest`, or `None` if disabled.
+    pub rate_limiter: Option<Arc<ratelimit::IpRateLimiter>>,
 }
 
 impl ResolvedSecurity {
@@ -102,7 +114,19 @@ impl ResolvedSecurity {
             allowed_origins.push(hv);
         }
 
-        Ok(Self { token, allowed_origins })
+        let rate_limiter = match config.manifest_rate_per_sec {
+            None | Some(0) => None,
+            Some(rate) => {
+                let rate = NonZeroU32::new(rate).expect("rate > 0 already checked");
+                let burst = config
+                    .manifest_rate_burst
+                    .and_then(NonZeroU32::new)
+                    .unwrap_or(rate);
+                Some(ratelimit::build_limiter(rate, burst))
+            }
+        };
+
+        Ok(Self { token, allowed_origins, rate_limiter })
     }
 
     /// Returns `true` if bearer-token authentication is active.
@@ -130,6 +154,7 @@ mod tests {
                 "https://app.example.com".to_string(),
                 "https://staging.example.com".to_string(),
             ],
+            ..SecurityConfig::default()
         };
         let resolved = ResolvedSecurity::from_config(&cfg).expect("resolve");
         assert_eq!(resolved.allowed_origins.len(), 2);
@@ -148,6 +173,7 @@ mod tests {
         let cfg = SecurityConfig {
             bearer_token_file: None,
             allowed_origins: vec!["*".to_string()],
+            ..SecurityConfig::default()
         };
         let err = ResolvedSecurity::from_config(&cfg).expect_err("wildcard must fail");
         match err {
@@ -161,8 +187,57 @@ mod tests {
         let cfg = SecurityConfig {
             bearer_token_file: None,
             allowed_origins: vec!["https://app.example.com\n".to_string()],
+            ..SecurityConfig::default()
         };
         let err = ResolvedSecurity::from_config(&cfg).expect_err("newline must fail");
         assert!(matches!(err, SecurityError::InvalidOrigin(_)));
+    }
+
+    #[test]
+    fn default_config_has_no_rate_limit() {
+        let cfg = SecurityConfig::default();
+        assert!(cfg.manifest_rate_per_sec.is_none());
+        assert!(cfg.manifest_rate_burst.is_none());
+        let resolved = ResolvedSecurity::from_config(&cfg).expect("resolve default");
+        assert!(resolved.rate_limiter.is_none());
+    }
+
+    #[test]
+    fn rate_limit_config_produces_limiter() {
+        let cfg = SecurityConfig {
+            manifest_rate_per_sec: Some(5),
+            manifest_rate_burst: Some(10),
+            ..SecurityConfig::default()
+        };
+        let resolved = ResolvedSecurity::from_config(&cfg).expect("resolve");
+        assert!(
+            resolved.rate_limiter.is_some(),
+            "limiter must be built when manifest_rate_per_sec is set"
+        );
+    }
+
+    #[test]
+    fn rate_limit_burst_defaults_to_rate_when_absent() {
+        let cfg = SecurityConfig {
+            manifest_rate_per_sec: Some(7),
+            manifest_rate_burst: None,
+            ..SecurityConfig::default()
+        };
+        let resolved = ResolvedSecurity::from_config(&cfg).expect("resolve");
+        assert!(resolved.rate_limiter.is_some());
+    }
+
+    #[test]
+    fn zero_rate_disables_limiter() {
+        let cfg = SecurityConfig {
+            manifest_rate_per_sec: Some(0),
+            manifest_rate_burst: Some(0),
+            ..SecurityConfig::default()
+        };
+        let resolved = ResolvedSecurity::from_config(&cfg).expect("resolve");
+        assert!(
+            resolved.rate_limiter.is_none(),
+            "rate=0 must disable the limiter, not panic"
+        );
     }
 }

@@ -44,6 +44,7 @@ mod tests {
         let cfg = SecurityConfig {
             bearer_token_file: None,
             allowed_origins: origins.iter().map(|s| s.to_string()).collect(),
+            ..SecurityConfig::default()
         };
         ResolvedSecurity::from_config(&cfg).expect("resolve")
     }

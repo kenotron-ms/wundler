@@ -96,8 +96,8 @@ pub async fn require_bearer(
         return next.run(request).await;
     }
 
-    // If security is not configured, pass through.
-    if !security.is_enabled() {
+    // If bearer-token auth is not configured, pass through.
+    if security.token.is_none() {
         return next.run(request).await;
     }
 

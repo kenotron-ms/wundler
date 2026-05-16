@@ -37,6 +37,7 @@ async fn make_server(allowed_origins: Vec<String>) -> (TestServer, tempfile::Tem
     let security = ResolvedSecurity::from_config(&SecurityConfig {
         bearer_token_file: None,
         allowed_origins,
+        ..SecurityConfig::default()
     })
     .expect("resolve security");
 
@@ -176,6 +177,7 @@ async fn cors_layer_is_outer_so_401_responses_still_carry_cors_header() {
     let security = ResolvedSecurity::from_config(&SecurityConfig {
         bearer_token_file: Some(token_path),
         allowed_origins: vec!["https://app.example.com".to_string()],
+        ..SecurityConfig::default()
     })
     .expect("resolve security");
 
