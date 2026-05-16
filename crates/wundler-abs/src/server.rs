@@ -227,6 +227,7 @@ pub fn build_router(
         .route("/health", get(get_health))
         .route("/sw.js", get(get_service_worker))
         .route("/reload", post(post_reload))
+        .route("/versions", get(get_versions))
         // Inner: bearer-token authentication.
         .layer(middleware::from_fn_with_state(security, require_bearer))
         // Outer: CORS — applied last so it wraps the auth layer.
@@ -362,6 +363,18 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+/// `GET /versions` — list all archived manifest versions, newest first.
+async fn get_versions(State(state): State<RouterState>) -> Response {
+    match state.app.archive.list() {
+        Ok(entries) => (StatusCode::OK, Json(entries)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("failed to list archive: {e}")})),
+        )
+            .into_response(),
+    }
 }
 
 /// `POST /reload` — hot-swap the in-memory manifest from a file on disk.
