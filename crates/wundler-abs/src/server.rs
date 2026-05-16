@@ -161,6 +161,12 @@ struct ReloadRequest {
     manifest_path: String,
 }
 
+/// Request body for `POST /select`.
+#[derive(Debug, Deserialize)]
+struct SelectRequest {
+    build_id: String,
+}
+
 /// Success response body for `POST /reload`.
 #[derive(Debug, Serialize)]
 struct SwapResponseBody {
@@ -227,6 +233,7 @@ pub fn build_router(
         .route("/health", get(get_health))
         .route("/sw.js", get(get_service_worker))
         .route("/reload", post(post_reload))
+        .route("/select", post(post_select))
         .route("/versions", get(get_versions))
         // Inner: bearer-token authentication.
         .layer(middleware::from_fn_with_state(security, require_bearer))
@@ -467,6 +474,91 @@ async fn post_reload(
         previous: report.previous,
         current: report.current,
     }))
+        .into_response()
+}
+
+/// `POST /select` — operator-driven rollback to an already-archived build.
+///
+/// Swaps the in-memory manifest to a build that is already present in the
+/// archive, without requiring a file path on disk.  Useful for rolling back
+/// to a previously installed version.
+///
+/// Body: `{ "build_id": "<target_build_id>" }`
+/// Success: `200 OK` `{ "previous": "...", "current": "..." }`
+/// Errors:
+///   `404 Not Found`    if `build_id` is not in the archive
+///   `409 Conflict`     if another swap is already in progress
+///   `403 Forbidden`    if the request originates from a non-loopback address
+async fn post_select(
+    MaybeConnectAddr(addr): MaybeConnectAddr,
+    State(state): State<RouterState>,
+    Json(body): Json<SelectRequest>,
+) -> Response {
+    // Loopback enforcement (same as /reload).
+    if let Some(addr) = addr {
+        if !addr.ip().is_loopback() {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "select is only permitted from loopback addresses"
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    // 404 — fail fast before touching the lock.
+    let archive_entries = match state.app.archive.list() {
+        Ok(e) => e,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("failed to list archive: {e}")})),
+            )
+                .into_response();
+        }
+    };
+    if !archive_entries.iter().any(|e| e.build_id == body.build_id) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!("build_id {} is not present in archive", body.build_id)
+            })),
+        )
+            .into_response();
+    }
+
+    // 409 — try_lock fails iff another swap is in progress.
+    match state.app.reload_lock.try_lock() {
+        Ok(probe) => drop(probe),
+        Err(_) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({"error": "swap already in progress"})),
+            )
+                .into_response();
+        }
+    }
+
+    // Execute the swap.
+    let report = match state.app.swap_to(&body.build_id).await {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("swap failed: {e}")})),
+            )
+                .into_response();
+        }
+    };
+
+    (
+        StatusCode::OK,
+        Json(SwapResponseBody {
+            previous: report.previous,
+            current: report.current,
+        }),
+    )
         .into_response()
 }
 
