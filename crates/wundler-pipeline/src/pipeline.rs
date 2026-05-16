@@ -15,6 +15,7 @@ use wundler_transform::engine::{BatchConfig, ChunkOutput, TransformEngine};
 use wundler_transform::rolldown_adapter::{RolldownAdapter, RolldownAdapterConfig};
 use wundler_transform::swc_adapter::{SwcAdapterConfig, SwcTransformAdapter};
 
+use crate::build_id;
 use crate::config::{BuildConfig, EngineChoice};
 use crate::output;
 
@@ -153,7 +154,11 @@ impl BuildPipeline {
         }
 
         // ----- Step 2: Analyze -----
-        let analysis = self.run_analyze(nodes)?;
+        let mut analysis = self.run_analyze(nodes)?;
+
+        // Override the graph-layer build_id (entry-route hash) with a
+        // content-based ID derived from the full assembled manifest.
+        analysis.manifest.build_id = build_id::compute_build_id(&analysis.manifest);
 
         // ----- Step 3: Transform -----
         let outputs = self.run_transform(&analysis)?;
