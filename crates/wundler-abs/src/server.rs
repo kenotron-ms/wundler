@@ -26,6 +26,7 @@ use wundler_graph::ChunkManifest;
 
 use crate::manifest::compute_delta;
 use crate::security::auth::require_bearer;
+use crate::security::cors::build_cors;
 use crate::security::{ResolvedSecurity, SecurityConfig};
 use crate::state::AppState;
 use crate::telemetry::TelemetryLogger;
@@ -196,13 +197,17 @@ pub fn build_router(
     security: Arc<ResolvedSecurity>,
 ) -> Router {
     let state = RouterState { app, telemetry };
+    let cors = build_cors(&security);
 
     Router::new()
         .route("/manifest", post(post_manifest))
         .route("/health", get(get_health))
         .route("/sw.js", get(get_service_worker))
         .route("/reload", post(post_reload))
+        // Inner: bearer-token authentication.
         .layer(middleware::from_fn_with_state(security, require_bearer))
+        // Outer: CORS — applied last so it wraps the auth layer.
+        .layer(cors)
         .with_state(state)
 }
 
