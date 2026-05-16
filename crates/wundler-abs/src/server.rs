@@ -5,19 +5,22 @@
 //! * `GET  /health`    — return server liveness + current build ID
 //! * `GET  /sw.js`     — serve the embedded Service Worker script
 
+use std::convert::Infallible;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use axum::{
-    extract::State,
-    http::{header, StatusCode},
+    extract::{ConnectInfo, FromRequestParts, State},
+    http::{header, request::Parts, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tracing::warn;
+use wundler_graph::ChunkManifest;
 
 use crate::manifest::compute_delta;
 use crate::state::AppState;
@@ -92,6 +95,35 @@ struct RouterState {
 }
 
 // ---------------------------------------------------------------------------
+// Optional ConnectInfo extractor
+// ---------------------------------------------------------------------------
+
+/// Optional peer-address extractor.
+///
+/// Reads `ConnectInfo<SocketAddr>` from the request extension map and returns
+/// `Some(addr)` when present (real TCP connection) or `None` when absent
+/// (e.g. `axum_test::TestServer` which has no underlying socket).
+///
+/// This lets the same handler enforce loopback in production while remaining
+/// fully testable without a live TCP socket.
+struct MaybeConnectAddr(Option<SocketAddr>);
+
+impl<S> FromRequestParts<S> for MaybeConnectAddr
+where
+    S: Send + Sync,
+{
+    type Rejection = Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let addr = parts
+            .extensions
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|ci| ci.0);
+        Ok(MaybeConnectAddr(addr))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Response types
 // ---------------------------------------------------------------------------
 
@@ -103,6 +135,20 @@ pub struct HealthResponse {
 
     /// The build ID of the currently loaded manifest.
     pub build_id: String,
+}
+
+/// Request body for `POST /reload`.
+#[derive(Debug, Deserialize)]
+struct ReloadRequest {
+    /// Absolute path to the `ChunkManifest` JSON file on disk.
+    manifest_path: String,
+}
+
+/// Success response body for `POST /reload`.
+#[derive(Debug, Serialize)]
+struct ReloadResponse {
+    /// The `build_id` of the newly loaded manifest.
+    build_id: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -138,6 +184,7 @@ pub fn build_router(app: AppState, telemetry: TelemetryLogger) -> Router {
         .route("/manifest", post(post_manifest))
         .route("/health", get(get_health))
         .route("/sw.js", get(get_service_worker))
+        .route("/reload", post(post_reload))
         .with_state(state)
 }
 
@@ -260,4 +307,71 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+/// `POST /reload` — hot-swap the in-memory manifest from a file on disk.
+///
+/// Operator-only endpoint. When served via a real TCP listener started with
+/// [`axum::serve`] + `into_make_service_with_connect_info::<SocketAddr>()`,
+/// requests from non-loopback addresses are rejected with `403 Forbidden`.
+///
+/// When no `ConnectInfo` is present (e.g. `axum_test::TestServer`), the
+/// loopback check is skipped — this is intentional and correct for
+/// unit-level HTTP testing.
+///
+/// Body: `{ "manifest_path": "/absolute/path/to/manifest.json" }`
+/// Success: `200 OK` `{ "build_id": "<new_build_id>" }`
+/// Errors: `422 Unprocessable Entity` `{ "error": "..." }` on file/parse failure
+/// `403 Forbidden` if request originates from a non-loopback address
+async fn post_reload(
+    MaybeConnectAddr(addr): MaybeConnectAddr,
+    State(state): State<RouterState>,
+    Json(body): Json<ReloadRequest>,
+) -> impl IntoResponse {
+    // Enforce loopback when ConnectInfo is present (production TCP mode).
+    // Skipped in axum_test (no real TCP socket).
+    if let Some(addr) = addr {
+        if !addr.ip().is_loopback() {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "reload is only permitted from loopback addresses"
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    // Read manifest bytes from disk.
+    let json_bytes = match tokio::fs::read(&body.manifest_path).await {
+        Ok(b) => b,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": format!("failed to read manifest file: {e}")
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    // Parse the manifest JSON.
+    let new_manifest: ChunkManifest = match serde_json::from_slice(&json_bytes) {
+        Ok(m) => m,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": format!("invalid manifest JSON: {e}")
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    // Atomically swap the manifest.
+    let build_id = state.app.reload_manifest(new_manifest).await;
+
+    (StatusCode::OK, Json(ReloadResponse { build_id })).into_response()
 }
