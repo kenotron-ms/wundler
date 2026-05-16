@@ -76,11 +76,15 @@ async fn make_server() -> (TestServer, TempDir) {
     let manifest = manifest_file();
     let tmp_dir = TempDir::new().expect("failed to create temp dir");
     let log_path = tmp_dir.path().join("telemetry.jsonl");
+    let archive_path = tmp_dir.path().join("archive");
 
+    let archive = wundler_abs::archive::ManifestArchive::open(&archive_path, 10)
+        .expect("open archive");
     let app = AppState::load_from_disk(
         manifest.path(),
         "https://cdn.example.com".to_string(),
         300,
+        archive,
     )
     .await
     .expect("failed to load AppState from manifest");
@@ -272,11 +276,15 @@ async fn test_bearer_auth_enforced_when_security_enabled() {
     let manifest_f = manifest_file();
     let tmp_dir = TempDir::new().expect("temp dir");
     let log_path = tmp_dir.path().join("telemetry.jsonl");
+    let archive_path = tmp_dir.path().join("archive");
 
+    let archive = wundler_abs::archive::ManifestArchive::open(&archive_path, 10)
+        .expect("open archive");
     let app = AppState::load_from_disk(
         manifest_f.path(),
         "https://cdn.example.com".to_string(),
         300,
+        archive,
     )
     .await
     .expect("load app state");

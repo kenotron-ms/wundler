@@ -74,10 +74,14 @@ async fn load_with_valid_signature_succeeds() {
     let verifier = ManifestVerifier::from_pem(&kp.verifying_key_pem)
         .expect("ManifestVerifier::from_pem with matching public key");
 
+    let archive_dir = tempfile::TempDir::new().expect("archive tempdir");
+    let archive = wundler_abs::archive::ManifestArchive::open(archive_dir.path(), 10)
+        .expect("open archive");
     let state = AppState::load_signed_from_disk(
         tmp.path(),
         "https://cdn.example.com".to_string(),
         3600,
+        archive,
         Some((&verifier, &sig)),
     )
     .await
@@ -114,10 +118,14 @@ async fn load_with_wrong_signature_fails() {
 
     let tmp = write_to_temp(BASE_JSON.as_bytes());
 
+    let archive_dir = tempfile::TempDir::new().expect("archive tempdir");
+    let archive = wundler_abs::archive::ManifestArchive::open(archive_dir.path(), 10)
+        .expect("open archive");
     let result = AppState::load_signed_from_disk(
         tmp.path(),
         "https://cdn.example.com".to_string(),
         3600,
+        archive,
         Some((&verifier, &sig)),
     )
     .await;
@@ -153,10 +161,14 @@ async fn load_with_tampered_manifest_fails() {
     let verifier = ManifestVerifier::from_pem(&kp.verifying_key_pem)
         .expect("ManifestVerifier::from_pem");
 
+    let archive_dir = tempfile::TempDir::new().expect("archive tempdir");
+    let archive = wundler_abs::archive::ManifestArchive::open(archive_dir.path(), 10)
+        .expect("open archive");
     let result = AppState::load_signed_from_disk(
         tmp.path(),
         "https://cdn.example.com".to_string(),
         3600,
+        archive,
         Some((&verifier, &sig)),
     )
     .await;
@@ -177,10 +189,14 @@ async fn load_with_tampered_manifest_fails() {
 async fn load_without_verifier_skips_check() {
     let tmp = write_to_temp(BASE_JSON.as_bytes());
 
+    let archive_dir = tempfile::TempDir::new().expect("archive tempdir");
+    let archive = wundler_abs::archive::ManifestArchive::open(archive_dir.path(), 10)
+        .expect("open archive");
     let state = AppState::load_signed_from_disk(
         tmp.path(),
         "https://cdn.example.com".to_string(),
         3600,
+        archive,
         None, // no verification requested
     )
     .await

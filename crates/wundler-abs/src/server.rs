@@ -72,6 +72,12 @@ pub struct AbsConfig {
     /// How long clients should cache a manifest response, in seconds.
     pub ttl_seconds: u64,
 
+    /// Directory where the manifest archive stores versioned JSON files.
+    pub archive_dir: PathBuf,
+
+    /// Maximum number of manifest versions to retain in the archive.
+    pub archive_retention: usize,
+
     /// Bearer-token authentication configuration.
     pub security: SecurityConfig,
 }
@@ -85,6 +91,8 @@ impl Default for AbsConfig {
             signing_key_pem: None,
             port: 8080,
             ttl_seconds: 300,
+            archive_dir: PathBuf::from("dist/.archive"),
+            archive_retention: 10,
             security: SecurityConfig::default(),
         }
     }
@@ -233,10 +241,17 @@ pub fn build_router(
 /// Binds to `0.0.0.0:{config.port}`, logs the listening address, then drives
 /// the Axum server to completion (or until the process is signalled).
 pub async fn run(config: AbsConfig) -> Result<()> {
+    let archive = crate::archive::ManifestArchive::open(
+        &config.archive_dir,
+        config.archive_retention,
+    )
+    .context("failed to open manifest archive")?;
+
     let app = AppState::load_from_disk(
         &config.manifest_path,
         config.cdn_base_url.clone(),
         config.ttl_seconds,
+        archive,
     )
     .await?;
 
@@ -268,15 +283,15 @@ async fn post_manifest(
     State(state): State<RouterState>,
     Json(req): Json<ManifestRequest>,
 ) -> Result<Json<ManifestResponse>, ManifestError> {
-    let manifest_guard = state.app.manifest.read().await;
+    let manifest = state.app.snapshot().await;
 
-    let mut resp = compute_delta(&manifest_guard, &req, &state.app.cdn_base_url);
+    let mut resp = compute_delta(&manifest, &req, &state.app.cdn_base_url);
 
     // Override TTL with the server-configured value.
     resp.ttl = state.app.ttl_seconds;
 
     // Determine which chunk IDs will be served for telemetry purposes.
-    let chunks_served: Vec<String> = manifest_guard
+    let chunks_served: Vec<String> = manifest
         .entry_chunks
         .get(&req.entry_point)
         .cloned()
@@ -304,10 +319,10 @@ async fn post_manifest(
 
 /// `GET /health` — return a liveness check with the current build ID.
 async fn get_health(State(state): State<RouterState>) -> Json<HealthResponse> {
-    let manifest_guard = state.app.manifest.read().await;
+    let manifest = state.app.snapshot().await;
     Json(HealthResponse {
         status: "ok",
-        build_id: manifest_guard.build_id.clone(),
+        build_id: manifest.build_id.clone(),
     })
 }
 
@@ -408,8 +423,12 @@ async fn post_reload(
         }
     };
 
-    // Atomically swap the manifest.
-    let build_id = state.app.reload_manifest(new_manifest).await;
+    // Atomically swap the manifest (temporary direct-write; Task 4 will use swap_to).
+    let build_id = new_manifest.build_id.clone();
+    {
+        let mut guard = state.app.manifest.write().await;
+        *guard = Arc::new(new_manifest);
+    }
 
     (StatusCode::OK, Json(ReloadResponse { build_id })).into_response()
 }
@@ -445,7 +464,8 @@ mod tests {
     /// Uses an in-memory `ChunkManifest` (no disk I/O) and a temp file for the
     /// telemetry log.  The `NamedTempFile` drops at the end of this function, but
     /// the open `File` descriptor inside `TelemetryLogger` remains valid (Unix
-    /// unlink semantics).
+    /// unlink semantics).  The archive `TempDir` is intentionally leaked so the
+    /// directory outlives the test function.
     fn test_state() -> (AppState, TelemetryLogger) {
         let manifest = ChunkManifest {
             build_id: "test-build".to_string(),
@@ -454,8 +474,15 @@ mod tests {
             module_index: HashMap::new(),
         };
 
+        // Leak the TempDir so the archive directory stays alive for the test process.
+        let archive_tmp = Box::leak(Box::new(tempfile::TempDir::new().expect("archive tempdir")));
+        let archive = crate::archive::ManifestArchive::open(archive_tmp.path(), 10)
+            .expect("open archive");
+
         let app = AppState {
-            manifest: Arc::new(RwLock::new(manifest)),
+            manifest: Arc::new(RwLock::new(Arc::new(manifest))),
+            archive: Arc::new(archive),
+            reload_lock: Arc::new(tokio::sync::Mutex::new(())),
             cdn_base_url: Arc::new("https://cdn.example.com".to_string()),
             ttl_seconds: 60,
         };

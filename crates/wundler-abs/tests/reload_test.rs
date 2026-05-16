@@ -39,6 +39,7 @@ fn manifest_json(build_id: &str) -> String {
 async fn make_server() -> (TestServer, TempDir) {
     let tmp_dir = TempDir::new().expect("create temp dir");
     let log_path = tmp_dir.path().join("telemetry.jsonl");
+    let archive_path = tmp_dir.path().join("archive");
 
     let initial = ChunkManifest {
         build_id: "initial-id".to_string(),
@@ -46,8 +47,12 @@ async fn make_server() -> (TestServer, TempDir) {
         entry_chunks: HashMap::new(),
         module_index: HashMap::new(),
     };
+    let archive = wundler_abs::archive::ManifestArchive::open(&archive_path, 10)
+        .expect("open archive");
     let app = AppState {
-        manifest: Arc::new(RwLock::new(initial)),
+        manifest: Arc::new(RwLock::new(Arc::new(initial))),
+        archive: Arc::new(archive),
+        reload_lock: Arc::new(tokio::sync::Mutex::new(())),
         cdn_base_url: Arc::new("https://cdn.example.com".to_string()),
         ttl_seconds: 300,
     };

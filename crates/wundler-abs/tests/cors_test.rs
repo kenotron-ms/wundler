@@ -15,6 +15,7 @@ use wundler_abs::telemetry::TelemetryLogger;
 async fn make_server(allowed_origins: Vec<String>) -> (TestServer, tempfile::TempDir) {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let manifest_path = tmp.path().join("manifest.json");
+    let archive_path = tmp.path().join("archive");
     let manifest_json = serde_json::json!({
         "build_id": "test-build",
         "chunks": [],
@@ -23,10 +24,13 @@ async fn make_server(allowed_origins: Vec<String>) -> (TestServer, tempfile::Tem
     }).to_string();
     std::fs::write(&manifest_path, manifest_json).expect("write manifest");
 
+    let archive = wundler_abs::archive::ManifestArchive::open(&archive_path, 10)
+        .expect("open archive");
     let app = AppState::load_from_disk(
         &manifest_path,
         "https://cdn.example.com".to_string(),
         300,
+        archive,
     )
     .await
     .expect("load app state");
@@ -163,10 +167,14 @@ async fn cors_layer_is_outer_so_401_responses_still_carry_cors_header() {
     }).to_string();
     std::fs::write(&manifest_path, manifest_json).expect("write manifest");
 
+    let archive_path = tmp.path().join("archive");
+    let archive = wundler_abs::archive::ManifestArchive::open(&archive_path, 10)
+        .expect("open archive");
     let app = AppState::load_from_disk(
         &manifest_path,
         "https://cdn.example.com".to_string(),
         300,
+        archive,
     )
     .await
     .expect("load app state");

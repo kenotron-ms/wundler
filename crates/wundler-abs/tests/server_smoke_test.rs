@@ -23,8 +23,13 @@ fn router_builds_without_panic() {
         module_index: HashMap::new(),
     };
 
+    let archive_tmp = Box::leak(Box::new(tempfile::TempDir::new().expect("archive tempdir")));
+    let archive = wundler_abs::archive::ManifestArchive::open(archive_tmp.path(), 10)
+        .expect("open archive");
     let app = AppState {
-        manifest: Arc::new(RwLock::new(manifest)),
+        manifest: Arc::new(RwLock::new(Arc::new(manifest))),
+        archive: Arc::new(archive),
+        reload_lock: Arc::new(tokio::sync::Mutex::new(())),
         cdn_base_url: Arc::new("https://cdn.example.com".to_string()),
         ttl_seconds: 300,
     };

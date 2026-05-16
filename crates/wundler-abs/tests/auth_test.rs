@@ -182,10 +182,18 @@ async fn make_open_server() -> (TestServer, TempDir) {
     let manifest = auth_test_manifest();
     let tmp_dir = TempDir::new().expect("create temp dir");
     let log_path = tmp_dir.path().join("telemetry.jsonl");
+    let archive_path = tmp_dir.path().join("archive");
 
-    let app = AppState::load_from_disk(manifest.path(), "https://cdn.example.com".to_string(), 300)
-        .await
-        .expect("load AppState");
+    let archive = wundler_abs::archive::ManifestArchive::open(&archive_path, 10)
+        .expect("open archive");
+    let app = AppState::load_from_disk(
+        manifest.path(),
+        "https://cdn.example.com".to_string(),
+        300,
+        archive,
+    )
+    .await
+    .expect("load AppState");
     let telemetry = TelemetryLogger::new(&log_path).expect("TelemetryLogger");
     let security = ResolvedSecurity::from_config(&SecurityConfig::default())
         .expect("default security");
@@ -200,13 +208,21 @@ async fn make_secured_server(token: &str) -> (TestServer, TempDir, NamedTempFile
     let manifest = auth_test_manifest();
     let tmp_dir = TempDir::new().expect("create temp dir");
     let log_path = tmp_dir.path().join("telemetry.jsonl");
+    let archive_path = tmp_dir.path().join("archive");
 
     let mut token_file = NamedTempFile::new().expect("create token file");
     write!(token_file, "{token}").expect("write token");
 
-    let app = AppState::load_from_disk(manifest.path(), "https://cdn.example.com".to_string(), 300)
-        .await
-        .expect("load AppState");
+    let archive = wundler_abs::archive::ManifestArchive::open(&archive_path, 10)
+        .expect("open archive");
+    let app = AppState::load_from_disk(
+        manifest.path(),
+        "https://cdn.example.com".to_string(),
+        300,
+        archive,
+    )
+    .await
+    .expect("load AppState");
     let telemetry = TelemetryLogger::new(&log_path).expect("TelemetryLogger");
     let config = SecurityConfig {
         bearer_token_file: Some(token_file.path().to_path_buf()),
