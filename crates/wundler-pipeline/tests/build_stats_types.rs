@@ -29,7 +29,7 @@ fn build_stats_artifact_roundtrip() {
     use std::collections::HashMap;
 
     let artifact = BuildStatsArtifact {
-        schema_version: "1",
+        schema_version: "1".to_string(),
         build_id: "abc123".to_string(),
         wundler_version: "0.1.0".to_string(),
         generated_at: "2025-01-01T00:00:00Z".to_string(),
@@ -121,7 +121,7 @@ fn optional_fields_omitted_when_none() {
     use std::collections::HashMap;
 
     let artifact = BuildStatsArtifact {
-        schema_version: "1",
+        schema_version: "1".to_string(),
         build_id: "x".to_string(),
         wundler_version: "0.0.1".to_string(),
         generated_at: "t".to_string(),

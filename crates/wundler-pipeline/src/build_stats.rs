@@ -34,7 +34,7 @@ pub struct BuildTiming {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuildStatsArtifact {
     /// Always `"1"` for this schema.
-    pub schema_version: &'static str,
+    pub schema_version: String,
     /// Content-based build identifier (mirrors `BuildOutput.manifest.build_id`).
     pub build_id: String,
     /// `env!("CARGO_PKG_VERSION")` of the `wundler-pipeline` crate.
@@ -218,7 +218,7 @@ impl BuildStatsArtifact {
         let previous_build = previous.map(|prev| compute_previous_build_info(prev, &summary, &chunks));
 
         BuildStatsArtifact {
-            schema_version: "1",
+            schema_version: "1".to_string(),
             build_id: out.manifest.build_id.clone(),
             wundler_version: env!("CARGO_PKG_VERSION").to_string(),
             generated_at: chrono::Utc::now().to_rfc3339(),

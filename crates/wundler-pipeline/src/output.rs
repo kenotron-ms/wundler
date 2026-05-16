@@ -215,3 +215,35 @@ pub fn write_rolldown_index_html(out_dir: &Path, entry: &str) -> Result<()> {
     fs::write(out_dir.join("index.html"), html)?;
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// write_build_stats — atomic
+// ---------------------------------------------------------------------------
+
+use crate::build_stats::BuildStatsArtifact;
+
+/// Atomically write the build-stats artifact to `<out_dir>/build-stats.json`.
+///
+/// Strategy: write JSON to `<out_dir>/build-stats.json.tmp`, then `rename` it
+/// into place. The rename is atomic on every platform supported by Wundler.
+pub fn write_build_stats(out_dir: &Path, stats: &BuildStatsArtifact) -> Result<()> {
+    fs::create_dir_all(out_dir)?;
+
+    let final_path = out_dir.join("build-stats.json");
+    let tmp_path = out_dir.join("build-stats.json.tmp");
+
+    let json = serde_json::to_string_pretty(stats)?;
+    fs::write(&tmp_path, json)?;
+    fs::rename(&tmp_path, &final_path)?;
+
+    Ok(())
+}
+
+/// Read `<out_dir>/build-stats.json` if present and parseable.
+///
+/// Returns `None` on any error (missing file, IO error, JSON parse error).
+pub fn read_previous_stats(out_dir: &Path) -> Option<BuildStatsArtifact> {
+    let path = out_dir.join("build-stats.json");
+    let bytes = fs::read(&path).ok()?;
+    serde_json::from_slice::<BuildStatsArtifact>(&bytes).ok()
+}
