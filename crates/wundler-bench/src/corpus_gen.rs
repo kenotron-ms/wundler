@@ -1,0 +1,320 @@
+//! Deterministic synthetic corpus generator.
+
+use std::path::Path;
+
+use anyhow::{Context, Result};
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
+use serde::Serialize;
+
+use crate::archetypes::{json_config, markdown, ts_module};
+use crate::profile::{check_schema_version, BenchProfile, PROFILE_SCHEMA_VERSION};
+use crate::repo_scale::DirectoryStat;
+
+const FINGERPRINT_FILENAME: &str = ".wundler-bench-fingerprint.json";
+
+/// Generate a synthetic corpus at `out_dir` matching `profile`'s shape.
+/// Fully deterministic: same profile + seed → byte-identical files.
+pub fn generate_corpus(profile: &BenchProfile, out_dir: &Path) -> Result<()> {
+    check_schema_version(profile)?;
+    std::fs::create_dir_all(out_dir)
+        .with_context(|| format!("creating out_dir {}", out_dir.display()))?;
+
+    // Stable-ordered extension list for determinism.
+    let mut exts: Vec<(&String, &crate::repo_scale::ExtensionStat)> =
+        profile.target.workspace_stats.extension_stats.iter().collect();
+    exts.sort_by(|a, b| a.0.cmp(b.0));
+
+    let dirs: Vec<DirectoryStat> = if profile.target.workspace_stats.directory_stats.is_empty() {
+        vec![DirectoryStat {
+            path: "src".to_string(),
+            file_count: profile.target.workspace_stats.total_files,
+        }]
+    } else {
+        profile.target.workspace_stats.directory_stats.clone()
+    };
+
+    let mut rng = StdRng::seed_from_u64(profile.gen.seed);
+    let mut global_index: u64 = 0;
+
+    for (ext, stat) in &exts {
+        let n = stat.file_count;
+        if n == 0 {
+            continue;
+        }
+        let avg_bytes = stat.avg_file_bytes.max(1.0) as u64;
+        let allocations = allocate_files_to_dirs(&dirs, n);
+
+        for (dir_path, count_in_dir) in allocations {
+            let dir_full = out_dir.join(&dir_path);
+            std::fs::create_dir_all(&dir_full)
+                .with_context(|| format!("creating dir {}", dir_full.display()))?;
+
+            for _ in 0..count_in_dir {
+                let seed_for_file: u64 = rng.gen();
+                let filename = format!("file_{global_index:06}.{ext}");
+                let path = dir_full.join(&filename);
+                let content = render_file_for_ext(ext, seed_for_file, avg_bytes);
+                std::fs::write(&path, content)
+                    .with_context(|| format!("writing {}", path.display()))?;
+                global_index += 1;
+            }
+        }
+    }
+
+    write_fingerprint(profile, out_dir)?;
+    Ok(())
+}
+
+fn render_file_for_ext(ext: &str, seed: u64, target_bytes: u64) -> String {
+    match ext {
+        "ts" => {
+            let variant = match seed % 5 {
+                0 => ts_module::Variant::Barrel,
+                1 | 2 => ts_module::Variant::Intermediate,
+                _ => ts_module::Variant::Leaf,
+            };
+            ts_module::generate(variant, seed, target_bytes)
+        }
+        "json" => json_config::generate(seed, target_bytes),
+        "md" => markdown::generate(seed, target_bytes),
+        other => {
+            let head = format!("// archetype-fallback for .{other} seed={seed}\n");
+            crate::archetypes::pad_to_target(
+                head,
+                target_bytes,
+                crate::archetypes::PadStyle::CSlash,
+            )
+        }
+    }
+}
+
+fn allocate_files_to_dirs(dirs: &[DirectoryStat], total: u64) -> Vec<(String, u64)> {
+    let weight_sum: u64 = dirs.iter().map(|d| d.file_count.max(1)).sum();
+    let mut alloc: Vec<(String, u64, f64)> = dirs
+        .iter()
+        .map(|d| {
+            let w = d.file_count.max(1) as f64 / weight_sum as f64;
+            let exact = w * total as f64;
+            (d.path.clone(), exact.floor() as u64, exact - exact.floor())
+        })
+        .collect();
+
+    let assigned: u64 = alloc.iter().map(|(_, n, _)| *n).sum();
+    let mut remaining = total.saturating_sub(assigned);
+    let mut order: Vec<usize> = (0..alloc.len()).collect();
+    order.sort_by(|&a, &b| {
+        alloc[b]
+            .2
+            .partial_cmp(&alloc[a].2)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| alloc[a].0.cmp(&alloc[b].0))
+    });
+    for &idx in &order {
+        if remaining == 0 {
+            break;
+        }
+        alloc[idx].1 += 1;
+        remaining -= 1;
+    }
+    alloc.into_iter().map(|(p, n, _)| (p, n)).collect()
+}
+
+#[derive(Serialize)]
+struct Fingerprint<'a> {
+    profile_schema_version: u32,
+    seed: u64,
+    generator_version: &'static str,
+    profile_target_total_files: u64,
+    notes: &'a str,
+}
+
+fn write_fingerprint(profile: &BenchProfile, out_dir: &Path) -> Result<()> {
+    let fp = Fingerprint {
+        profile_schema_version: PROFILE_SCHEMA_VERSION,
+        seed: profile.gen.seed,
+        generator_version: env!("CARGO_PKG_VERSION"),
+        profile_target_total_files: profile.target.workspace_stats.total_files,
+        notes: "generated by wundler-bench corpus_gen",
+    };
+    let text = serde_json::to_string_pretty(&fp)?;
+    std::fs::write(out_dir.join(FINGERPRINT_FILENAME), text)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::profile::{BenchProfile, GenHints, Tolerances, PROFILE_SCHEMA_VERSION};
+    use crate::repo_scale::{
+        DirectoryStat, ExtensionStat, GitStats, ManifestStats, RepoScaleReport, WorkspaceStats,
+    };
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    fn tiny_profile() -> BenchProfile {
+        let mut ext = HashMap::new();
+        ext.insert(
+            "ts".to_string(),
+            ExtensionStat {
+                file_count: 10,
+                total_bytes: 4_000,
+                total_lines: 200,
+                avg_file_bytes: 400.0,
+            },
+        );
+        ext.insert(
+            "json".to_string(),
+            ExtensionStat {
+                file_count: 5,
+                total_bytes: 1_000,
+                total_lines: 25,
+                avg_file_bytes: 200.0,
+            },
+        );
+        ext.insert(
+            "md".to_string(),
+            ExtensionStat {
+                file_count: 5,
+                total_bytes: 1_500,
+                total_lines: 25,
+                avg_file_bytes: 300.0,
+            },
+        );
+
+        BenchProfile {
+            profile_schema_version: PROFILE_SCHEMA_VERSION,
+            target: RepoScaleReport {
+                git_stats: GitStats::default(),
+                workspace_stats: WorkspaceStats {
+                    total_files: 20,
+                    total_bytes: 6_500,
+                    extension_stats: ext,
+                    directory_stats: vec![
+                        DirectoryStat {
+                            path: "src".to_string(),
+                            file_count: 15,
+                        },
+                        DirectoryStat {
+                            path: "docs".to_string(),
+                            file_count: 5,
+                        },
+                    ],
+                    packages: vec!["src".to_string()],
+                },
+                manifest_stats: ManifestStats::default(),
+            },
+            gen: GenHints {
+                seed: 12345,
+                tolerances: Tolerances::default(),
+            },
+        }
+    }
+
+    /// Count non-hidden files with the given extension under `root`.
+    /// Hidden files (names starting with `.`) are skipped so the fingerprint
+    /// metadata file does not inflate the count.
+    fn count_files(root: &PathBuf, ext: &str) -> u64 {
+        let mut n = 0u64;
+        let mut stack = vec![root.clone()];
+        while let Some(d) = stack.pop() {
+            let Ok(rd) = std::fs::read_dir(&d) else {
+                continue;
+            };
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else {
+                    let name = p
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("");
+                    if !name.starts_with('.')
+                        && p.extension().and_then(|s| s.to_str()) == Some(ext)
+                    {
+                        n += 1;
+                    }
+                }
+            }
+        }
+        n
+    }
+
+    #[test]
+    fn generates_expected_file_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        generate_corpus(&tiny_profile(), dir.path()).unwrap();
+        let root: PathBuf = dir.path().to_path_buf();
+        assert_eq!(count_files(&root, "ts"), 10);
+        assert_eq!(count_files(&root, "json"), 5);
+        assert_eq!(count_files(&root, "md"), 5);
+    }
+
+    #[test]
+    fn writes_fingerprint() {
+        let dir = tempfile::tempdir().unwrap();
+        generate_corpus(&tiny_profile(), dir.path()).unwrap();
+        let fp = dir.path().join(".wundler-bench-fingerprint.json");
+        assert!(fp.exists());
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&fp).unwrap()).unwrap();
+        assert_eq!(v["profile_schema_version"], PROFILE_SCHEMA_VERSION);
+        assert_eq!(v["seed"], 12345u64);
+    }
+
+    #[test]
+    fn deterministic_same_seed_identical_bytes() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        let p = tiny_profile();
+        generate_corpus(&p, a.path()).unwrap();
+        generate_corpus(&p, b.path()).unwrap();
+
+        fn hash_dir(root: &std::path::Path) -> u64 {
+            use std::collections::BTreeMap;
+            use std::hash::{Hash, Hasher};
+            let mut map: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+            let mut stack = vec![root.to_path_buf()];
+            while let Some(d) = stack.pop() {
+                for e in std::fs::read_dir(&d).unwrap().flatten() {
+                    let p = e.path();
+                    if p.is_dir() {
+                        stack.push(p);
+                    } else {
+                        let rel = p
+                            .strip_prefix(root)
+                            .unwrap()
+                            .to_string_lossy()
+                            .into_owned();
+                        if rel == ".wundler-bench-fingerprint.json" {
+                            continue;
+                        }
+                        map.insert(rel, std::fs::read(&p).unwrap());
+                    }
+                }
+            }
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            for (k, v) in &map {
+                k.hash(&mut h);
+                v.hash(&mut h);
+            }
+            h.finish()
+        }
+
+        assert_eq!(
+            hash_dir(a.path()),
+            hash_dir(b.path()),
+            "byte-identical output expected"
+        );
+    }
+
+    #[test]
+    fn refuses_future_schema_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut p = tiny_profile();
+        p.profile_schema_version = PROFILE_SCHEMA_VERSION + 1;
+        let err = generate_corpus(&p, dir.path()).unwrap_err();
+        assert!(format!("{err:?}").contains("schema"));
+    }
+}

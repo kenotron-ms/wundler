@@ -16,12 +16,15 @@ ed25519-dalek = { version = "2", features = ["pem", "rand_core"] }
 pkcs8 = { version = "0.10", features = ["pem"] }
 rand = "0.8"
 uuid = { version = "1", features = ["v4"] }
+dashmap = "5"
 anyhow = "1"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 subtle = "2"
 governor = "0.7"
+base64 = "0.22"
+hex = "0.4"
 tempfile = "3"
 
 [dev-dependencies]

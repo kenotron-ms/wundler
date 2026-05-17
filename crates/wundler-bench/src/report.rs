@@ -447,7 +447,7 @@ fn format_thousands(n: usize) -> String {
     let chars: Vec<char> = s.chars().collect();
     let len = chars.len();
     for (i, c) in chars.iter().enumerate() {
-        if i > 0 && (len - i) % 3 == 0 {
+        if i > 0 && (len - i).is_multiple_of(3) {
             result.push(',');
         }
         result.push(*c);
@@ -513,7 +513,7 @@ fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
 }
 
 fn is_leap(y: u64) -> bool {
-    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+    (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
 }
 
 // ---------------------------------------------------------------------------

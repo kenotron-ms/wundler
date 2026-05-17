@@ -72,6 +72,7 @@ fn make_ts_project(tag: &str) -> (TempDir, TempDir, BuildConfig) {
             m
         },
         budget: None,
+        dev: None,
     };
 
     (project_dir, out_dir, config)

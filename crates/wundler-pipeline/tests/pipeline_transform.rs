@@ -58,6 +58,7 @@ fn make_config(root: PathBuf) -> BuildConfig {
             m
         },
         budget: None,
+        dev: None,
     }
 }
 

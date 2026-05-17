@@ -1,6 +1,6 @@
 //! Append-only JSONL telemetry log.
 //!
-//! [`TelemetryLogger`] writes one JSON line per [`TelemetryEvent`] to a file.
+//! [`TelemetryLogger`] writes one JSON line per serializable event to a file.
 //! The underlying [`std::io::BufWriter`] is wrapped in a [`std::sync::Mutex`]
 //! and shared via [`std::sync::Arc`], so **clones share the same writer** and
 //! concurrent calls from multiple threads never produce torn lines.
@@ -14,8 +14,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-
-use crate::types::TelemetryEvent;
+use serde::Serialize;
 
 /// Append-only JSONL telemetry logger.
 ///
@@ -58,7 +57,7 @@ impl TelemetryLogger {
     ///
     /// The lock is held for the entire write + flush so that concurrent
     /// callers never interleave bytes and produce a torn line.
-    pub fn log(&self, event: &TelemetryEvent) -> Result<()> {
+    pub fn log<T: Serialize>(&self, event: &T) -> Result<()> {
         let mut line = serde_json::to_vec(event)?;
         line.push(b'\n');
 

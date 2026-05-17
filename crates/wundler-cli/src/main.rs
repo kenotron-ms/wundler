@@ -395,12 +395,73 @@ fn run_build(
 
 async fn run_dev(config_path: &Path, port: u16) -> Result<()> {
     let cfg = BuildConfig::load(config_path)?;
-    println!(
-        "wundler dev: serving {} on http://127.0.0.1:{}",
-        cfg.root.display(),
-        port
+
+    // Pre-bundle dependencies before the watcher starts. Non-fatal.
+    let ttl_days = cfg.dev.as_ref()
+        .and_then(|d| d.dep_cache_ttl_days)
+        .unwrap_or(14);
+    let prebundler = wundler_dev::DepPrebundler::new(
+        cfg.root.join(".wundler").join("cache").join("deps"),
+        ttl_days,
     );
+
+    match prebundler.ensure_fresh(&cfg.root) {
+        Ok(r) if r.from_cache => tracing::debug!("dep cache hit: {}", r.fingerprint),
+        Ok(r) => tracing::info!("dep pre-bundle complete: {}", r.fingerprint),
+        Err(e) => tracing::warn!("dep pre-bundle failed (continuing): {e}"),
+    }
+
+    if let Err(e) = prebundler.gc() {
+        tracing::warn!("dep cache gc failed (continuing): {e}");
+    }
+
+    match dir_size_bytes(prebundler.cache_root()) {
+        Ok(bytes) if bytes > 1_073_741_824 => {
+            tracing::warn!(
+                "dep cache at {} is {:.2} GB — consider clearing or lowering dep_cache_ttl_days",
+                prebundler.cache_root().display(),
+                bytes as f64 / 1_073_741_824.0
+            );
+        }
+        Ok(_) => {}
+        Err(e) => tracing::debug!("could not measure dep cache size: {e}"),
+    }
+
+    println!("wundler dev: serving {} on http://127.0.0.1:{}", cfg.root.display(), port);
     DevServer { root: cfg.root, port }.start().await
+}
+
+fn dir_size_bytes(dir: &std::path::Path) -> Result<u64> {
+    if !dir.is_dir() { return Ok(0); }
+    let mut total: u64 = 0;
+    for entry in walkdir::WalkDir::new(dir).follow_links(false) {
+        let entry = entry.with_context(|| format!("walking {}", dir.display()))?;
+        if entry.file_type().is_file() {
+            total = total.saturating_add(entry.metadata()?.len());
+        }
+    }
+    Ok(total)
+}
+
+#[cfg(test)]
+mod dev_tests {
+    use super::dir_size_bytes;
+
+    #[test]
+    fn dir_size_bytes_missing_dir_is_zero() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("nope");
+        assert_eq!(dir_size_bytes(&missing).unwrap(), 0);
+    }
+
+    #[test]
+    fn dir_size_bytes_sums_nested_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("a/b")).unwrap();
+        std::fs::write(tmp.path().join("a/x.txt"), b"hello").unwrap();
+        std::fs::write(tmp.path().join("a/b/y.txt"), b"worldly").unwrap();
+        assert_eq!(dir_size_bytes(tmp.path()).unwrap(), 12);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -420,6 +481,8 @@ async fn run_abs_serve(config_path: &Path) -> Result<()> {
         signing_key_pem: toml_cfg.signing_key_pem,
         port: toml_cfg.port,
         ttl_seconds: toml_cfg.ttl_seconds,
+        archive_dir: PathBuf::from("dist/.archive"),
+        archive_retention: 10,
         security: wundler_abs::security::SecurityConfig::default(),
     };
 
@@ -659,7 +722,7 @@ fn cmd_pgo_analyze(db: PathBuf, manifest_path: PathBuf) -> Result<()> {
     });
 
     println!("PGO Analysis (build {})", manifest.build_id);
-    println!("{:<32} {:>10} {:>12} {}", "chunk", "co_score", "load_order", "merge");
+    println!("{:<32} {:>10} {:>12} merge", "chunk", "co_score", "load_order");
     println!("{}", "─".repeat(72));
     for (id, hint) in entries.iter().take(10) {
         let merge = hint

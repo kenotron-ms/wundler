@@ -228,6 +228,7 @@ pub(crate) fn build_app(
             m
         },
         budget: None,
+        dev: None,
     };
 
     let pipeline = BuildPipeline::new(config);

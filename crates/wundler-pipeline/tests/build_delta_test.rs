@@ -24,6 +24,7 @@ fn run_build_with_source(root: &std::path::Path, out_dir: &std::path::Path, cont
         engine: EngineChoice::Swc,
         entry_points,
         budget: None,
+        dev: None,
     };
 
     BuildPipeline::new(cfg).build().expect("build succeeds");

@@ -30,6 +30,7 @@ fn router_builds_without_panic() {
         manifest: Arc::new(RwLock::new(Arc::new(manifest))),
         archive: Arc::new(archive),
         reload_lock: Arc::new(tokio::sync::Mutex::new(())),
+        signature: Arc::new(RwLock::new(None)),
         cdn_base_url: Arc::new("https://cdn.example.com".to_string()),
         ttl_seconds: 300,
     };
@@ -42,6 +43,8 @@ fn router_builds_without_panic() {
         app,
         telemetry,
         Arc::new(ResolvedSecurity::from_config(&SecurityConfig::default()).unwrap()),
+        None,
+        Arc::new(wundler_abs::metrics::Metrics::new()),
     );
 }
 

@@ -147,6 +147,7 @@ fn make_app_state(manifest: ChunkManifest) -> wundler_abs::state::AppState {
         manifest: Arc::new(RwLock::new(Arc::new(manifest))),
         archive: Arc::new(archive),
         reload_lock: Arc::new(tokio::sync::Mutex::new(())),
+        signature: Arc::new(RwLock::new(None)),
         cdn_base_url: Arc::new("https://cdn.example.com".to_string()),
         ttl_seconds: 300,
     }
@@ -224,6 +225,7 @@ fn make_app_state_with_archive(initial: ChunkManifest, dir: &std::path::Path) ->
         manifest: Arc::new(RwLock::new(Arc::new(initial))),
         archive: Arc::new(archive),
         reload_lock: Arc::new(tokio::sync::Mutex::new(())),
+        signature: Arc::new(RwLock::new(None)),
         cdn_base_url: Arc::new("https://cdn.example.com".to_string()),
         ttl_seconds: 300,
     }

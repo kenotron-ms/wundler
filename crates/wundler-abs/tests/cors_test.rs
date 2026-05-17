@@ -45,7 +45,7 @@ async fn make_server(allowed_origins: Vec<String>) -> (TestServer, tempfile::Tem
     })
     .expect("resolve security");
 
-    let router = build_router(app, telemetry, Arc::new(security));
+    let router = build_router(app, telemetry, Arc::new(security), None, Arc::new(wundler_abs::metrics::Metrics::new()));
     (TestServer::new(router), tmp)
 }
 
@@ -189,7 +189,7 @@ async fn cors_layer_is_outer_so_401_responses_still_carry_cors_header() {
     })
     .expect("resolve security");
 
-    let router = build_router(app, telemetry, Arc::new(security));
+    let router = build_router(app, telemetry, Arc::new(security), None, Arc::new(wundler_abs::metrics::Metrics::new()));
     let server = TestServer::new(router);
 
     let resp = server

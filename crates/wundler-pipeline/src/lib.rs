@@ -14,7 +14,7 @@ pub use build_stats::{
     TimingBlock,
 };
 pub use budget::{BudgetConfig, BudgetViolation};
-pub use config::{BuildConfig, EngineChoice};
+pub use config::{BuildConfig, DevConfig, EngineChoice};
 pub use dev_server::DevServer;
 pub use pipeline::{BuildOutput, BuildPipeline};
 

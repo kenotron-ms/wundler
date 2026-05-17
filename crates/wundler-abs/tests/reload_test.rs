@@ -54,6 +54,7 @@ async fn make_server() -> (TestServer, TempDir) {
         manifest: Arc::new(RwLock::new(Arc::new(initial))),
         archive: Arc::new(archive),
         reload_lock: Arc::new(tokio::sync::Mutex::new(())),
+        signature: Arc::new(RwLock::new(None)),
         cdn_base_url: Arc::new("https://cdn.example.com".to_string()),
         ttl_seconds: 300,
     };
@@ -63,6 +64,8 @@ async fn make_server() -> (TestServer, TempDir) {
         app,
         telemetry,
         Arc::new(ResolvedSecurity::from_config(&SecurityConfig::default()).unwrap()),
+        None,
+        Arc::new(wundler_abs::metrics::Metrics::new()),
     );
     let server = TestServer::new(router);
 

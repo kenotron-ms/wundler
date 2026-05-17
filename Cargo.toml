@@ -9,6 +9,8 @@ members = [
     "crates/wundler-abs",
     "crates/wundler-pgo",
     "crates/wundler-bench",
+    "crates/wundler-dev",
+    "crates/wundler-html",
 ]
 
 [workspace.package]

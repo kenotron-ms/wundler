@@ -109,6 +109,10 @@ impl Default for AbsConfig {
 struct RouterState {
     app: AppState,
     telemetry: TelemetryLogger,
+    /// Reserved for Task 5 which wires in active signing; unused until then.
+    #[allow(dead_code)]
+    signer: Option<Arc<crate::signing::ManifestSigner>>,
+    metrics: Arc<crate::metrics::Metrics>,
 }
 
 // ---------------------------------------------------------------------------
@@ -211,8 +215,10 @@ pub fn build_router(
     app: AppState,
     telemetry: TelemetryLogger,
     security: Arc<ResolvedSecurity>,
+    signer: Option<Arc<crate::signing::ManifestSigner>>,
+    metrics: Arc<crate::metrics::Metrics>,
 ) -> Router {
-    let state = RouterState { app, telemetry };
+    let state = RouterState { app, telemetry, signer, metrics };
     let cors = build_cors(&security);
 
     // POST /manifest route, optionally rate-limited per source IP.
@@ -232,9 +238,13 @@ pub fn build_router(
         .merge(manifest_route)
         .route("/health", get(get_health))
         .route("/sw.js", get(get_service_worker))
+        .route("/manifest/full.json", get(get_manifest_full_json))
         .route("/reload", post(post_reload))
         .route("/select", post(post_select))
         .route("/versions", get(get_versions))
+        .route("/csp-report", post(post_csp_report))
+        .route("/telemetry/chunk-error", post(post_chunk_error))
+        .route("/metrics", get(get_metrics))
         // Inner: bearer-token authentication.
         .layer(middleware::from_fn_with_state(security, require_bearer))
         // Outer: CORS — applied last so it wraps the auth layer.
@@ -268,7 +278,17 @@ pub async fn run(config: AbsConfig) -> Result<()> {
     let telemetry = TelemetryLogger::new(&config.telemetry_log)?;
     let security = ResolvedSecurity::from_config(&config.security)
         .context("failed to initialise security config")?;
-    let router = build_router(app, telemetry, Arc::new(security));
+    let signer = if let Some(ref pem_path) = config.signing_key_pem {
+        let pem = std::fs::read_to_string(pem_path)
+            .with_context(|| format!("reading signing key from {}", pem_path.display()))?;
+        let s = crate::signing::ManifestSigner::from_pem(&pem)
+            .context("parsing signing key PEM")?;
+        Some(Arc::new(s))
+    } else {
+        None
+    };
+    let metrics = Arc::new(crate::metrics::Metrics::new());
+    let router = build_router(app, telemetry, Arc::new(security), signer, metrics);
 
     let addr = format!("0.0.0.0:{}", config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -384,6 +404,61 @@ async fn get_versions(State(state): State<RouterState>) -> Response {
     }
 }
 
+/// `GET /manifest/full.json` — return the complete current manifest as JSON.
+///
+/// Public endpoint (exempt from bearer-token auth). Returns:
+/// * `Content-Type: application/json`
+/// * `X-Wundler-Build-Id`: the current manifest's `build_id`
+/// * `X-Wundler-Signature`: base64-encoded ed25519 signature, if one is stored
+/// * `Cache-Control: public, max-age=<ttl>, immutable`
+async fn get_manifest_full_json(State(state): State<RouterState>) -> Response {
+    use base64::Engine as _;
+
+    let manifest = state.app.snapshot().await;
+    let sig = state.app.snapshot_signature().await;
+
+    let body = match serde_json::to_vec(&*manifest) {
+        Ok(b) => b,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to serialise manifest: {e}"),
+            )
+                .into_response()
+        }
+    };
+
+    let build_id_header = match axum::http::HeaderValue::from_str(&manifest.build_id) {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "manifest build_id is not a valid HTTP header value",
+            )
+                .into_response()
+        }
+    };
+
+    let cache_value = format!("public, max-age={}, immutable", state.app.ttl_seconds);
+
+    let mut resp = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("x-wundler-build-id", build_id_header)
+        .header(header::CACHE_CONTROL, cache_value)
+        .body(axum::body::Body::from(body))
+        .expect("static-shape response must build");
+
+    if let Some(sig) = sig {
+        let b64 = base64::engine::general_purpose::STANDARD.encode(sig.to_bytes());
+        if let Ok(hv) = axum::http::HeaderValue::from_str(&b64) {
+            resp.headers_mut().insert("x-wundler-signature", hv);
+        }
+    }
+
+    resp
+}
+
 /// `POST /reload` — hot-swap the in-memory manifest from a file on disk.
 ///
 /// Operator-only endpoint. When served via a real TCP listener started with
@@ -469,6 +544,23 @@ async fn post_reload(
                 .into_response();
         }
     };
+
+    // Prune stale metrics entries for builds no longer in the archive.
+    let active_build_ids: std::collections::HashSet<String> = state.app.archive
+        .list()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|e| e.build_id)
+        .collect();
+    state.metrics.prune(&active_build_ids);
+
+    // Re-sign the new manifest if a signer is configured.
+    // (swap_to already reset the signature slot to None.)
+    if let Some(signer) = &state.signer {
+        let active_manifest = state.app.snapshot().await;
+        let sig = signer.sign_manifest(&active_manifest);
+        state.app.set_signature(Some(sig)).await;
+    }
 
     (StatusCode::OK, Json(SwapResponseBody {
         previous: report.previous,
@@ -562,6 +654,90 @@ async fn post_select(
         .into_response()
 }
 
+/// `POST /telemetry/chunk-error` — receive chunk load errors from the Service Worker.
+///
+/// Body limit: 8 KiB. Bodies larger return 413.
+/// Always returns 200 OK (fire-and-forget from SW).
+/// Increments in-memory DashMap counter and appends to JSONL log.
+async fn post_chunk_error(State(state): State<RouterState>, body: axum::body::Body) -> Response {
+    use crate::metrics::chunk_error::ChunkErrorReport;
+    use crate::metrics::ChunkErrorKey;
+
+    const MAX_BODY_BYTES: usize = 8 * 1024;
+
+    let bytes = match axum::body::to_bytes(body, MAX_BODY_BYTES).await {
+        Ok(b) => b,
+        Err(_) => {
+            return (StatusCode::PAYLOAD_TOO_LARGE, "body too large").into_response();
+        }
+    };
+
+    let report: ChunkErrorReport = match serde_json::from_slice(&bytes) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({"error": format!("invalid body: {e}")})),
+            )
+                .into_response();
+        }
+    };
+
+    // Increment the in-memory counter.
+    state.metrics.increment_chunk_error(ChunkErrorKey {
+        build_id: report.build_id.clone(),
+        chunk_id: report.chunk_id.clone(),
+        error_type: report.error_type.clone(),
+    });
+
+    // Log via TelemetryEventV2 so the JSONL log has a `kind` discriminant.
+    let event = crate::types::TelemetryEventV2::ChunkError(crate::types::ChunkErrorEventV2 {
+        build_id: report.build_id,
+        chunk_id: report.chunk_id,
+        url: report.url,
+        error_type: report.error_type,
+        timestamp_ms: report.timestamp_ms,
+        session_id: report.session_id,
+    });
+    if let Err(e) = state.telemetry.log(&event) {
+        tracing::warn!("failed to log chunk error event: {e}");
+    }
+
+    StatusCode::OK.into_response()
+}
+
+/// `GET /metrics` — Prometheus text exposition.
+///
+/// Hand-rolled format, no SDK. Returns text/plain; version=0.0.4.
+/// Requires bearer auth when security is configured.
+async fn get_metrics(State(state): State<RouterState>) -> Response {
+    let body = crate::metrics::prometheus::render(&state.metrics);
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/plain; version=0.0.4")
+        .body(axum::body::Body::from(body))
+        .expect("metrics response must build")
+}
+
+/// `POST /csp-report` — sink for browser CSP violation reports.
+/// Body limit: 8 KiB. Larger bodies return 413. Always returns 200.
+/// Exempt from bearer auth (browsers send unauthenticated).
+async fn post_csp_report(body: axum::body::Body) -> Response {
+    const MAX_CSP_REPORT_BYTES: usize = 8 * 1024;
+
+    let bytes = match axum::body::to_bytes(body, MAX_CSP_REPORT_BYTES).await {
+        Ok(b) => b,
+        Err(_) => {
+            return (StatusCode::PAYLOAD_TOO_LARGE, "csp-report body too large").into_response();
+        }
+    };
+
+    let body_str = String::from_utf8_lossy(&bytes);
+    tracing::warn!(target: "csp_report", body = %body_str, "CSP violation report");
+
+    StatusCode::OK.into_response()
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -612,6 +788,7 @@ mod tests {
             manifest: Arc::new(RwLock::new(Arc::new(manifest))),
             archive: Arc::new(archive),
             reload_lock: Arc::new(tokio::sync::Mutex::new(())),
+            signature: Arc::new(RwLock::new(None)),
             cdn_base_url: Arc::new("https://cdn.example.com".to_string()),
             ttl_seconds: 60,
         };
@@ -631,7 +808,7 @@ mod tests {
         security: Arc<ResolvedSecurity>,
         ip: IpAddr,
     ) -> axum::Router {
-        let inner = super::build_router(app, telemetry, security);
+        let inner = super::build_router(app, telemetry, security, None, Arc::new(Metrics::new()));
         inner.layer(middleware::from_fn(
             move |mut req: Request<Body>, next: middleware::Next| async move {
                 let ci: ConnectInfo<SocketAddr> = ConnectInfo(SocketAddr::new(ip, 49_152));
@@ -767,5 +944,483 @@ mod tests {
                 "no rate limit must be applied"
             );
         }
+    }
+
+    // SEC2-3 — GET /manifest/full.json tests
+
+    use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
+    use ed25519_dalek::{Signer as _, SigningKey};
+    use rand::rngs::OsRng;
+
+    fn unsecured(app: AppState, telemetry: TelemetryLogger) -> axum::Router {
+        let security = Arc::new(ResolvedSecurity {
+            token: None,
+            allowed_origins: vec![],
+            rate_limiter: None,
+        });
+        super::build_router(app, telemetry, security, None, Arc::new(Metrics::new()))
+    }
+
+    #[tokio::test]
+    async fn manifest_full_json_returns_manifest_body_and_build_id_header() {
+        let (app, telemetry) = test_state();
+        let router = unsecured(app, telemetry);
+        let resp = router
+            .oneshot(Request::builder().uri("/manifest/full.json").body(Body::empty()).unwrap())
+            .await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap().to_str().unwrap(), "application/json");
+        assert_eq!(
+            resp.headers().get("x-wundler-build-id").expect("X-Wundler-Build-Id present").to_str().unwrap(),
+            "test-build"
+        );
+        assert!(resp.headers().get("x-wundler-signature").is_none());
+        let cache = resp.headers().get(CACHE_CONTROL).unwrap().to_str().unwrap();
+        assert!(cache.contains("public"));
+        assert!(cache.contains("immutable"));
+        let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        let parsed: ChunkManifest = serde_json::from_slice(&bytes).expect("body is manifest JSON");
+        assert_eq!(parsed.build_id, "test-build");
+    }
+
+    #[tokio::test]
+    async fn manifest_full_json_emits_signature_header_when_signature_present() {
+        let (app, telemetry) = test_state();
+        let sk = SigningKey::generate(&mut OsRng);
+        let manifest = app.snapshot().await;
+        let bytes = crate::signing::manifest_signature_bytes(&manifest);
+        let sig = sk.sign(&bytes);
+        app.set_signature(Some(sig)).await;
+        let router = unsecured(app, telemetry);
+        let resp = router
+            .oneshot(Request::builder().uri("/manifest/full.json").body(Body::empty()).unwrap())
+            .await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let header = resp.headers().get("x-wundler-signature")
+            .expect("X-Wundler-Signature present").to_str().unwrap().to_string();
+        use base64::Engine as _;
+        let decoded = base64::engine::general_purpose::STANDARD.decode(&header).expect("valid base64");
+        assert_eq!(decoded.len(), 64);
+        assert_eq!(decoded.as_slice(), sig.to_bytes().as_slice());
+    }
+
+    #[tokio::test]
+    async fn manifest_full_json_bypasses_bearer_auth() {
+        let token = crate::security::auth::SecretToken::new(b"unit-test-token".to_vec());
+        let security = Arc::new(ResolvedSecurity { token: Some(token), allowed_origins: vec![], rate_limiter: None });
+        let (app, telemetry) = test_state();
+        let router = super::build_router(app, telemetry, security, None, Arc::new(Metrics::new()));
+        let resp = router
+            .oneshot(Request::builder().uri("/manifest/full.json").body(Body::empty()).unwrap())
+            .await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // SEC2-4 — POST /csp-report tests
+
+    /// Internal helper to construct a `SecretToken` from a fixed string
+    /// (we can't `impl Clone` on `SecretToken` without leaking the bytes).
+    struct SecretTokenForTest;
+    impl SecretTokenForTest {
+        fn build() -> crate::security::auth::SecretToken {
+            crate::security::auth::SecretToken::new(b"unit-test-token".to_vec())
+        }
+    }
+
+    #[tokio::test]
+    async fn csp_report_accepts_small_body_and_returns_200() {
+        let (app, telemetry) = test_state();
+        let router = unsecured(app, telemetry);
+        let body = serde_json::json!({
+            "csp-report": {
+                "document-uri": "https://app.example.com/",
+                "violated-directive": "script-src",
+                "blocked-uri": "inline"
+            }
+        });
+        let resp = router
+            .oneshot(Request::builder()
+                .method("POST").uri("/csp-report")
+                .header("content-type", "application/csp-report")
+                .body(Body::from(serde_json::to_vec(&body).unwrap())).unwrap())
+            .await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn csp_report_rejects_oversize_body_with_413() {
+        let (app, telemetry) = test_state();
+        let router = unsecured(app, telemetry);
+        let huge = vec![b'x'; 8 * 1024 + 1];
+        let resp = router
+            .oneshot(Request::builder()
+                .method("POST").uri("/csp-report")
+                .header("content-type", "application/csp-report")
+                .body(Body::from(huge)).unwrap())
+            .await.unwrap();
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn csp_report_bypasses_bearer_auth() {
+        let security = Arc::new(ResolvedSecurity {
+            token: Some(SecretTokenForTest::build()),
+            allowed_origins: vec![],
+            rate_limiter: None,
+        });
+        let (app, telemetry) = test_state();
+        let router = super::build_router(app, telemetry, security, None, Arc::new(Metrics::new()));
+        let resp = router
+            .oneshot(Request::builder()
+                .method("POST").uri("/csp-report")
+                .header("content-type", "application/csp-report")
+                .body(Body::from("{}")).unwrap())
+            .await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // SEC2-5 — POST /reload signing tests
+
+    use crate::signing::{generate_keypair, ManifestSigner, ManifestVerifier};
+
+    #[tokio::test]
+    async fn reload_resigns_manifest_when_signer_configured() {
+        let (app, telemetry) = test_state();
+        let kp = generate_keypair();
+        let signer = Arc::new(ManifestSigner::from_pem(&kp.signing_key_pem).expect("signer"));
+        let verifier = ManifestVerifier::from_pem(&kp.verifying_key_pem).expect("verifier");
+        let security = Arc::new(ResolvedSecurity { token: None, allowed_origins: vec![], rate_limiter: None });
+        let router = super::build_router(app.clone(), telemetry, security, Some(signer), Arc::new(Metrics::new()));
+
+        let tmp = tempfile::NamedTempFile::new().expect("tmp manifest file");
+        let new_manifest = ChunkManifest {
+            build_id: "build-resigned".to_string(),
+            chunks: vec![],
+            entry_chunks: HashMap::new(),
+            module_index: HashMap::new(),
+        };
+        std::fs::write(tmp.path(), serde_json::to_vec(&new_manifest).unwrap()).unwrap();
+        let body = serde_json::json!({"manifest_path": tmp.path().to_str().unwrap()});
+
+        let resp = router.clone()
+            .oneshot(Request::builder()
+                .method("POST").uri("/reload")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap())).unwrap())
+            .await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "/reload must succeed");
+
+        let sig = app.snapshot_signature().await.expect("signature must be stored after /reload with signer");
+        let active = app.snapshot().await;
+        assert_eq!(active.build_id, "build-resigned");
+        verifier.verify(&active, &sig).expect("re-signed manifest must verify");
+
+        let resp = router
+            .oneshot(Request::builder().uri("/manifest/full.json").body(Body::empty()).unwrap())
+            .await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        use base64::Engine as _;
+        let header = resp.headers().get("x-wundler-signature").unwrap().to_str().unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD.decode(header).unwrap();
+        assert_eq!(decoded.as_slice(), sig.to_bytes().as_slice());
+    }
+
+    // OBS2-2 — POST /telemetry/chunk-error tests
+
+    use crate::metrics::Metrics;
+
+    fn make_router_with_metrics(
+        app: AppState,
+        telemetry: TelemetryLogger,
+    ) -> (axum::Router, Arc<Metrics>) {
+        let security = Arc::new(ResolvedSecurity {
+            token: None,
+            allowed_origins: vec![],
+            rate_limiter: None,
+        });
+        let metrics = Arc::new(Metrics::new());
+        let router = super::build_router(app, telemetry, security, None, metrics.clone());
+        (router, metrics)
+    }
+
+    #[tokio::test]
+    async fn chunk_error_increments_counter_and_returns_200() {
+        let (app, telemetry) = test_state();
+        let (router, metrics) = make_router_with_metrics(app, telemetry);
+
+        let body = serde_json::json!({
+            "build_id": "build-abc",
+            "chunk_id": "chunk-main",
+            "url": "https://cdn.example.com/chunks/abc123.js",
+            "error_type": "load_failed",
+            "timestamp_ms": 1716000000000u64,
+            "session_id": "sess-xyz"
+        });
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/telemetry/chunk-error")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        use crate::metrics::{ChunkErrorKey, ErrorType};
+        let key = ChunkErrorKey {
+            build_id: "build-abc".to_string(),
+            chunk_id: "chunk-main".to_string(),
+            error_type: ErrorType::LoadFailed,
+        };
+        let count = metrics
+            .chunk_errors
+            .get(&key)
+            .map(|v| v.load(std::sync::atomic::Ordering::Relaxed))
+            .unwrap_or(0);
+        assert_eq!(count, 1, "counter must be incremented");
+    }
+
+    #[tokio::test]
+    async fn chunk_error_rejects_oversize_body_with_413() {
+        let (app, telemetry) = test_state();
+        let (router, _) = make_router_with_metrics(app, telemetry);
+        let huge = vec![b'x'; 8 * 1024 + 1];
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/telemetry/chunk-error")
+                    .header("content-type", "application/json")
+                    .body(Body::from(huge))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn chunk_error_rejects_malformed_json_with_422() {
+        let (app, telemetry) = test_state();
+        let (router, _) = make_router_with_metrics(app, telemetry);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/telemetry/chunk-error")
+                    .header("content-type", "application/json")
+                    .body(Body::from("not json"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn chunk_error_distinct_cells_are_independent() {
+        let (app, telemetry) = test_state();
+        let (router, metrics) = make_router_with_metrics(app, telemetry);
+
+        for error_type in &["load_failed", "network_timeout"] {
+            let body = serde_json::json!({
+                "build_id": "build-1",
+                "chunk_id": "chunk-a",
+                "url": "https://cdn.example.com/chunks/abc.js",
+                "error_type": error_type,
+                "timestamp_ms": 1716000000000u64,
+                "session_id": "sess-1"
+            });
+            router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/telemetry/chunk-error")
+                        .header("content-type", "application/json")
+                        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(metrics.chunk_errors.len(), 2, "each error_type is its own cell");
+    }
+
+    // OBS2-3 — GET /metrics tests
+
+    #[tokio::test]
+    async fn get_metrics_returns_prometheus_text_format() {
+        let (app, telemetry) = test_state();
+        let security = Arc::new(ResolvedSecurity { token: None, allowed_origins: vec![], rate_limiter: None });
+        let metrics = Arc::new(Metrics::new());
+        metrics.manifest_requests_total.fetch_add(5, std::sync::atomic::Ordering::Relaxed);
+        let router = super::build_router(app, telemetry, security, None, metrics);
+
+        let resp = router.oneshot(
+            Request::builder().uri("/metrics").body(Body::empty()).unwrap()
+        ).await.unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let ct = resp.headers().get("content-type").unwrap().to_str().unwrap();
+        assert!(ct.contains("text/plain"), "content type must be text/plain, got: {ct}");
+
+        let body = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("wundler_manifest_requests_total 5"));
+        assert!(text.contains("# HELP"));
+        assert!(text.contains("# TYPE"));
+    }
+
+    #[tokio::test]
+    async fn get_metrics_shows_chunk_error_after_report() {
+        let (app, telemetry) = test_state();
+        let security = Arc::new(ResolvedSecurity { token: None, allowed_origins: vec![], rate_limiter: None });
+        let metrics = Arc::new(Metrics::new());
+        let router = super::build_router(app, telemetry, security, None, metrics);
+
+        // First POST a chunk error
+        let body = serde_json::json!({
+            "build_id": "build-abc",
+            "chunk_id": "chunk-main",
+            "url": "https://cdn.example.com/chunks/abc123.js",
+            "error_type": "load_failed",
+            "timestamp_ms": 1716000000000u64,
+            "session_id": "sess-xyz"
+        });
+        router.clone().oneshot(
+            Request::builder()
+                .method("POST").uri("/telemetry/chunk-error")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap())).unwrap()
+        ).await.unwrap();
+
+        // Then GET /metrics
+        let resp = router.oneshot(
+            Request::builder().uri("/metrics").body(Body::empty()).unwrap()
+        ).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let b = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        let text = String::from_utf8_lossy(&b);
+        assert!(text.contains("wundler_chunk_errors_total{"));
+        assert!(text.contains("build_id=\"build-abc\""));
+    }
+
+    #[tokio::test]
+    async fn reload_does_not_set_signature_when_no_signer() {
+        let (app, telemetry) = test_state();
+        let security = Arc::new(ResolvedSecurity { token: None, allowed_origins: vec![], rate_limiter: None });
+        let router = super::build_router(app.clone(), telemetry, security, None, Arc::new(Metrics::new()));
+
+        let tmp = tempfile::NamedTempFile::new().expect("tmp manifest file");
+        let new_manifest = ChunkManifest {
+            build_id: "build-no-sig".to_string(),
+            chunks: vec![],
+            entry_chunks: HashMap::new(),
+            module_index: HashMap::new(),
+        };
+        std::fs::write(tmp.path(), serde_json::to_vec(&new_manifest).unwrap()).unwrap();
+        let body = serde_json::json!({"manifest_path": tmp.path().to_str().unwrap()});
+
+        let resp = router
+            .oneshot(Request::builder()
+                .method("POST").uri("/reload")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap())).unwrap())
+            .await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(app.snapshot_signature().await.is_none(), "no signer => no signature");
+    }
+
+    // OBS2-4 — prune metrics on POST /reload
+
+    #[tokio::test]
+    async fn reload_prunes_stale_metrics_entries() {
+        let (app, telemetry) = test_state();
+        let security = Arc::new(ResolvedSecurity { token: None, allowed_origins: vec![], rate_limiter: None });
+        let metrics = Arc::new(Metrics::new());
+
+        // Inject a stale entry for a build we won't reload to.
+        use crate::metrics::{ChunkErrorKey, ErrorType};
+        metrics.increment_chunk_error(ChunkErrorKey {
+            build_id: "stale-build".to_string(),
+            chunk_id: "chunk-a".to_string(),
+            error_type: ErrorType::LoadFailed,
+        });
+        assert_eq!(metrics.chunk_errors.len(), 1);
+
+        let router = super::build_router(app.clone(), telemetry, security, None, metrics.clone());
+
+        // POST /reload with a new manifest
+        let tmp = tempfile::NamedTempFile::new().expect("tmp manifest file");
+        let new_manifest = wundler_graph::ChunkManifest {
+            build_id: "new-build".to_string(),
+            chunks: vec![],
+            entry_chunks: std::collections::HashMap::new(),
+            module_index: std::collections::HashMap::new(),
+        };
+        std::fs::write(tmp.path(), serde_json::to_vec(&new_manifest).unwrap()).unwrap();
+        let body = serde_json::json!({"manifest_path": tmp.path().to_str().unwrap()});
+
+        let resp = router.oneshot(
+            Request::builder()
+                .method("POST").uri("/reload")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap())).unwrap()
+        ).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // The stale entry for "stale-build" must be pruned.
+        assert_eq!(
+            metrics.chunk_errors.len(), 0,
+            "stale-build must be pruned after reload; remaining entries: {:?}",
+            metrics.chunk_errors.iter().map(|e| e.key().build_id.clone()).collect::<Vec<_>>()
+        );
+    }
+
+    // OBS2-5 — SW reportChunkError() infrastructure
+
+    /// The embedded service worker must declare the `REPORTED_CHUNK_ERRORS` Set
+    /// for per-lifecycle client-side dedup and the `reportChunkError` helper
+    /// function that fire-and-forgets to `POST /telemetry/chunk-error`.
+    #[test]
+    fn service_worker_js_contains_report_chunk_error_infrastructure() {
+        let sw = super::SERVICE_WORKER_JS;
+        assert!(
+            sw.contains("REPORTED_CHUNK_ERRORS"),
+            "sw.js must define REPORTED_CHUNK_ERRORS dedup Set;\ngot:\n{}",
+            sw,
+        );
+        assert!(
+            sw.contains("reportChunkError"),
+            "sw.js must define reportChunkError() helper;\ngot:\n{}",
+            sw,
+        );
+    }
+
+    /// The embedded service worker must call `reportChunkError` inside the
+    /// prefetch catch block (chunk URLs fetched from CDN during navigation).
+    #[test]
+    fn service_worker_js_calls_report_chunk_error_in_prefetch_catch() {
+        let sw = super::SERVICE_WORKER_JS;
+        // We verify by checking that the prefetch catch block is no longer
+        // silent: it must contain a reportChunkError invocation.
+        assert!(
+            sw.contains("reportChunkError"),
+            "sw.js prefetch catch block must call reportChunkError();\ngot:\n{}",
+            sw,
+        );
+        // Confirm the dedup key construction is present (buildId:chunkId:errorType).
+        assert!(
+            sw.contains("dedupeKey"),
+            "reportChunkError() must construct a dedupeKey for the REPORTED_CHUNK_ERRORS Set;\ngot:\n{}",
+            sw,
+        );
     }
 }

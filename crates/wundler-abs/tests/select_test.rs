@@ -40,12 +40,13 @@ async fn make_server(build_ids: &[&str]) -> (TestServer, AppState, TempDir) {
         manifest: Arc::new(RwLock::new(Arc::new(initial))),
         archive: Arc::new(archive),
         reload_lock: Arc::new(Mutex::new(())),
+        signature: Arc::new(RwLock::new(None)),
         cdn_base_url: Arc::new("https://cdn.example.com".to_string()),
         ttl_seconds: 300,
     };
     let telemetry = TelemetryLogger::new(&log_path).expect("telemetry");
     let security = Arc::new(ResolvedSecurity::from_config(&SecurityConfig::default()).unwrap());
-    let router = build_router(app.clone(), telemetry, security);
+    let router = build_router(app.clone(), telemetry, security, None, Arc::new(wundler_abs::metrics::Metrics::new()));
 
     (TestServer::new(router), app, tmp_dir)
 }

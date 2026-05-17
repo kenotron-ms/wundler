@@ -32,6 +32,9 @@ pub struct AppState {
     pub manifest: Arc<RwLock<Arc<ChunkManifest>>>,
     pub archive: Arc<ManifestArchive>,
     pub reload_lock: Arc<Mutex<()>>,
+    /// The signature covering the current active manifest, if one was provided at load time
+    /// or set via [`AppState::set_signature`].  Cleared to `None` on every [`AppState::swap_to`].
+    pub signature: Arc<RwLock<Option<Signature>>>,
     pub cdn_base_url: Arc<String>,
     pub ttl_seconds: u64,
 }
@@ -53,9 +56,12 @@ impl AppState {
             format!("failed to parse manifest JSON from {}", manifest_path.display())
         })?;
 
-        if let Some((verifier, sig)) = verify {
+        let initial_sig = if let Some((verifier, sig)) = verify {
             verifier.verify(&manifest, sig).context("manifest signature verification failed")?;
-        }
+            Some(*sig)
+        } else {
+            None
+        };
 
         let build_id = manifest.build_id.clone();
         archive.install(&manifest).context("seed archive")?;
@@ -65,6 +71,7 @@ impl AppState {
             manifest: Arc::new(RwLock::new(Arc::new(manifest))),
             archive: Arc::new(archive),
             reload_lock: Arc::new(Mutex::new(())),
+            signature: Arc::new(RwLock::new(initial_sig)),
             cdn_base_url: Arc::new(cdn_base_url),
             ttl_seconds,
         })
@@ -84,6 +91,16 @@ impl AppState {
     pub async fn snapshot(&self) -> Arc<ChunkManifest> {
         let guard = self.manifest.read().await;
         Arc::clone(&*guard)
+    }
+
+    /// Return a copy of the current signature, or `None` if none has been set.
+    pub async fn snapshot_signature(&self) -> Option<Signature> {
+        *self.signature.read().await
+    }
+
+    /// Overwrite the stored signature.  Pass `None` to clear it.
+    pub async fn set_signature(&self, sig: Option<Signature>) {
+        *self.signature.write().await = sig;
     }
 
     /// Swap the active manifest to the archive entry for `build_id`.
@@ -112,6 +129,9 @@ impl AppState {
         *guard = new_arc;
         drop(guard);
 
+        // Clear the cached signature — it belonged to the previous build.
+        *self.signature.write().await = None;
+
         Ok(SwapReport { previous, current: build_id.to_string() })
     }
 
@@ -123,5 +143,68 @@ impl AppState {
             .context("read archive `current` symlink")?
             .ok_or_else(|| anyhow::anyhow!("archive has no `current` symlink"))?;
         self.swap_to(&current).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ed25519_dalek::{Signer as _, SigningKey};
+    use rand::rngs::OsRng;
+    use std::collections::HashMap;
+    use wundler_graph::ChunkManifest;
+
+    fn empty_manifest(build_id: &str) -> ChunkManifest {
+        ChunkManifest {
+            build_id: build_id.to_string(),
+            chunks: vec![],
+            entry_chunks: HashMap::new(),
+            module_index: HashMap::new(),
+        }
+    }
+
+    fn fresh_state(build_id: &str) -> AppState {
+        let tmp = Box::leak(Box::new(tempfile::TempDir::new().expect("archive tempdir")));
+        let archive = ManifestArchive::open(tmp.path(), 10).expect("open archive");
+        let manifest = empty_manifest(build_id);
+        archive.install(&manifest).expect("seed");
+        archive.set_current(build_id).expect("current");
+        AppState {
+            manifest: Arc::new(RwLock::new(Arc::new(manifest))),
+            archive: Arc::new(archive),
+            reload_lock: Arc::new(Mutex::new(())),
+            signature: Arc::new(RwLock::new(None)),
+            cdn_base_url: Arc::new("https://cdn.example.com".to_string()),
+            ttl_seconds: 60,
+        }
+    }
+
+    #[tokio::test]
+    async fn snapshot_signature_is_none_by_default() {
+        let state = fresh_state("b0");
+        assert!(state.snapshot_signature().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn set_signature_stores_value_observable_by_snapshot() {
+        let state = fresh_state("b0");
+        let sk = SigningKey::generate(&mut OsRng);
+        let sig = sk.sign(b"hello");
+        state.set_signature(Some(sig)).await;
+        let snap = state.snapshot_signature().await.expect("signature stored");
+        assert_eq!(snap.to_bytes(), sig.to_bytes());
+    }
+
+    #[tokio::test]
+    async fn swap_to_resets_signature_to_none() {
+        let state = fresh_state("b0");
+        let b1 = empty_manifest("b1");
+        state.archive.install(&b1).expect("install b1");
+        let sk = SigningKey::generate(&mut OsRng);
+        let sig = sk.sign(b"old-build-bytes");
+        state.set_signature(Some(sig)).await;
+        assert!(state.snapshot_signature().await.is_some());
+        state.swap_to("b1").await.expect("swap");
+        assert!(state.snapshot_signature().await.is_none(), "swap_to must clear the previous signature");
     }
 }

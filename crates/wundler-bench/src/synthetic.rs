@@ -324,7 +324,7 @@ fn generate_module(i: usize, _n_modules: usize, nonce: u128) -> String {
     // ------------------------------------------------------------------
     // DEAD export: every 5th module
     // ------------------------------------------------------------------
-    if i % 5 == 0 && i != 0 {
+    if i.is_multiple_of(5) && i != 0 {
         lines.push(
             "// DEAD export — never imported by anyone (dead-code-elimination candidate)."
                 .to_string(),
@@ -336,7 +336,7 @@ fn generate_module(i: usize, _n_modules: usize, nonce: u128) -> String {
     // ------------------------------------------------------------------
     // SIDE EFFECT: every 20th module (detected as DEFINITE by the analyser)
     // ------------------------------------------------------------------
-    if i % 20 == 0 && i != 0 {
+    if i.is_multiple_of(20) && i != 0 {
         lines.push(
             "// SIDE EFFECT — writes to ambient global (SideEffectMarker::Definite).".to_string(),
         );

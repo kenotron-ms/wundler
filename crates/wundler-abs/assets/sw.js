@@ -3,6 +3,11 @@
   // src/cache.ts
   var CACHE_NAME = "wundler-v1";
   var STATIC_MANIFEST_KEY = "wundler:static-manifest";
+
+  // Client-side dedup for chunk error reports — prevent re-reporting the same
+  // (build_id, chunk_id, error_type) triple within one SW lifecycle.
+  const REPORTED_CHUNK_ERRORS = new Set();
+
   async function getCache(injected) {
     if (injected) return injected;
     const cache = await caches.open(CACHE_NAME);
@@ -43,7 +48,15 @@
       const response = await Promise.race([fetchPromise, timeoutPromise]);
       if (!response || !response.ok) return null;
       return await response.json();
-    } catch {
+    } catch (e) {
+      const isTimeout = e instanceof Error && e.name === "AbortError";
+      reportChunkError(config.absBaseUrl, {
+        buildId: request.build_id ?? "",
+        chunkId: "",
+        url: `${config.absBaseUrl}/manifest`,
+        errorType: isTimeout ? "network_timeout" : "load_failed",
+        sessionId: "",
+      });
       return null;
     } finally {
       clearTimeout(timer);
@@ -68,6 +81,43 @@
         client.postMessage({ type: "wundler:build-id-changed", build_id: newBuildId });
       } catch {
       }
+    }
+  }
+
+  // src/telemetry.ts
+  /**
+   * Fire-and-forget POST to /telemetry/chunk-error.
+   * Never awaited. Never propagates errors. Uses keepalive:true to survive navigation.
+   * Client-side dedup: same (buildId, chunkId, errorType) is only reported once per lifecycle.
+   *
+   * @param {string} absBaseUrl - Base URL of the ABS server.
+   * @param {object} payload - { buildId, chunkId, url, errorType, sessionId }
+   */
+  function reportChunkError(absBaseUrl, payload) {
+    const dedupeKey = `${payload.buildId}:${payload.chunkId}:${payload.errorType}`;
+    if (REPORTED_CHUNK_ERRORS.has(dedupeKey)) {
+      return; // already reported this triple in current SW lifecycle
+    }
+    REPORTED_CHUNK_ERRORS.add(dedupeKey);
+
+    const body = JSON.stringify({
+      build_id: payload.buildId || "",
+      chunk_id: payload.chunkId || "",
+      url: payload.url || "",
+      error_type: payload.errorType,
+      timestamp_ms: Date.now(),
+      session_id: payload.sessionId || "",
+    });
+
+    try {
+      void fetch(`${absBaseUrl}/telemetry/chunk-error`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+        keepalive: true,
+      }).catch(() => {}); // explicit swallow — never propagate
+    } catch {
+      // fetch itself threw (e.g. network unavailable) — ignore
     }
   }
 
@@ -110,7 +160,14 @@
           if (resp.ok) {
             await cache.put(STATIC_MANIFEST_KEY, resp);
           }
-        } catch {
+        } catch (e) {
+          reportChunkError(config.absBaseUrl, {
+            buildId: buildId ?? "",
+            chunkId: "",
+            url: `${config.cdnBaseUrl}/manifest.json`,
+            errorType: "load_failed",
+            sessionId: "",
+          });
         }
       })();
     }
@@ -143,7 +200,15 @@
           if (resp.ok) {
             await cache.put(url, resp);
           }
-        } catch {
+        } catch (e) {
+          const chunkId = url.split("/").pop()?.replace(/\.js$/, "") ?? "";
+          reportChunkError(config.absBaseUrl, {
+            buildId: buildId ?? "",
+            chunkId,
+            url,
+            errorType: "load_failed",
+            sessionId: "",
+          });
         }
       })();
     }
