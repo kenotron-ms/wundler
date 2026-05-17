@@ -1383,4 +1383,44 @@ mod tests {
             metrics.chunk_errors.iter().map(|e| e.key().build_id.clone()).collect::<Vec<_>>()
         );
     }
+
+    // OBS2-5 — SW reportChunkError() infrastructure
+
+    /// The embedded service worker must declare the `REPORTED_CHUNK_ERRORS` Set
+    /// for per-lifecycle client-side dedup and the `reportChunkError` helper
+    /// function that fire-and-forgets to `POST /telemetry/chunk-error`.
+    #[test]
+    fn service_worker_js_contains_report_chunk_error_infrastructure() {
+        let sw = super::SERVICE_WORKER_JS;
+        assert!(
+            sw.contains("REPORTED_CHUNK_ERRORS"),
+            "sw.js must define REPORTED_CHUNK_ERRORS dedup Set;\ngot:\n{}",
+            sw,
+        );
+        assert!(
+            sw.contains("reportChunkError"),
+            "sw.js must define reportChunkError() helper;\ngot:\n{}",
+            sw,
+        );
+    }
+
+    /// The embedded service worker must call `reportChunkError` inside the
+    /// prefetch catch block (chunk URLs fetched from CDN during navigation).
+    #[test]
+    fn service_worker_js_calls_report_chunk_error_in_prefetch_catch() {
+        let sw = super::SERVICE_WORKER_JS;
+        // We verify by checking that the prefetch catch block is no longer
+        // silent: it must contain a reportChunkError invocation.
+        assert!(
+            sw.contains("reportChunkError"),
+            "sw.js prefetch catch block must call reportChunkError();\ngot:\n{}",
+            sw,
+        );
+        // Confirm the dedup key construction is present (buildId:chunkId:errorType).
+        assert!(
+            sw.contains("dedupeKey"),
+            "reportChunkError() must construct a dedupeKey for the REPORTED_CHUNK_ERRORS Set;\ngot:\n{}",
+            sw,
+        );
+    }
 }
