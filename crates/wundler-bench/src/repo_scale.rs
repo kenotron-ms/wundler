@@ -579,11 +579,10 @@ fn compute_manifest_stats(files: &[String]) -> ManifestStats {
             _ => {}
         }
         // azure_pipelines_yaml: any .yml or .yaml under azure/
-        if f.starts_with("azure/") {
-            if f.ends_with(".yml") || f.ends_with(".yaml") {
+        if f.starts_with("azure/")
+            && (f.ends_with(".yml") || f.ends_with(".yaml")) {
                 s.azure_pipelines_yaml += 1;
             }
-        }
     }
     s
 }
@@ -677,7 +676,7 @@ fn days_since_epoch_to_date(days: u64) -> (u32, u32, u32) {
 // ── Internal: formatting helpers ──────────────────────────────────────────────
 
 fn fmt_opt_u64(v: Option<u64>) -> String {
-    v.map(|n| fmt_n(n)).unwrap_or_else(|| "—".to_string())
+    v.map(fmt_n).unwrap_or_else(|| "—".to_string())
 }
 
 fn fmt_n(n: u64) -> String {

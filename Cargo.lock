@@ -3967,6 +3967,7 @@ dependencies = [
  "rand 0.8.6",
  "serde",
  "serde_json",
+ "swc_core",
  "tempfile",
  "wundler-core",
  "wundler-graph",
