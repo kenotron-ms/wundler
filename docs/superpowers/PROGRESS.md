@@ -63,15 +63,39 @@
 - **Branch:** `feat/phase2-roadmap`
 - **Commits:** `6ce40cc`, `feace19`, `c49d8db`, `de34a95`, `4d568d0`, `ed80549`
 
-### Phase 3 — After Phase 2 (plans not yet written)
+### Phase 3 — Plans written, ready to execute
+
+#### Security P2 — ed25519 manifest signing + SRI + CSP report-only
+- **Plan:** `docs/superpowers/plans/2026-05-17-security-p2-signing.md`
+- **Design:** `docs/designs/security-baseline.md` §Phase 2
+- **Status:** ⬜ Not started — 0 / 5 tasks
+- **Next task:** Task 1 — add `signature` field to `AppState`; `snapshot_signature()`; update test helpers
+
+#### Observability P2 — chunk error reporting + Prometheus /metrics
+- **Plan:** `docs/superpowers/plans/2026-05-17-observability-p2-chunk-errors.md`
+- **Design:** `docs/designs/observability.md` §P2 + §P3
+- **Status:** ⬜ Not started — 0 / 5 tasks
+- **Next task:** Task 1 — add `dashmap = "5"`; create `metrics/mod.rs` with `Metrics`, `ChunkErrorKey`, `ErrorType`
+
+#### Performance P1 — dependency pre-bundling
+- **Plan:** `docs/superpowers/plans/2026-05-17-performance-p1-dep-prebundle.md`
+- **Design:** `docs/designs/performance.md` §P1
+- **Status:** ⬜ Not started — 0 / 3 tasks
+- **Next task:** Task 1 — create `wundler-dev` crate; `DepPrebundler`, `compute_fingerprint`; unit tests
+
+#### Scale Benchmark Foundation — synthetic corpus profiler (MVP steps 1–7)
+- **Plan:** `docs/superpowers/plans/2026-05-17-scale-benchmark-foundation.md`
+- **Design:** `docs/designs/scale-benchmark-foundation.md`
+- **Status:** ⬜ Not started — 0 / 5 tasks
+- **Next task:** Task 1 — `src/profile.rs` with `BenchProfile`, `ConformanceReport`, schema-version gate
+
+### Still blocked (need Phase 3 to complete first)
 
 | Item | Design Doc | Blocked on |
 |---|---|---|
-| Security P2 — ed25519 signing | `security-baseline.md` §Phase 2 | VRC SCA (`build_id` stable) |
-| Security P2 — SRI + CSP report-only | `security-baseline.md` §Phase 2 | Security P2 signing |
-| Scale Benchmark Foundation | `scale-benchmark-foundation.md` | Observability P1 (V5 check) |
-| Observability P2 — chunk error reporting | `observability.md` §P2 | Phase 1 done |
-| Observability P3 — Prometheus `/metrics` | `observability.md` §P3 | Observability P2 |
+| Security P2 — SW ed25519 verification (JS half) | `security-baseline.md` §Phase 2 | Security P2 Rust half + SW build pipeline |
+| Observability P3 — Prometheus `/metrics` | Already wired in Obs P2 plan, just the endpoint | Observability P2 counters live |
+| Performance P2 — true HMR / react-refresh | `performance.md` §P2 | Performance P1 stable |
 
 ### Phase 4 — Evidence-gated (do not plan until gates pass)
 
