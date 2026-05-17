@@ -103,12 +103,19 @@
 
 ### Phase 4 — Evidence-gated (do not plan until gates pass)
 
-| Item | Design Doc | Gate condition |
+| Item | Design Doc | Gate condition | Status |
+|---|---|---|---|
+| Performance P1 — dep pre-bundling | `performance.md` §P1 | No gate | ✅ Shipped in Phase 3 (SCA only — cache writes `index.json`, not real bundles) |
+| Performance P3 — incremental graph | `performance.md` §P3 | p95 analyze > [BASELINE TBD] on office-scale corpus AND V5 passes | ✅ **V5 gate passed** 2026-05-17: CV=1.0% at N=1000 (threshold 2%), cold=41ms |
+| Performance P4 — parallel PGO ingestion | `performance.md` §P4 | ≥1GB log ingested AND wall > 30s | ❌ No data yet |
+| Observability P4 — Web Vitals in PGO | `observability.md` §P4 (GATED) | Chunk errors live + showing signal | 🟡 Chunk errors shipped; waiting for signal |
+
+### Known gaps (tracked, not blocked)
+
+| Gap | Location | What's missing |
 |---|---|---|
-| Performance P1 — dep pre-bundling | `performance.md` §P1 | No gate — can start anytime |
-| Performance P3 — incremental graph | `performance.md` §P3 | p95 analyze > [BASELINE TBD] on office-scale corpus |
-| Performance P4 — parallel PGO ingestion | `performance.md` §P4 | ≥1GB log ingested AND wall > 30s |
-| Observability P4 — Web Vitals in PGO | `observability.md` §P4 (GATED) | Chunk errors live + showing signal |
+| Security P2 — SW ed25519 verification (JS half) | `assets/sw.js` line 127 | SW fetches from CDN (`manifest.json`), never sees `X-Wundler-Signature`. Verification requires: fetch from ABS `/manifest/full.json`, read header, `SubtleCrypto.verify()` with pinned key. Comment added in sw.js. |
+| Performance P1 — actual pre-bundling | `wundler-dev/src/prebundle/mod.rs` `bundle_into()` | `bundle_into()` writes only `index.json`. No node_modules content is cached. The `"dep pre-bundle complete"` log is premature — nothing is actually faster yet. |
 
 ---
 

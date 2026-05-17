@@ -124,6 +124,20 @@
   // src/sw.ts
   async function installHandler(config) {
     try {
+      // NOTE(security/signing-gap): This fetches manifest.json from the CDN and does
+      // not verify the ed25519 signature. The ABS serves a signed manifest on
+      // GET /manifest/full.json with X-Wundler-Signature header, but the SW
+      // currently uses the CDN copy and skips verification entirely.
+      //
+      // Full verification requires:
+      //   1. Fetch from ABS /manifest/full.json instead of CDN manifest.json
+      //   2. Read the X-Wundler-Signature response header (base64 ed25519)
+      //   3. Decode the header and call SubtleCrypto.verify() with the pinned
+      //      public key and the canonical manifest bytes
+      //   4. Reject the manifest if verification fails
+      //
+      // Tracked as: Security P2 — JS half (not yet implemented).
+      // Until this is done, X-Wundler-Signature provides no tamper-evidence.
       const response = await fetch(`${config.cdnBaseUrl}/manifest.json`, {
         cache: "no-cache"
       });
