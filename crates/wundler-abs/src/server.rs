@@ -545,6 +545,15 @@ async fn post_reload(
         }
     };
 
+    // Prune stale metrics entries for builds no longer in the archive.
+    let active_build_ids: std::collections::HashSet<String> = state.app.archive
+        .list()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|e| e.build_id)
+        .collect();
+    state.metrics.prune(&active_build_ids);
+
     // Re-sign the new manifest if a signer is configured.
     // (swap_to already reset the signature slot to None.)
     if let Some(signer) = &state.signer {
@@ -651,7 +660,7 @@ async fn post_select(
 /// Always returns 200 OK (fire-and-forget from SW).
 /// Increments in-memory DashMap counter and appends to JSONL log.
 async fn post_chunk_error(State(state): State<RouterState>, body: axum::body::Body) -> Response {
-    use crate::metrics::chunk_error::{ChunkErrorEvent, ChunkErrorReport};
+    use crate::metrics::chunk_error::ChunkErrorReport;
     use crate::metrics::ChunkErrorKey;
 
     const MAX_BODY_BYTES: usize = 8 * 1024;
@@ -681,8 +690,15 @@ async fn post_chunk_error(State(state): State<RouterState>, body: axum::body::Bo
         error_type: report.error_type.clone(),
     });
 
-    // Log to JSONL telemetry (non-fatal — never let a log failure break the 200 response).
-    let event = ChunkErrorEvent::from(report);
+    // Log via TelemetryEventV2 so the JSONL log has a `kind` discriminant.
+    let event = crate::types::TelemetryEventV2::ChunkError(crate::types::ChunkErrorEventV2 {
+        build_id: report.build_id,
+        chunk_id: report.chunk_id,
+        url: report.url,
+        error_type: report.error_type,
+        timestamp_ms: report.timestamp_ms,
+        session_id: report.session_id,
+    });
     if let Err(e) = state.telemetry.log(&event) {
         tracing::warn!("failed to log chunk error event: {e}");
     }
@@ -1320,5 +1336,51 @@ mod tests {
             .await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         assert!(app.snapshot_signature().await.is_none(), "no signer => no signature");
+    }
+
+    // OBS2-4 — prune metrics on POST /reload
+
+    #[tokio::test]
+    async fn reload_prunes_stale_metrics_entries() {
+        let (app, telemetry) = test_state();
+        let security = Arc::new(ResolvedSecurity { token: None, allowed_origins: vec![], rate_limiter: None });
+        let metrics = Arc::new(Metrics::new());
+
+        // Inject a stale entry for a build we won't reload to.
+        use crate::metrics::{ChunkErrorKey, ErrorType};
+        metrics.increment_chunk_error(ChunkErrorKey {
+            build_id: "stale-build".to_string(),
+            chunk_id: "chunk-a".to_string(),
+            error_type: ErrorType::LoadFailed,
+        });
+        assert_eq!(metrics.chunk_errors.len(), 1);
+
+        let router = super::build_router(app.clone(), telemetry, security, None, metrics.clone());
+
+        // POST /reload with a new manifest
+        let tmp = tempfile::NamedTempFile::new().expect("tmp manifest file");
+        let new_manifest = wundler_graph::ChunkManifest {
+            build_id: "new-build".to_string(),
+            chunks: vec![],
+            entry_chunks: std::collections::HashMap::new(),
+            module_index: std::collections::HashMap::new(),
+        };
+        std::fs::write(tmp.path(), serde_json::to_vec(&new_manifest).unwrap()).unwrap();
+        let body = serde_json::json!({"manifest_path": tmp.path().to_str().unwrap()});
+
+        let resp = router.oneshot(
+            Request::builder()
+                .method("POST").uri("/reload")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap())).unwrap()
+        ).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // The stale entry for "stale-build" must be pruned.
+        assert_eq!(
+            metrics.chunk_errors.len(), 0,
+            "stale-build must be pruned after reload; remaining entries: {:?}",
+            metrics.chunk_errors.iter().map(|e| e.key().build_id.clone()).collect::<Vec<_>>()
+        );
     }
 }

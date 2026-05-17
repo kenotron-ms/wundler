@@ -94,3 +94,56 @@ pub struct TelemetryEvent {
     /// Unix epoch time in milliseconds when the event was recorded.
     pub timestamp_ms: u64,
 }
+
+// ---------------------------------------------------------------------------
+// TelemetryEventV2 — tagged enum for typed telemetry log entries.
+//
+// PGO is tolerant (no deny_unknown_fields) so additive new `kind` values are
+// safe. Existing manifest events continue to be logged as the legacy
+// `TelemetryEvent` shape (the `kind: "manifest"` arm below is for future
+// migration only).
+// ---------------------------------------------------------------------------
+
+/// Tagged telemetry event discriminated by `kind`.
+///
+/// New events (e.g. `chunk_error`) use this type. Old manifest events continue
+/// to use the flat `TelemetryEvent` struct until a separate migration PR.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TelemetryEventV2 {
+    /// Chunk load failure reported by the Service Worker.
+    ChunkError(ChunkErrorEventV2),
+}
+
+/// Body of a `kind: "chunk_error"` telemetry entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChunkErrorEventV2 {
+    pub build_id: String,
+    pub chunk_id: String,
+    pub url: String,
+    pub error_type: crate::metrics::ErrorType,
+    pub timestamp_ms: u64,
+    pub session_id: String,
+}
+
+#[cfg(test)]
+mod v2_tests {
+    use super::*;
+    use crate::metrics::ErrorType;
+
+    #[test]
+    fn chunk_error_event_has_kind_field() {
+        let ev = TelemetryEventV2::ChunkError(ChunkErrorEventV2 {
+            build_id: "build-1".to_string(),
+            chunk_id: "chunk-a".to_string(),
+            url: "https://cdn.example.com/chunks/abc.js".to_string(),
+            error_type: ErrorType::LoadFailed,
+            timestamp_ms: 1716000000000,
+            session_id: "sess-1".to_string(),
+        });
+        let json = serde_json::to_value(&ev).unwrap();
+        assert_eq!(json["kind"], "chunk_error");
+        assert_eq!(json["build_id"], "build-1");
+        assert_eq!(json["error_type"], "load_failed");
+    }
+}
