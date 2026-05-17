@@ -105,17 +105,55 @@
 
 | Item | Design Doc | Gate condition | Status |
 |---|---|---|---|
-| Performance P1 — dep pre-bundling | `performance.md` §P1 | No gate | ✅ Shipped in Phase 3 (SCA only — cache writes `index.json`, not real bundles) |
-| Performance P3 — incremental graph | `performance.md` §P3 | p95 analyze > [BASELINE TBD] on office-scale corpus AND V5 passes | ✅ **V5 gate passed** 2026-05-17: CV=1.0% at N=1000 (threshold 2%), cold=41ms |
+| Performance P1 — dep pre-bundling | `performance.md` §P1 | No gate | ✅ Shipped in Phase 3 (SCA only — see decision below) |
+| Performance P3 — incremental graph | `performance.md` §P3 | p95 cold analyze > threshold on office-scale corpus AND V5 passes | 🟡 V5 passed; threshold decision below |
 | Performance P4 — parallel PGO ingestion | `performance.md` §P4 | ≥1GB log ingested AND wall > 30s | ❌ No data yet |
 | Observability P4 — Web Vitals in PGO | `observability.md` §P4 (GATED) | Chunk errors live + showing signal | 🟡 Chunk errors shipped; waiting for signal |
+
+### Analysis baseline — measured 2026-05-17 (synthetic corpus, inert TS)
+
+```
+wundler-bench analysis-bench --modules N --repeat 3
+
+N=100     cold=4ms   warm=1ms   speedup=4x
+N=1000    cold=40ms  warm=18ms  speedup=2x
+N=5000    cold=226ms warm=101ms speedup=2x
+N=10000   cold=435ms warm=213ms speedup=2x
+```
+
+Scaling is roughly linear. Projected at 36k modules (office-scale): ~1.6s cold, ~0.8s warm.
+These are **synthetic inert files (~400 bytes each)**. Real node_modules are 10–50KB per file
+with real parse cost — actual numbers would be higher.
+
+**P3 threshold decision:**
+The numbers at synthetic scale do not show a problem that justifies P3 now. 435ms at 10k and
+~1.6s projected at 36k are fast. However, these are not real measurements. Before setting
+`BASELINE`, run analysis on a real TypeScript project. Until then, P3 should not be planned.
+
+### Decision required: Performance P1 Phase 2
+
+**Current state:** `bundle_into()` in `wundler-dev/src/prebundle/mod.rs` writes only
+`{"fingerprint": "hex"}`. The cache infrastructure is built but the cache is empty.
+`wundler dev` logs "dep pre-bundle complete" but node_modules is still parsed fresh.
+
+**Three options — human call required:**
+
+| Option | What it means | Cost |
+|---|---|---|
+| **A: Complete as designed** | Implement actual bundling in `bundle_into()` — run esbuild/rollup against node_modules, write output chunks to cache dir. P2 (HMR) becomes possible once P1 has real output. | 2–4 weeks; adds a bundler dependency to `wundler-dev` |
+| **B: Defer** | Leave SCA as-is; do not plan P2 (HMR) until P1 is real. No action now. | No cost now; P2 blocked indefinitely |
+| **C: Reframe / close** | The analysis baseline shows analysis of node_modules-scale corpora is fast. The CAS warm cache already provides 2x speedup. The problem P1 was solving may not exist at wundler's target scale. Close P1 as SCA-only; do not implement Phase 2. P2 (HMR) replanned without P1 dependency. | Honest accounting of effort spent; HMR replanned |
+
+Option C is worth considering: if a 50k-module project analyzes in ~2s cold on real hardware,
+and the warm CAS path cuts that to ~1s, pre-bundling saves perhaps 0.5s on restarts.
+That is not nothing, but it may not justify owning an embedded bundler.
 
 ### Known gaps (tracked, not blocked)
 
 | Gap | Location | What's missing |
 |---|---|---|
-| Security P2 — SW ed25519 verification (JS half) | `assets/sw.js` line 127 | SW fetches from CDN (`manifest.json`), never sees `X-Wundler-Signature`. Verification requires: fetch from ABS `/manifest/full.json`, read header, `SubtleCrypto.verify()` with pinned key. Comment added in sw.js. |
-| Performance P1 — actual pre-bundling | `wundler-dev/src/prebundle/mod.rs` `bundle_into()` | `bundle_into()` writes only `index.json`. No node_modules content is cached. The `"dep pre-bundle complete"` log is premature — nothing is actually faster yet. |
+| Security P2 — SW ed25519 verification (JS half) | `assets/sw.js` line 127, comment added | SW fetches CDN manifest, never sees `X-Wundler-Signature`. Full verification path documented in code. |
+| Performance P1 — actual pre-bundling | `wundler-dev/src/prebundle/mod.rs` `bundle_into()` | Writes `index.json` only. Decision above required before planning any further P1/P2 work. |
 
 ---
 
