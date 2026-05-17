@@ -94,6 +94,47 @@ enum Commands {
         #[arg(long, value_name = "FILE")]
         out: Option<PathBuf>,
     },
+
+    /// Generate a synthetic corpus from a benchmark profile JSON.
+    GenerateCorpus {
+        /// Path to the benchmark profile JSON file.
+        #[arg(long)]
+        profile: std::path::PathBuf,
+
+        /// Output directory for the generated corpus.
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
+
+    /// Verify a corpus directory against a benchmark profile JSON.
+    VerifyCorpus {
+        /// Path to the corpus directory to verify.
+        #[arg(long)]
+        corpus: std::path::PathBuf,
+
+        /// Path to the benchmark profile JSON file.
+        #[arg(long)]
+        profile: std::path::PathBuf,
+
+        /// Output verification report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Run the analysis-only benchmark at a specific scale.
+    AnalysisBench {
+        /// Number of synthetic modules to analyse.
+        #[arg(long, default_value = "1000")]
+        modules: usize,
+
+        /// Number of repeated cold-run measurements (for CV gate).
+        #[arg(long, default_value_t = 1)]
+        repeat: u32,
+
+        /// Fail if coefficient of variation exceeds this threshold (0.0–1.0).
+        #[arg(long)]
+        check_cv: Option<f64>,
+    },
 }
 
 /// Output format for the `repo-scale` subcommand.
@@ -123,7 +164,96 @@ fn main() -> Result<()> {
         return run_repo_scale(path, top_dirs, top_extensions, include_untracked, fmt, out);
     }
 
-    // ── Early exit: persist a synthetic app and stop ───────────────────────
+    // ── generate-corpus subcommand ─────────────────────────────────────────────
+    if let Some(Commands::GenerateCorpus { profile, out }) = args.command.as_ref() {
+        let p = wundler_bench::profile::load_profile(profile)?;
+        wundler_bench::corpus_gen::generate_corpus(&p, out)?;
+        eprintln!(
+            "generated corpus at {} (seed={}, target_files={})",
+            out.display(),
+            p.gen.seed,
+            p.target.workspace_stats.total_files
+        );
+        return Ok(());
+    }
+
+    // ── verify-corpus subcommand ─────────────────────────────────────────────
+    if let Some(Commands::VerifyCorpus {
+        corpus,
+        profile,
+        json,
+    }) = args.command.as_ref()
+    {
+        let p = wundler_bench::profile::load_profile(profile)?;
+        let report = wundler_bench::corpus_verify::verify_corpus(&p, corpus)?;
+        if *json {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        } else {
+            let fails: Vec<_> = report
+                .checks
+                .iter()
+                .filter(|c| c.status == wundler_bench::profile::CheckStatus::Fail)
+                .collect();
+            eprintln!(
+                "verify: {} checks, passed={} (fails: {})",
+                report.checks.len(),
+                report.passed,
+                fails.len()
+            );
+            for c in &fails {
+                eprintln!(
+                    "  FAIL {}: target={}, actual={}, tol={}%",
+                    c.name,
+                    c.target,
+                    c.actual,
+                    c.tolerance_pct * 100.0
+                );
+            }
+        }
+        if !report.passed {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
+    // ── analysis-bench subcommand ────────────────────────────────────────────
+    if let Some(Commands::AnalysisBench {
+        modules,
+        repeat,
+        check_cv,
+    }) = args.command
+    {
+        let scales = vec![modules];
+        let mut cold_ms_values: Vec<f64> = Vec::new();
+        for _ in 0..repeat {
+            let run_results = wundler_bench::analysis_bench::run(&scales)?;
+            if let Some(r) = run_results.first() {
+                cold_ms_values.push(r.cold_ms as f64);
+            }
+        }
+        // Final run for display
+        let results = wundler_bench::analysis_bench::run(&scales)?;
+        if let Some(r) = results.first() {
+            eprintln!(
+                "analysis-bench: N={} cold={}ms warm={}ms speedup={:.0}x",
+                modules, r.cold_ms, r.warm_ms, r.speedup
+            );
+        }
+        if let Some(cv_threshold) = check_cv {
+            let cv = coefficient_of_variation(&cold_ms_values);
+            eprintln!("analysis-bench: CV={:.4} (threshold={:.4})", cv, cv_threshold);
+            if cv > cv_threshold {
+                anyhow::bail!(
+                    "CV {:.4} exceeds threshold {:.4} — measurement is too noisy",
+                    cv,
+                    cv_threshold
+                );
+            }
+        }
+        return Ok(());
+    }
+
+    // ── Early exit: persist a synthetic app and stop ─────────────────────────
     if let Some(dest) = &args.persist_to {
         let n = args.persist_modules;
         eprintln!(
@@ -279,6 +409,44 @@ fn format_n(n: usize) -> String {
         format!("{}K", n / 1_000)
     } else {
         n.to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CV helper
+// ---------------------------------------------------------------------------
+
+fn coefficient_of_variation(xs: &[f64]) -> f64 {
+    if xs.len() < 2 {
+        return 0.0;
+    }
+    let n = xs.len() as f64;
+    let mean = xs.iter().sum::<f64>() / n;
+    if mean == 0.0 {
+        return 0.0;
+    }
+    let var = xs.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n;
+    var.sqrt() / mean
+}
+
+#[cfg(test)]
+mod cv_tests {
+    use super::coefficient_of_variation;
+
+    #[test]
+    fn zero_for_single_sample() {
+        assert_eq!(coefficient_of_variation(&[42.0]), 0.0);
+    }
+
+    #[test]
+    fn zero_for_constant_samples() {
+        assert_eq!(coefficient_of_variation(&[10.0, 10.0, 10.0]), 0.0);
+    }
+
+    #[test]
+    fn positive_for_varying_samples() {
+        let cv = coefficient_of_variation(&[10.0, 12.0, 8.0]);
+        assert!(cv > 0.0 && cv < 1.0);
     }
 }
 

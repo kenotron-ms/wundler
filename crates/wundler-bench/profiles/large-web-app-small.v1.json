@@ -1,0 +1,58 @@
+{
+  "profile_schema_version": 1,
+  "target": {
+    "git_stats": {
+      "is_git_repo": false,
+      "head_commit": null,
+      "current_branch": null,
+      "commit_count": null,
+      "files_ever_tracked": null
+    },
+    "workspace_stats": {
+      "total_files": 100,
+      "total_bytes": 120000,
+      "extension_stats": {
+        "ts": {
+          "file_count": 70,
+          "total_bytes": 84000,
+          "total_lines": 350,
+          "avg_file_bytes": 1200.0
+        },
+        "json": {
+          "file_count": 15,
+          "total_bytes": 12000,
+          "total_lines": 75,
+          "avg_file_bytes": 800.0
+        },
+        "md": {
+          "file_count": 15,
+          "total_bytes": 24000,
+          "total_lines": 45,
+          "avg_file_bytes": 1600.0
+        }
+      },
+      "directory_stats": [
+        { "path": "apps/web/src", "file_count": 50 },
+        { "path": "packages/lib/src", "file_count": 30 },
+        { "path": "docs", "file_count": 15 },
+        { "path": ".", "file_count": 5 }
+      ],
+      "packages": ["apps/web", "packages/lib"]
+    },
+    "manifest_stats": {
+      "package_json": 0,
+      "cargo_toml": 0,
+      "pyproject_toml": 0,
+      "tsconfig_json": 0,
+      "azure_pipelines_yaml": 0
+    }
+  },
+  "gen": {
+    "seed": 987654321,
+    "tolerances": {
+      "file_count_pct": 0.02,
+      "byte_count_pct": 0.05,
+      "line_count_pct": 0.30
+    }
+  }
+}
