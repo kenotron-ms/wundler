@@ -4074,6 +4074,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "wundler-html"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "hex",
+ "wundler-core",
+ "wundler-graph",
+]
+
+[[package]]
 name = "wundler-pgo"
 version = "0.1.0"
 dependencies = [
