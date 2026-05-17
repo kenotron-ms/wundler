@@ -8,6 +8,7 @@
 //! bytes itself.
 
 pub mod archive;
+pub mod metrics;
 pub mod manifest;
 pub mod security;
 pub mod server;
