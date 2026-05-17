@@ -58,6 +58,103 @@ impl DepPrebundler {
     pub fn cache_root(&self) -> &Path {
         &self.cache_root
     }
+
+    pub fn ensure_fresh(&self, project_root: &Path) -> Result<PrebundleResult> {
+        let fingerprint = compute_fingerprint(project_root)?;
+        let cache_dir = self.cache_root.join(&fingerprint);
+
+        if cache_dir.join("index.json").is_file() {
+            return Ok(PrebundleResult { cache_dir, from_cache: true, fingerprint });
+        }
+
+        std::fs::create_dir_all(&self.cache_root).with_context(|| {
+            format!("could not create cache root {}", self.cache_root.display())
+        })?;
+
+        self.bundle_into(&fingerprint, &cache_dir)?;
+
+        Ok(PrebundleResult { cache_dir, from_cache: false, fingerprint })
+    }
+
+    fn bundle_into(&self, fingerprint: &str, final_dir: &Path) -> Result<()> {
+        let tmp = tempfile::Builder::new()
+            .prefix(&format!(".tmp-{fingerprint}-"))
+            .tempdir_in(&self.cache_root)
+            .with_context(|| format!("could not create temp dir under {}", self.cache_root.display()))?;
+
+        let index = serde_json::json!({ "fingerprint": fingerprint });
+        let index_bytes = serde_json::to_vec_pretty(&index)?;
+        std::fs::write(tmp.path().join("index.json"), &index_bytes)
+            .with_context(|| format!("could not write index.json in {}", tmp.path().display()))?;
+
+        let staged = tmp.keep();
+        match std::fs::rename(&staged, final_dir) {
+            Ok(()) => Ok(()),
+            Err(_) if final_dir.join("index.json").is_file() => {
+                let _ = std::fs::remove_dir_all(&staged);
+                Ok(())
+            }
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&staged);
+                Err(anyhow::Error::new(e).context(format!(
+                    "could not rename {} → {}",
+                    staged.display(),
+                    final_dir.display()
+                )))
+            }
+        }
+    }
+
+    pub fn gc(&self) -> Result<()> {
+        if !self.cache_root.is_dir() {
+            return Ok(());
+        }
+
+        let ttl_secs = u64::from(self.ttl_days) * 24 * 60 * 60;
+        let cutoff = match std::time::SystemTime::now()
+            .checked_sub(std::time::Duration::from_secs(ttl_secs))
+        {
+            Some(t) => t,
+            None => return Ok(()),
+        };
+
+        let entries = std::fs::read_dir(&self.cache_root)
+            .with_context(|| format!("could not read {}", self.cache_root.display()))?;
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::warn!("gc: bad dir entry under {}: {e}", self.cache_root.display());
+                    continue;
+                }
+            };
+            let path = entry.path();
+            let meta = match entry.metadata() {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::warn!("gc: could not stat {}: {e}", path.display());
+                    continue;
+                }
+            };
+            if !meta.is_dir() {
+                continue;
+            }
+            let mtime = match meta.modified() {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::warn!("gc: no mtime on {}: {e}", path.display());
+                    continue;
+                }
+            };
+            if mtime <= cutoff {
+                if let Err(e) = std::fs::remove_dir_all(&path) {
+                    tracing::warn!("gc: could not remove {}: {e}", path.display());
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
