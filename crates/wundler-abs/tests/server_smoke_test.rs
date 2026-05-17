@@ -43,6 +43,7 @@ fn router_builds_without_panic() {
         app,
         telemetry,
         Arc::new(ResolvedSecurity::from_config(&SecurityConfig::default()).unwrap()),
+        None,
     );
 }
 

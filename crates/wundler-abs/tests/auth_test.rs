@@ -198,7 +198,7 @@ async fn make_open_server() -> (TestServer, TempDir) {
     let security = ResolvedSecurity::from_config(&SecurityConfig::default())
         .expect("default security");
 
-    let router = build_router(app, telemetry, Arc::new(security));
+    let router = build_router(app, telemetry, Arc::new(security), None);
     std::mem::forget(manifest);
     (TestServer::new(router), tmp_dir)
 }
@@ -230,7 +230,7 @@ async fn make_secured_server(token: &str) -> (TestServer, TempDir, NamedTempFile
     };
     let security = ResolvedSecurity::from_config(&config).expect("ResolvedSecurity");
 
-    let router = build_router(app, telemetry, Arc::new(security));
+    let router = build_router(app, telemetry, Arc::new(security), None);
     std::mem::forget(manifest);
     (TestServer::new(router), tmp_dir, token_file)
 }

@@ -109,6 +109,9 @@ impl Default for AbsConfig {
 struct RouterState {
     app: AppState,
     telemetry: TelemetryLogger,
+    /// Reserved for Task 5 which wires in active signing; unused until then.
+    #[allow(dead_code)]
+    signer: Option<Arc<crate::signing::ManifestSigner>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -211,8 +214,9 @@ pub fn build_router(
     app: AppState,
     telemetry: TelemetryLogger,
     security: Arc<ResolvedSecurity>,
+    signer: Option<Arc<crate::signing::ManifestSigner>>,
 ) -> Router {
-    let state = RouterState { app, telemetry };
+    let state = RouterState { app, telemetry, signer };
     let cors = build_cors(&security);
 
     // POST /manifest route, optionally rate-limited per source IP.
@@ -232,6 +236,7 @@ pub fn build_router(
         .merge(manifest_route)
         .route("/health", get(get_health))
         .route("/sw.js", get(get_service_worker))
+        .route("/manifest/full.json", get(get_manifest_full_json))
         .route("/reload", post(post_reload))
         .route("/select", post(post_select))
         .route("/versions", get(get_versions))
@@ -268,7 +273,8 @@ pub async fn run(config: AbsConfig) -> Result<()> {
     let telemetry = TelemetryLogger::new(&config.telemetry_log)?;
     let security = ResolvedSecurity::from_config(&config.security)
         .context("failed to initialise security config")?;
-    let router = build_router(app, telemetry, Arc::new(security));
+    let signer: Option<Arc<crate::signing::ManifestSigner>> = None;
+    let router = build_router(app, telemetry, Arc::new(security), signer);
 
     let addr = format!("0.0.0.0:{}", config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -382,6 +388,61 @@ async fn get_versions(State(state): State<RouterState>) -> Response {
         )
             .into_response(),
     }
+}
+
+/// `GET /manifest/full.json` — return the complete current manifest as JSON.
+///
+/// Public endpoint (exempt from bearer-token auth). Returns:
+/// * `Content-Type: application/json`
+/// * `X-Wundler-Build-Id`: the current manifest's `build_id`
+/// * `X-Wundler-Signature`: base64-encoded ed25519 signature, if one is stored
+/// * `Cache-Control: public, max-age=<ttl>, immutable`
+async fn get_manifest_full_json(State(state): State<RouterState>) -> Response {
+    use base64::Engine as _;
+
+    let manifest = state.app.snapshot().await;
+    let sig = state.app.snapshot_signature().await;
+
+    let body = match serde_json::to_vec(&*manifest) {
+        Ok(b) => b,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to serialise manifest: {e}"),
+            )
+                .into_response()
+        }
+    };
+
+    let build_id_header = match axum::http::HeaderValue::from_str(&manifest.build_id) {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "manifest build_id is not a valid HTTP header value",
+            )
+                .into_response()
+        }
+    };
+
+    let cache_value = format!("public, max-age={}, immutable", state.app.ttl_seconds);
+
+    let mut resp = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("x-wundler-build-id", build_id_header)
+        .header(header::CACHE_CONTROL, cache_value)
+        .body(axum::body::Body::from(body))
+        .expect("static-shape response must build");
+
+    if let Some(sig) = sig {
+        let b64 = base64::engine::general_purpose::STANDARD.encode(sig.to_bytes());
+        if let Ok(hv) = axum::http::HeaderValue::from_str(&b64) {
+            resp.headers_mut().insert("x-wundler-signature", hv);
+        }
+    }
+
+    resp
 }
 
 /// `POST /reload` — hot-swap the in-memory manifest from a file on disk.
@@ -632,7 +693,7 @@ mod tests {
         security: Arc<ResolvedSecurity>,
         ip: IpAddr,
     ) -> axum::Router {
-        let inner = super::build_router(app, telemetry, security);
+        let inner = super::build_router(app, telemetry, security, None);
         inner.layer(middleware::from_fn(
             move |mut req: Request<Body>, next: middleware::Next| async move {
                 let ci: ConnectInfo<SocketAddr> = ConnectInfo(SocketAddr::new(ip, 49_152));
@@ -768,5 +829,75 @@ mod tests {
                 "no rate limit must be applied"
             );
         }
+    }
+
+    // SEC2-3 — GET /manifest/full.json tests
+
+    use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
+    use ed25519_dalek::{Signer as _, SigningKey};
+    use rand::rngs::OsRng;
+
+    fn unsecured(app: AppState, telemetry: TelemetryLogger) -> axum::Router {
+        let security = Arc::new(ResolvedSecurity {
+            token: None,
+            allowed_origins: vec![],
+            rate_limiter: None,
+        });
+        super::build_router(app, telemetry, security, None)
+    }
+
+    #[tokio::test]
+    async fn manifest_full_json_returns_manifest_body_and_build_id_header() {
+        let (app, telemetry) = test_state();
+        let router = unsecured(app, telemetry);
+        let resp = router
+            .oneshot(Request::builder().uri("/manifest/full.json").body(Body::empty()).unwrap())
+            .await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap().to_str().unwrap(), "application/json");
+        assert_eq!(
+            resp.headers().get("x-wundler-build-id").expect("X-Wundler-Build-Id present").to_str().unwrap(),
+            "test-build"
+        );
+        assert!(resp.headers().get("x-wundler-signature").is_none());
+        let cache = resp.headers().get(CACHE_CONTROL).unwrap().to_str().unwrap();
+        assert!(cache.contains("public"));
+        assert!(cache.contains("immutable"));
+        let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        let parsed: ChunkManifest = serde_json::from_slice(&bytes).expect("body is manifest JSON");
+        assert_eq!(parsed.build_id, "test-build");
+    }
+
+    #[tokio::test]
+    async fn manifest_full_json_emits_signature_header_when_signature_present() {
+        let (app, telemetry) = test_state();
+        let sk = SigningKey::generate(&mut OsRng);
+        let manifest = app.snapshot().await;
+        let bytes = crate::signing::manifest_signature_bytes(&manifest);
+        let sig = sk.sign(&bytes);
+        app.set_signature(Some(sig)).await;
+        let router = unsecured(app, telemetry);
+        let resp = router
+            .oneshot(Request::builder().uri("/manifest/full.json").body(Body::empty()).unwrap())
+            .await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let header = resp.headers().get("x-wundler-signature")
+            .expect("X-Wundler-Signature present").to_str().unwrap().to_string();
+        use base64::Engine as _;
+        let decoded = base64::engine::general_purpose::STANDARD.decode(&header).expect("valid base64");
+        assert_eq!(decoded.len(), 64);
+        assert_eq!(decoded.as_slice(), sig.to_bytes().as_slice());
+    }
+
+    #[tokio::test]
+    async fn manifest_full_json_bypasses_bearer_auth() {
+        let token = crate::security::auth::SecretToken::new(b"unit-test-token".to_vec());
+        let security = Arc::new(ResolvedSecurity { token: Some(token), allowed_origins: vec![], rate_limiter: None });
+        let (app, telemetry) = test_state();
+        let router = super::build_router(app, telemetry, security, None);
+        let resp = router
+            .oneshot(Request::builder().uri("/manifest/full.json").body(Body::empty()).unwrap())
+            .await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 }

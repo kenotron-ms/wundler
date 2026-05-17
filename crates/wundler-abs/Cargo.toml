@@ -22,6 +22,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 subtle = "2"
 governor = "0.7"
+base64 = "0.22"
+hex = "0.4"
 tempfile = "3"
 
 [dev-dependencies]

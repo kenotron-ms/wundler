@@ -48,7 +48,7 @@ async fn make_server(build_ids: &[&str]) -> (TestServer, TempDir) {
     };
     let telemetry = TelemetryLogger::new(&log_path).expect("telemetry");
     let security = Arc::new(ResolvedSecurity::from_config(&SecurityConfig::default()).unwrap());
-    let router = build_router(app, telemetry, security);
+    let router = build_router(app, telemetry, security, None);
 
     (TestServer::new(router), tmp_dir)
 }

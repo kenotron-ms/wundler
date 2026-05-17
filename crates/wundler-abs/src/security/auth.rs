@@ -70,7 +70,12 @@ use super::ResolvedSecurity;
 
 /// Routes that always bypass the bearer-token check, regardless of whether
 /// security is enabled. These are publicly readable endpoints.
-const EXEMPT_PATHS: &[&str] = &["/health", "/sw.js"];
+const EXEMPT_PATHS: &[&str] = &[
+    "/health",
+    "/sw.js",
+    "/manifest/full.json",
+    "/csp-report",
+];
 
 // ---------------------------------------------------------------------------
 // require_bearer middleware
@@ -78,7 +83,7 @@ const EXEMPT_PATHS: &[&str] = &["/health", "/sw.js"];
 
 /// Axum middleware that enforces bearer-token authentication.
 ///
-/// * Paths in [`EXEMPT_PATHS`] (`/health`, `/sw.js`) always pass through.
+/// * Paths in [`EXEMPT_PATHS`] (`/health`, `/sw.js`, `/manifest/full.json`, `/csp-report`) always pass through.
 /// * When `security.is_enabled()` is `false`, every request passes through
 ///   unchanged — zero behaviour change from today.
 /// * With security enabled, the request **must** carry
