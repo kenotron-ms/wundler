@@ -274,7 +274,15 @@ pub async fn run(config: AbsConfig) -> Result<()> {
     let telemetry = TelemetryLogger::new(&config.telemetry_log)?;
     let security = ResolvedSecurity::from_config(&config.security)
         .context("failed to initialise security config")?;
-    let signer: Option<Arc<crate::signing::ManifestSigner>> = None;
+    let signer = if let Some(ref pem_path) = config.signing_key_pem {
+        let pem = std::fs::read_to_string(pem_path)
+            .with_context(|| format!("reading signing key from {}", pem_path.display()))?;
+        let s = crate::signing::ManifestSigner::from_pem(&pem)
+            .context("parsing signing key PEM")?;
+        Some(Arc::new(s))
+    } else {
+        None
+    };
     let router = build_router(app, telemetry, Arc::new(security), signer);
 
     let addr = format!("0.0.0.0:{}", config.port);
@@ -531,6 +539,14 @@ async fn post_reload(
                 .into_response();
         }
     };
+
+    // Re-sign the new manifest if a signer is configured.
+    // (swap_to already reset the signature slot to None.)
+    if let Some(signer) = &state.signer {
+        let active_manifest = state.app.snapshot().await;
+        let sig = signer.sign_manifest(&active_manifest);
+        state.app.set_signature(Some(sig)).await;
+    }
 
     (StatusCode::OK, Json(SwapResponseBody {
         previous: report.previous,
@@ -982,5 +998,77 @@ mod tests {
                 .body(Body::from("{}")).unwrap())
             .await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // SEC2-5 — POST /reload signing tests
+
+    use crate::signing::{generate_keypair, ManifestSigner, ManifestVerifier};
+
+    #[tokio::test]
+    async fn reload_resigns_manifest_when_signer_configured() {
+        let (app, telemetry) = test_state();
+        let kp = generate_keypair();
+        let signer = Arc::new(ManifestSigner::from_pem(&kp.signing_key_pem).expect("signer"));
+        let verifier = ManifestVerifier::from_pem(&kp.verifying_key_pem).expect("verifier");
+        let security = Arc::new(ResolvedSecurity { token: None, allowed_origins: vec![], rate_limiter: None });
+        let router = super::build_router(app.clone(), telemetry, security, Some(signer));
+
+        let tmp = tempfile::NamedTempFile::new().expect("tmp manifest file");
+        let new_manifest = ChunkManifest {
+            build_id: "build-resigned".to_string(),
+            chunks: vec![],
+            entry_chunks: HashMap::new(),
+            module_index: HashMap::new(),
+        };
+        std::fs::write(tmp.path(), serde_json::to_vec(&new_manifest).unwrap()).unwrap();
+        let body = serde_json::json!({"manifest_path": tmp.path().to_str().unwrap()});
+
+        let resp = router.clone()
+            .oneshot(Request::builder()
+                .method("POST").uri("/reload")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap())).unwrap())
+            .await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "/reload must succeed");
+
+        let sig = app.snapshot_signature().await.expect("signature must be stored after /reload with signer");
+        let active = app.snapshot().await;
+        assert_eq!(active.build_id, "build-resigned");
+        verifier.verify(&active, &sig).expect("re-signed manifest must verify");
+
+        let resp = router
+            .oneshot(Request::builder().uri("/manifest/full.json").body(Body::empty()).unwrap())
+            .await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        use base64::Engine as _;
+        let header = resp.headers().get("x-wundler-signature").unwrap().to_str().unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD.decode(header).unwrap();
+        assert_eq!(decoded.as_slice(), sig.to_bytes().as_slice());
+    }
+
+    #[tokio::test]
+    async fn reload_does_not_set_signature_when_no_signer() {
+        let (app, telemetry) = test_state();
+        let security = Arc::new(ResolvedSecurity { token: None, allowed_origins: vec![], rate_limiter: None });
+        let router = super::build_router(app.clone(), telemetry, security, None);
+
+        let tmp = tempfile::NamedTempFile::new().expect("tmp manifest file");
+        let new_manifest = ChunkManifest {
+            build_id: "build-no-sig".to_string(),
+            chunks: vec![],
+            entry_chunks: HashMap::new(),
+            module_index: HashMap::new(),
+        };
+        std::fs::write(tmp.path(), serde_json::to_vec(&new_manifest).unwrap()).unwrap();
+        let body = serde_json::json!({"manifest_path": tmp.path().to_str().unwrap()});
+
+        let resp = router
+            .oneshot(Request::builder()
+                .method("POST").uri("/reload")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap())).unwrap())
+            .await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(app.snapshot_signature().await.is_none(), "no signer => no signature");
     }
 }
