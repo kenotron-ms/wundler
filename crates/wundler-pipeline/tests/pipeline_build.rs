@@ -58,6 +58,7 @@ fn make_project_and_config(tag: &str) -> (TempDir, TempDir, BuildConfig) {
             m
         },
         budget: None,
+        dev: None,
     };
 
     (project_dir, out_dir, config)

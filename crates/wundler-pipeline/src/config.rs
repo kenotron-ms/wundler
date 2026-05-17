@@ -20,6 +20,13 @@ pub enum EngineChoice {
     Rspack,
 }
 
+/// `[dev]` section of `wundler.toml`. All fields optional.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct DevConfig {
+    #[serde(default)]
+    pub dep_cache_ttl_days: Option<u32>,
+}
+
 /// Parsed, validated build configuration loaded from `wundler.toml`.
 #[derive(Debug, Clone)]
 pub struct BuildConfig {
@@ -30,6 +37,7 @@ pub struct BuildConfig {
     pub engine: EngineChoice,
     pub entry_points: HashMap<String, PathBuf>,
     pub budget: Option<crate::budget::BudgetConfig>,
+    pub dev: Option<DevConfig>,
 }
 
 // ---------------------------------------------------------------------------
@@ -42,6 +50,8 @@ struct RawConfig {
     entry: HashMap<String, PathBuf>,
     #[serde(default)]
     budget: Option<crate::budget::BudgetConfig>,
+    #[serde(default)]
+    dev: Option<DevConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -88,6 +98,53 @@ impl BuildConfig {
             engine: raw.build.engine,
             entry_points: raw.entry,
             budget: raw.budget,
+            dev: raw.dev,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn write(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
+        let p = dir.join(name);
+        std::fs::write(&p, body).unwrap();
+        p
+    }
+
+    #[test]
+    fn absent_dev_section_yields_none() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = write(tmp.path(), "wundler.toml", r#"
+[build]
+root = "src"
+out_dir = "dist"
+
+[entry]
+main = "src/index.ts"
+"#);
+        let parsed = BuildConfig::load(&cfg).unwrap();
+        assert!(parsed.dev.is_none());
+    }
+
+    #[test]
+    fn dev_section_with_ttl_parses() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = write(tmp.path(), "wundler.toml", r#"
+[build]
+root = "src"
+out_dir = "dist"
+
+[entry]
+main = "src/index.ts"
+
+[dev]
+dep_cache_ttl_days = 7
+"#);
+        let parsed = BuildConfig::load(&cfg).unwrap();
+        let dev = parsed.dev.expect("[dev] should be present");
+        assert_eq!(dev.dep_cache_ttl_days, Some(7));
     }
 }

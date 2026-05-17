@@ -26,6 +26,7 @@ fn run_build(tmp: &std::path::Path) -> BuildStatsArtifact {
         engine: EngineChoice::Swc,
         entry_points,
         budget: None,
+        dev: None,
     };
 
     let pipeline = BuildPipeline::new(cfg);

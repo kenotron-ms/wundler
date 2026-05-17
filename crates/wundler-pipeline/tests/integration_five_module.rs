@@ -66,6 +66,7 @@ fn make_five_module_config(project_dir: &Path, out_dir: &Path) -> BuildConfig {
         engine: EngineChoice::Swc,
         entry_points,
         budget: None,
+        dev: None,
     }
 }
 
