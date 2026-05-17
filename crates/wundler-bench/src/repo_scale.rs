@@ -74,23 +74,16 @@ impl Default for RepoScaleOptions {
     }
 }
 
-/// Top-level measurement result.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Top-level measurement result; also used as the profile target shape.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct RepoScaleReport {
-    pub schema_version: u32,
-    pub repo_path: String,
-    pub measured_at_utc: String,
-    pub git: GitStats,
-    pub tracked_files_total: u64,
-    pub by_extension: Vec<ExtensionStat>,
-    pub top_directories: Vec<DirectoryStat>,
-    pub workspace: WorkspaceStats,
-    pub manifests: ManifestStats,
-    pub warnings: Vec<String>,
+    pub git_stats: GitStats,
+    pub workspace_stats: WorkspaceStats,
+    pub manifest_stats: ManifestStats,
 }
 
 /// Git-level statistics extracted without checking out anything extra.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct GitStats {
     pub is_git_repo: bool,
     pub head_commit: Option<String>,
@@ -99,40 +92,40 @@ pub struct GitStats {
     pub files_ever_tracked: Option<u64>,
 }
 
+/// Workspace-level aggregate statistics.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct WorkspaceStats {
+    /// Total number of files in the workspace.
+    pub total_files: u64,
+    /// Total byte count across all files.
+    pub total_bytes: u64,
+    /// Per-extension aggregate counts, keyed by lowercase extension (no leading dot).
+    pub extension_stats: HashMap<String, ExtensionStat>,
+    /// Per-top-level-directory file counts, sorted by file count descending.
+    pub directory_stats: Vec<DirectoryStat>,
+    /// Workspace package directory names (from `packages/` or `apps/`).
+    pub packages: Vec<String>,
+}
+
 /// Per-extension aggregate counts.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct ExtensionStat {
-    /// Lowercase extension without leading dot; `""` for extensionless files.
-    pub extension: String,
     pub file_count: u64,
-    pub line_count: u64,
-    pub byte_count: u64,
+    pub total_bytes: u64,
+    pub total_lines: u64,
+    pub avg_file_bytes: f64,
 }
 
 /// Per-top-level-directory aggregate counts.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct DirectoryStat {
     /// First path component, or `"<root>"` for files at the repo root.
     pub path: String,
     pub file_count: u64,
-    pub line_count: u64,
-}
-
-/// Workspace-layout heuristics (optional; `None` when the directory is absent).
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct WorkspaceStats {
-    /// Number of `packages/<name>/` that contain a `package.json`.
-    pub packages_immediate_subdirs: Option<u64>,
-    /// Number of `apps/<name>/` that contain a `package.json`.
-    pub apps_immediate_subdirs: Option<u64>,
-    /// Number of immediate subdirs under `tools/`.
-    pub tools_immediate_subdirs: Option<u64>,
-    /// Count of tracked files under `docs/`.
-    pub docs_file_count: Option<u64>,
 }
 
 /// Count of key manifest files found anywhere in the tracked file list.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct ManifestStats {
     pub package_json: u64,
     pub cargo_toml: u64,
@@ -153,15 +146,15 @@ pub fn measure_repo(opts: &RepoScaleOptions) -> io::Result<RepoScaleReport> {
 
 /// Like [`measure_repo`] but accepts an explicit timestamp string, enabling
 /// deterministic output in tests.
-pub fn measure_repo_with_clock(opts: &RepoScaleOptions, now_utc: &str) -> io::Result<RepoScaleReport> {
+pub fn measure_repo_with_clock(opts: &RepoScaleOptions, _now_utc: &str) -> io::Result<RepoScaleReport> {
     let path = &opts.path;
     let mut warnings: Vec<String> = Vec::new();
 
-    // ── 1. Git statistics ─────────────────────────────────────────────────────
-    let git = collect_git_stats(path, &mut warnings);
+    // ── 1. Git statistics ──────────────────────────────────────────────────
+    let git_stats = collect_git_stats(path, &mut warnings);
 
-    // ── 2. Build the file list ────────────────────────────────────────────────
-    let mut files: Vec<String> = if git.is_git_repo {
+    // ── 2. Build the file list ─────────────────────────────────────────────
+    let mut files: Vec<String> = if git_stats.is_git_repo {
         get_tracked_files(path, &mut warnings)?
     } else {
         Vec::new()
@@ -173,7 +166,7 @@ pub fn measure_repo_with_clock(opts: &RepoScaleOptions, now_utc: &str) -> io::Re
         files.extend(untracked);
     }
 
-    // ── 3. Warnings ───────────────────────────────────────────────────────────
+    // ── 3. Warnings ────────────────────────────────────────────────────────
     if files
         .iter()
         .any(|f| f.split('/').any(|seg| seg == "node_modules"))
@@ -188,28 +181,19 @@ pub fn measure_repo_with_clock(opts: &RepoScaleOptions, now_utc: &str) -> io::Re
     let total = files.len() as u64;
     if total > 100_000 {
         warnings.push(format!(
-            "Warning: tracked_files_total ({total}) exceeds 100,000"
+            "Warning: total file count ({total}) exceeds 100,000"
         ));
     }
 
-    // ── 4. Aggregate stats ────────────────────────────────────────────────────
-    let (by_extension, top_directories) =
-        compute_stats(path, &files, opts.top_dirs, opts.top_extensions, &mut warnings);
-
-    let workspace = compute_workspace_stats(&files);
-    let manifests = compute_manifest_stats(&files);
+    // ── 4. Aggregate stats ─────────────────────────────────────────────────
+    let workspace_stats =
+        compute_workspace_stats(path, &files, opts.top_dirs, &mut warnings);
+    let manifest_stats = compute_manifest_stats(&files);
 
     Ok(RepoScaleReport {
-        schema_version: SCHEMA_VERSION,
-        repo_path: path.to_string_lossy().into_owned(),
-        measured_at_utc: now_utc.to_string(),
-        git,
-        tracked_files_total: total,
-        by_extension,
-        top_directories,
-        workspace,
-        manifests,
-        warnings,
+        git_stats,
+        workspace_stats,
+        manifest_stats,
     })
 }
 
@@ -224,65 +208,67 @@ pub fn render_markdown(report: &RepoScaleReport) -> String {
 
     // Title & metadata
     s.push_str("# Repo Scale Report\n\n");
-    s.push_str(&format!("**Path:** `{}`  \n", report.repo_path));
-    s.push_str(&format!(
-        "**Measured at:** {}  \n",
-        report.measured_at_utc
-    ));
-    s.push_str(&format!(
-        "**Schema version:** {}  \n\n",
-        report.schema_version
-    ));
 
     // Git section
     s.push_str("## Git\n\n");
     s.push_str(&format!(
         "- Is git repo: {}  \n",
-        report.git.is_git_repo
+        report.git_stats.is_git_repo
     ));
     s.push_str(&format!(
         "- HEAD commit: {}  \n",
-        report.git.head_commit.as_deref().unwrap_or("—")
+        report.git_stats.head_commit.as_deref().unwrap_or("—")
     ));
     s.push_str(&format!(
         "- Branch: {}  \n",
-        report.git.current_branch.as_deref().unwrap_or("—")
+        report.git_stats.current_branch.as_deref().unwrap_or("—")
     ));
     s.push_str(&format!(
         "- Commit count: {}  \n",
-        fmt_opt_u64(report.git.commit_count)
+        fmt_opt_u64(report.git_stats.commit_count)
     ));
     s.push_str(&format!(
         "- Files ever tracked: {}  \n\n",
-        fmt_opt_u64(report.git.files_ever_tracked)
+        fmt_opt_u64(report.git_stats.files_ever_tracked)
     ));
 
-    // Tracked files total
-    s.push_str("## Tracked files\n\n");
+    // Workspace overview
+    s.push_str("## Workspace\n\n");
     s.push_str(&format!(
-        "- Total: {}  \n\n",
-        report.tracked_files_total
+        "- Total files: {}  \n",
+        fmt_n(report.workspace_stats.total_files)
+    ));
+    s.push_str(&format!(
+        "- Total bytes: {}  \n\n",
+        fmt_bytes(report.workspace_stats.total_bytes)
     ));
 
     // Top extensions
     s.push_str("## Top extensions\n\n");
-    if report.by_extension.is_empty() {
+    if report.workspace_stats.extension_stats.is_empty() {
         s.push_str("*(none)*\n\n");
     } else {
         s.push_str("| Extension | Files | Lines | Bytes |\n");
         s.push_str("|-----------|------:|------:|------:|\n");
-        for e in &report.by_extension {
-            let ext_label = if e.extension.is_empty() {
+        let mut exts: Vec<(&String, &ExtensionStat)> =
+            report.workspace_stats.extension_stats.iter().collect();
+        exts.sort_by(|a, b| {
+            b.1.file_count
+                .cmp(&a.1.file_count)
+                .then_with(|| a.0.cmp(b.0))
+        });
+        for (ext, stat) in &exts {
+            let ext_label = if ext.is_empty() {
                 "*(none)*".to_string()
             } else {
-                e.extension.clone()
+                ext.to_string()
             };
             s.push_str(&format!(
                 "| {} | {} | {} | {} |\n",
                 ext_label,
-                fmt_n(e.file_count),
-                fmt_n(e.line_count),
-                fmt_bytes(e.byte_count)
+                fmt_n(stat.file_count),
+                fmt_n(stat.total_lines),
+                fmt_bytes(stat.total_bytes)
             ));
         }
         s.push('\n');
@@ -290,46 +276,31 @@ pub fn render_markdown(report: &RepoScaleReport) -> String {
 
     // Top directories
     s.push_str("## Top directories (depth=1)\n\n");
-    if report.top_directories.is_empty() {
+    if report.workspace_stats.directory_stats.is_empty() {
         s.push_str("*(none)*\n\n");
     } else {
-        s.push_str("| Directory | Files | Lines |\n");
-        s.push_str("|-----------|------:|------:|\n");
-        for d in &report.top_directories {
-            s.push_str(&format!(
-                "| {} | {} | {} |\n",
-                d.path,
-                fmt_n(d.file_count),
-                fmt_n(d.line_count)
-            ));
+        s.push_str("| Directory | Files |\n");
+        s.push_str("|-----------|------:|\n");
+        for d in &report.workspace_stats.directory_stats {
+            s.push_str(&format!("| {} | {} |\n", d.path, fmt_n(d.file_count)));
         }
         s.push('\n');
     }
 
-    // Workspace shape
-    s.push_str("## Workspace shape\n\n");
-    s.push_str(&format!(
-        "- `packages/` subdirs with package.json: {}  \n",
-        fmt_opt_u64(report.workspace.packages_immediate_subdirs)
-    ));
-    s.push_str(&format!(
-        "- `apps/` subdirs with package.json: {}  \n",
-        fmt_opt_u64(report.workspace.apps_immediate_subdirs)
-    ));
-    s.push_str(&format!(
-        "- `tools/` immediate subdirs: {}  \n",
-        fmt_opt_u64(report.workspace.tools_immediate_subdirs)
-    ));
-    s.push_str(&format!(
-        "- `docs/` file count: {}  \n\n",
-        fmt_opt_u64(report.workspace.docs_file_count)
-    ));
+    // Workspace packages
+    if !report.workspace_stats.packages.is_empty() {
+        s.push_str("## Workspace packages\n\n");
+        for p in &report.workspace_stats.packages {
+            s.push_str(&format!("- {p}  \n"));
+        }
+        s.push('\n');
+    }
 
     // Manifests
     s.push_str("## Manifests\n\n");
     s.push_str("| Type | Count |\n");
     s.push_str("|------|------:|\n");
-    let m = &report.manifests;
+    let m = &report.manifest_stats;
     s.push_str(&format!("| package.json | {} |\n", m.package_json));
     s.push_str(&format!("| Cargo.toml | {} |\n", m.cargo_toml));
     s.push_str(&format!("| pyproject.toml | {} |\n", m.pyproject_toml));
@@ -338,16 +309,6 @@ pub fn render_markdown(report: &RepoScaleReport) -> String {
         "| azure pipelines (.yml/.yaml) | {} |\n\n",
         m.azure_pipelines_yaml
     ));
-
-    // Warnings
-    s.push_str("## Warnings\n\n");
-    if report.warnings.is_empty() {
-        s.push_str("*(none)*\n");
-    } else {
-        for w in &report.warnings {
-            s.push_str(&format!("- {w}\n"));
-        }
-    }
 
     s
 }
@@ -497,19 +458,19 @@ fn walk_dir(root: &Path, current: &Path, tracked: &HashSet<String>, out: &mut Ve
 
 // ── Internal: aggregate stats ─────────────────────────────────────────────────
 
-/// Single-pass aggregation over the file list; returns sorted, capped slices.
-fn compute_stats(
+/// Build `WorkspaceStats` from the file list with a single filesystem pass.
+fn compute_workspace_stats(
     repo_path: &Path,
     files: &[String],
     top_dirs: usize,
-    top_exts: usize,
     warnings: &mut Vec<String>,
-) -> (Vec<ExtensionStat>, Vec<DirectoryStat>) {
-    // (file_count, line_count, byte_count)
+) -> WorkspaceStats {
+    // Maps: extension → (file_count, line_count, byte_count)
     let mut ext_map: HashMap<String, (u64, u64, u64)> = HashMap::new();
-    // (file_count, line_count)
-    let mut dir_map: HashMap<String, (u64, u64)> = HashMap::new();
+    // Maps: top-level dir → file_count
+    let mut dir_map: HashMap<String, u64> = HashMap::new();
 
+    let mut total_bytes: u64 = 0;
     let mut unreadable: u64 = 0;
 
     for rel in files {
@@ -521,6 +482,8 @@ fn compute_stats(
             }
         };
 
+        total_bytes += bytes;
+
         let ext = get_extension(rel);
         let dir = get_top_level_dir(rel);
 
@@ -529,51 +492,103 @@ fn compute_stats(
         e.1 += lines;
         e.2 += bytes;
 
-        let d = dir_map.entry(dir).or_insert((0, 0));
-        d.0 += 1;
-        d.1 += lines;
+        *dir_map.entry(dir).or_insert(0) += 1;
     }
 
     if unreadable > 0 {
         warnings.push(format!("{unreadable} file(s) could not be read"));
     }
 
-    // ── Build and sort ExtensionStat ─────────────────────────────────────────
-    let mut exts: Vec<ExtensionStat> = ext_map
+    // ── Build extension_stats ─────────────────────────────────────────────
+    let extension_stats: HashMap<String, ExtensionStat> = ext_map
         .into_iter()
-        .map(|(ext, (fc, lc, bc))| ExtensionStat {
-            extension: ext,
-            file_count: fc,
-            line_count: lc,
-            byte_count: bc,
+        .map(|(ext, (fc, lc, bc))| {
+            let avg = if fc > 0 { bc as f64 / fc as f64 } else { 0.0 };
+            (
+                ext,
+                ExtensionStat {
+                    file_count: fc,
+                    total_bytes: bc,
+                    total_lines: lc,
+                    avg_file_bytes: avg,
+                },
+            )
         })
         .collect();
-    // Primary: file_count descending; secondary: extension name ascending.
-    exts.sort_unstable_by(|a, b| {
-        b.file_count
-            .cmp(&a.file_count)
-            .then_with(|| a.extension.cmp(&b.extension))
-    });
-    exts.truncate(top_exts);
 
-    // ── Build and sort DirectoryStat ─────────────────────────────────────────
-    let mut dirs: Vec<DirectoryStat> = dir_map
+    // ── Build and sort directory_stats ────────────────────────────────────
+    let mut directory_stats: Vec<DirectoryStat> = dir_map
         .into_iter()
-        .map(|(path, (fc, lc))| DirectoryStat {
+        .map(|(path, fc)| DirectoryStat {
             path,
             file_count: fc,
-            line_count: lc,
         })
         .collect();
-    dirs.sort_unstable_by(|a, b| {
+    directory_stats.sort_unstable_by(|a, b| {
         b.file_count
             .cmp(&a.file_count)
             .then_with(|| a.path.cmp(&b.path))
     });
-    dirs.truncate(top_dirs);
+    directory_stats.truncate(top_dirs);
 
-    (exts, dirs)
+    // ── Build packages list ───────────────────────────────────────────────
+    let file_set: HashSet<&str> = files.iter().map(|s| s.as_str()).collect();
+    let mut packages: Vec<String> = Vec::new();
+    for prefix in &["packages/", "apps/"] {
+        let mut pkgs = collect_packages(files, &file_set, prefix);
+        packages.append(&mut pkgs);
+    }
+    packages.sort();
+    packages.dedup();
+
+    WorkspaceStats {
+        total_files: files.len() as u64,
+        total_bytes,
+        extension_stats,
+        directory_stats,
+        packages,
+    }
 }
+
+/// Collect immediate sub-directory names under `prefix` that contain a `package.json`.
+fn collect_packages(files: &[String], file_set: &HashSet<&str>, prefix: &str) -> Vec<String> {
+    let mut pkgs: HashSet<String> = HashSet::new();
+    for f in files {
+        if let Some(rest) = f.strip_prefix(prefix) {
+            if let Some(slash) = rest.find('/') {
+                let name = &rest[..slash];
+                let pkg_json_path = format!("{prefix}{name}/package.json");
+                if file_set.contains(pkg_json_path.as_str()) {
+                    pkgs.insert(name.to_string());
+                }
+            }
+        }
+    }
+    pkgs.into_iter().collect()
+}
+
+fn compute_manifest_stats(files: &[String]) -> ManifestStats {
+    let mut s = ManifestStats::default();
+    for f in files {
+        let basename = f.rsplit('/').next().unwrap_or(f.as_str());
+        match basename {
+            "package.json" => s.package_json += 1,
+            "Cargo.toml" => s.cargo_toml += 1,
+            "pyproject.toml" => s.pyproject_toml += 1,
+            "tsconfig.json" => s.tsconfig_json += 1,
+            _ => {}
+        }
+        // azure_pipelines_yaml: any .yml or .yaml under azure/
+        if f.starts_with("azure/") {
+            if f.ends_with(".yml") || f.ends_with(".yaml") {
+                s.azure_pipelines_yaml += 1;
+            }
+        }
+    }
+    s
+}
+
+// ── Internal: I/O ─────────────────────────────────────────────────────────────
 
 /// Stream-count newlines and bytes in a file without loading it into memory.
 fn count_lines_and_bytes(path: &Path) -> io::Result<(u64, u64)> {
@@ -592,6 +607,8 @@ fn count_lines_and_bytes(path: &Path) -> io::Result<(u64, u64)> {
     }
     Ok((lines, bytes))
 }
+
+// ── Internal: path helpers ────────────────────────────────────────────────────
 
 /// Extract the lowercase extension from a relative path string.
 ///
@@ -618,92 +635,6 @@ fn get_top_level_dir(rel: &str) -> String {
         Some(pos) => rel[..pos].to_string(),
         None => "<root>".to_string(),
     }
-}
-
-// ── Internal: workspace & manifest stats ──────────────────────────────────────
-
-fn compute_workspace_stats(files: &[String]) -> WorkspaceStats {
-    let file_set: HashSet<&str> = files.iter().map(|s| s.as_str()).collect();
-
-    let packages_immediate_subdirs = workspace_pkg_count(files, &file_set, "packages/");
-    let apps_immediate_subdirs = workspace_pkg_count(files, &file_set, "apps/");
-    let tools_immediate_subdirs = workspace_dir_count(files, "tools/");
-    let docs_file_count = if files.iter().any(|f| f.starts_with("docs/")) {
-        Some(files.iter().filter(|f| f.starts_with("docs/")).count() as u64)
-    } else {
-        None
-    };
-
-    WorkspaceStats {
-        packages_immediate_subdirs,
-        apps_immediate_subdirs,
-        tools_immediate_subdirs,
-        docs_file_count,
-    }
-}
-
-/// Count immediate subdirs of `prefix` that contain a `package.json`.
-fn workspace_pkg_count(
-    files: &[String],
-    file_set: &HashSet<&str>,
-    prefix: &str,
-) -> Option<u64> {
-    let has_any = files.iter().any(|f| f.starts_with(prefix));
-    if !has_any {
-        return None;
-    }
-    let mut pkgs: HashSet<&str> = HashSet::new();
-    for f in files {
-        if let Some(rest) = f.strip_prefix(prefix) {
-            if let Some(slash) = rest.find('/') {
-                let name = &rest[..slash];
-                // Only count this subdir if it has a package.json directly inside.
-                let pkg_json_path = format!("{prefix}{name}/package.json");
-                if file_set.contains(pkg_json_path.as_str()) {
-                    pkgs.insert(name);
-                }
-            }
-        }
-    }
-    Some(pkgs.len() as u64)
-}
-
-/// Count unique immediate subdirs of `prefix` (any files, no package.json check).
-fn workspace_dir_count(files: &[String], prefix: &str) -> Option<u64> {
-    let has_any = files.iter().any(|f| f.starts_with(prefix));
-    if !has_any {
-        return None;
-    }
-    let mut dirs: HashSet<&str> = HashSet::new();
-    for f in files {
-        if let Some(rest) = f.strip_prefix(prefix) {
-            if let Some(slash) = rest.find('/') {
-                dirs.insert(&rest[..slash]);
-            }
-        }
-    }
-    Some(dirs.len() as u64)
-}
-
-fn compute_manifest_stats(files: &[String]) -> ManifestStats {
-    let mut s = ManifestStats::default();
-    for f in files {
-        let basename = f.rsplit('/').next().unwrap_or(f.as_str());
-        match basename {
-            "package.json" => s.package_json += 1,
-            "Cargo.toml" => s.cargo_toml += 1,
-            "pyproject.toml" => s.pyproject_toml += 1,
-            "tsconfig.json" => s.tsconfig_json += 1,
-            _ => {}
-        }
-        // azure_pipelines_yaml: any .yml or .yaml under azure/
-        if f.starts_with("azure/") {
-            if f.ends_with(".yml") || f.ends_with(".yaml") {
-                s.azure_pipelines_yaml += 1;
-            }
-        }
-    }
-    s
 }
 
 // ── Internal: timestamp ───────────────────────────────────────────────────────
