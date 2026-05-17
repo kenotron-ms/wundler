@@ -7,6 +7,7 @@
 //! on every manifest hot-reload to prevent unbounded growth.
 
 pub mod chunk_error;
+pub mod prometheus;
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};

@@ -244,6 +244,7 @@ pub fn build_router(
         .route("/versions", get(get_versions))
         .route("/csp-report", post(post_csp_report))
         .route("/telemetry/chunk-error", post(post_chunk_error))
+        .route("/metrics", get(get_metrics))
         // Inner: bearer-token authentication.
         .layer(middleware::from_fn_with_state(security, require_bearer))
         // Outer: CORS — applied last so it wraps the auth layer.
@@ -687,6 +688,19 @@ async fn post_chunk_error(State(state): State<RouterState>, body: axum::body::Bo
     }
 
     StatusCode::OK.into_response()
+}
+
+/// `GET /metrics` — Prometheus text exposition.
+///
+/// Hand-rolled format, no SDK. Returns text/plain; version=0.0.4.
+/// Requires bearer auth when security is configured.
+async fn get_metrics(State(state): State<RouterState>) -> Response {
+    let body = crate::metrics::prometheus::render(&state.metrics);
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/plain; version=0.0.4")
+        .body(axum::body::Body::from(body))
+        .expect("metrics response must build")
 }
 
 /// `POST /csp-report` — sink for browser CSP violation reports.
@@ -1221,6 +1235,65 @@ mod tests {
         }
 
         assert_eq!(metrics.chunk_errors.len(), 2, "each error_type is its own cell");
+    }
+
+    // OBS2-3 — GET /metrics tests
+
+    #[tokio::test]
+    async fn get_metrics_returns_prometheus_text_format() {
+        let (app, telemetry) = test_state();
+        let security = Arc::new(ResolvedSecurity { token: None, allowed_origins: vec![], rate_limiter: None });
+        let metrics = Arc::new(Metrics::new());
+        metrics.manifest_requests_total.fetch_add(5, std::sync::atomic::Ordering::Relaxed);
+        let router = super::build_router(app, telemetry, security, None, metrics);
+
+        let resp = router.oneshot(
+            Request::builder().uri("/metrics").body(Body::empty()).unwrap()
+        ).await.unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let ct = resp.headers().get("content-type").unwrap().to_str().unwrap();
+        assert!(ct.contains("text/plain"), "content type must be text/plain, got: {ct}");
+
+        let body = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("wundler_manifest_requests_total 5"));
+        assert!(text.contains("# HELP"));
+        assert!(text.contains("# TYPE"));
+    }
+
+    #[tokio::test]
+    async fn get_metrics_shows_chunk_error_after_report() {
+        let (app, telemetry) = test_state();
+        let security = Arc::new(ResolvedSecurity { token: None, allowed_origins: vec![], rate_limiter: None });
+        let metrics = Arc::new(Metrics::new());
+        let router = super::build_router(app, telemetry, security, None, metrics);
+
+        // First POST a chunk error
+        let body = serde_json::json!({
+            "build_id": "build-abc",
+            "chunk_id": "chunk-main",
+            "url": "https://cdn.example.com/chunks/abc123.js",
+            "error_type": "load_failed",
+            "timestamp_ms": 1716000000000u64,
+            "session_id": "sess-xyz"
+        });
+        router.clone().oneshot(
+            Request::builder()
+                .method("POST").uri("/telemetry/chunk-error")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap())).unwrap()
+        ).await.unwrap();
+
+        // Then GET /metrics
+        let resp = router.oneshot(
+            Request::builder().uri("/metrics").body(Body::empty()).unwrap()
+        ).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let b = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        let text = String::from_utf8_lossy(&b);
+        assert!(text.contains("wundler_chunk_errors_total{"));
+        assert!(text.contains("build_id=\"build-abc\""));
     }
 
     #[tokio::test]
