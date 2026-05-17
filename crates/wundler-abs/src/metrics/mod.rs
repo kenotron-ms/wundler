@@ -6,6 +6,8 @@
 //! `prune()` removes entries whose `build_id` is no longer active, called
 //! on every manifest hot-reload to prevent unbounded growth.
 
+pub mod chunk_error;
+
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;

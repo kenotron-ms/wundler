@@ -95,6 +95,7 @@ async fn make_server() -> (TestServer, TempDir) {
         telemetry,
         Arc::new(ResolvedSecurity::from_config(&SecurityConfig::default()).unwrap()),
         None,
+        Arc::new(wundler_abs::metrics::Metrics::new()),
     );
     let server = TestServer::new(router);
 
@@ -291,8 +292,7 @@ async fn test_bearer_auth_enforced_when_security_enabled() {
     .expect("load app state");
 
     let telemetry = TelemetryLogger::new(&log_path).expect("create TelemetryLogger");
-    // RED: build_router does not yet accept a third `Arc<ResolvedSecurity>` parameter.
-    let router = build_router(app, telemetry, security, None);
+    let router = build_router(app, telemetry, security, None, Arc::new(wundler_abs::metrics::Metrics::new()));
     let server = TestServer::new(router);
     std::mem::forget(manifest_f);
 

@@ -112,6 +112,7 @@ struct RouterState {
     /// Reserved for Task 5 which wires in active signing; unused until then.
     #[allow(dead_code)]
     signer: Option<Arc<crate::signing::ManifestSigner>>,
+    metrics: Arc<crate::metrics::Metrics>,
 }
 
 // ---------------------------------------------------------------------------
@@ -215,8 +216,9 @@ pub fn build_router(
     telemetry: TelemetryLogger,
     security: Arc<ResolvedSecurity>,
     signer: Option<Arc<crate::signing::ManifestSigner>>,
+    metrics: Arc<crate::metrics::Metrics>,
 ) -> Router {
-    let state = RouterState { app, telemetry, signer };
+    let state = RouterState { app, telemetry, signer, metrics };
     let cors = build_cors(&security);
 
     // POST /manifest route, optionally rate-limited per source IP.
@@ -241,6 +243,7 @@ pub fn build_router(
         .route("/select", post(post_select))
         .route("/versions", get(get_versions))
         .route("/csp-report", post(post_csp_report))
+        .route("/telemetry/chunk-error", post(post_chunk_error))
         // Inner: bearer-token authentication.
         .layer(middleware::from_fn_with_state(security, require_bearer))
         // Outer: CORS — applied last so it wraps the auth layer.
@@ -283,7 +286,8 @@ pub async fn run(config: AbsConfig) -> Result<()> {
     } else {
         None
     };
-    let router = build_router(app, telemetry, Arc::new(security), signer);
+    let metrics = Arc::new(crate::metrics::Metrics::new());
+    let router = build_router(app, telemetry, Arc::new(security), signer, metrics);
 
     let addr = format!("0.0.0.0:{}", config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -640,6 +644,51 @@ async fn post_select(
         .into_response()
 }
 
+/// `POST /telemetry/chunk-error` — receive chunk load errors from the Service Worker.
+///
+/// Body limit: 8 KiB. Bodies larger return 413.
+/// Always returns 200 OK (fire-and-forget from SW).
+/// Increments in-memory DashMap counter and appends to JSONL log.
+async fn post_chunk_error(State(state): State<RouterState>, body: axum::body::Body) -> Response {
+    use crate::metrics::chunk_error::{ChunkErrorEvent, ChunkErrorReport};
+    use crate::metrics::ChunkErrorKey;
+
+    const MAX_BODY_BYTES: usize = 8 * 1024;
+
+    let bytes = match axum::body::to_bytes(body, MAX_BODY_BYTES).await {
+        Ok(b) => b,
+        Err(_) => {
+            return (StatusCode::PAYLOAD_TOO_LARGE, "body too large").into_response();
+        }
+    };
+
+    let report: ChunkErrorReport = match serde_json::from_slice(&bytes) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({"error": format!("invalid body: {e}")})),
+            )
+                .into_response();
+        }
+    };
+
+    // Increment the in-memory counter.
+    state.metrics.increment_chunk_error(ChunkErrorKey {
+        build_id: report.build_id.clone(),
+        chunk_id: report.chunk_id.clone(),
+        error_type: report.error_type.clone(),
+    });
+
+    // Log to JSONL telemetry (non-fatal — never let a log failure break the 200 response).
+    let event = ChunkErrorEvent::from(report);
+    if let Err(e) = state.telemetry.log(&event) {
+        tracing::warn!("failed to log chunk error event: {e}");
+    }
+
+    StatusCode::OK.into_response()
+}
+
 /// `POST /csp-report` — sink for browser CSP violation reports.
 /// Body limit: 8 KiB. Larger bodies return 413. Always returns 200.
 /// Exempt from bearer auth (browsers send unauthenticated).
@@ -729,7 +778,7 @@ mod tests {
         security: Arc<ResolvedSecurity>,
         ip: IpAddr,
     ) -> axum::Router {
-        let inner = super::build_router(app, telemetry, security, None);
+        let inner = super::build_router(app, telemetry, security, None, Arc::new(Metrics::new()));
         inner.layer(middleware::from_fn(
             move |mut req: Request<Body>, next: middleware::Next| async move {
                 let ci: ConnectInfo<SocketAddr> = ConnectInfo(SocketAddr::new(ip, 49_152));
@@ -879,7 +928,7 @@ mod tests {
             allowed_origins: vec![],
             rate_limiter: None,
         });
-        super::build_router(app, telemetry, security, None)
+        super::build_router(app, telemetry, security, None, Arc::new(Metrics::new()))
     }
 
     #[tokio::test]
@@ -930,7 +979,7 @@ mod tests {
         let token = crate::security::auth::SecretToken::new(b"unit-test-token".to_vec());
         let security = Arc::new(ResolvedSecurity { token: Some(token), allowed_origins: vec![], rate_limiter: None });
         let (app, telemetry) = test_state();
-        let router = super::build_router(app, telemetry, security, None);
+        let router = super::build_router(app, telemetry, security, None, Arc::new(Metrics::new()));
         let resp = router
             .oneshot(Request::builder().uri("/manifest/full.json").body(Body::empty()).unwrap())
             .await.unwrap();
@@ -990,7 +1039,7 @@ mod tests {
             rate_limiter: None,
         });
         let (app, telemetry) = test_state();
-        let router = super::build_router(app, telemetry, security, None);
+        let router = super::build_router(app, telemetry, security, None, Arc::new(Metrics::new()));
         let resp = router
             .oneshot(Request::builder()
                 .method("POST").uri("/csp-report")
@@ -1011,7 +1060,7 @@ mod tests {
         let signer = Arc::new(ManifestSigner::from_pem(&kp.signing_key_pem).expect("signer"));
         let verifier = ManifestVerifier::from_pem(&kp.verifying_key_pem).expect("verifier");
         let security = Arc::new(ResolvedSecurity { token: None, allowed_origins: vec![], rate_limiter: None });
-        let router = super::build_router(app.clone(), telemetry, security, Some(signer));
+        let router = super::build_router(app.clone(), telemetry, security, Some(signer), Arc::new(Metrics::new()));
 
         let tmp = tempfile::NamedTempFile::new().expect("tmp manifest file");
         let new_manifest = ChunkManifest {
@@ -1046,11 +1095,139 @@ mod tests {
         assert_eq!(decoded.as_slice(), sig.to_bytes().as_slice());
     }
 
+    // OBS2-2 — POST /telemetry/chunk-error tests
+
+    use crate::metrics::Metrics;
+
+    fn make_router_with_metrics(
+        app: AppState,
+        telemetry: TelemetryLogger,
+    ) -> (axum::Router, Arc<Metrics>) {
+        let security = Arc::new(ResolvedSecurity {
+            token: None,
+            allowed_origins: vec![],
+            rate_limiter: None,
+        });
+        let metrics = Arc::new(Metrics::new());
+        let router = super::build_router(app, telemetry, security, None, metrics.clone());
+        (router, metrics)
+    }
+
+    #[tokio::test]
+    async fn chunk_error_increments_counter_and_returns_200() {
+        let (app, telemetry) = test_state();
+        let (router, metrics) = make_router_with_metrics(app, telemetry);
+
+        let body = serde_json::json!({
+            "build_id": "build-abc",
+            "chunk_id": "chunk-main",
+            "url": "https://cdn.example.com/chunks/abc123.js",
+            "error_type": "load_failed",
+            "timestamp_ms": 1716000000000u64,
+            "session_id": "sess-xyz"
+        });
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/telemetry/chunk-error")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        use crate::metrics::{ChunkErrorKey, ErrorType};
+        let key = ChunkErrorKey {
+            build_id: "build-abc".to_string(),
+            chunk_id: "chunk-main".to_string(),
+            error_type: ErrorType::LoadFailed,
+        };
+        let count = metrics
+            .chunk_errors
+            .get(&key)
+            .map(|v| v.load(std::sync::atomic::Ordering::Relaxed))
+            .unwrap_or(0);
+        assert_eq!(count, 1, "counter must be incremented");
+    }
+
+    #[tokio::test]
+    async fn chunk_error_rejects_oversize_body_with_413() {
+        let (app, telemetry) = test_state();
+        let (router, _) = make_router_with_metrics(app, telemetry);
+        let huge = vec![b'x'; 8 * 1024 + 1];
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/telemetry/chunk-error")
+                    .header("content-type", "application/json")
+                    .body(Body::from(huge))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn chunk_error_rejects_malformed_json_with_422() {
+        let (app, telemetry) = test_state();
+        let (router, _) = make_router_with_metrics(app, telemetry);
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/telemetry/chunk-error")
+                    .header("content-type", "application/json")
+                    .body(Body::from("not json"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn chunk_error_distinct_cells_are_independent() {
+        let (app, telemetry) = test_state();
+        let (router, metrics) = make_router_with_metrics(app, telemetry);
+
+        for error_type in &["load_failed", "network_timeout"] {
+            let body = serde_json::json!({
+                "build_id": "build-1",
+                "chunk_id": "chunk-a",
+                "url": "https://cdn.example.com/chunks/abc.js",
+                "error_type": error_type,
+                "timestamp_ms": 1716000000000u64,
+                "session_id": "sess-1"
+            });
+            router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/telemetry/chunk-error")
+                        .header("content-type", "application/json")
+                        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(metrics.chunk_errors.len(), 2, "each error_type is its own cell");
+    }
+
     #[tokio::test]
     async fn reload_does_not_set_signature_when_no_signer() {
         let (app, telemetry) = test_state();
         let security = Arc::new(ResolvedSecurity { token: None, allowed_origins: vec![], rate_limiter: None });
-        let router = super::build_router(app.clone(), telemetry, security, None);
+        let router = super::build_router(app.clone(), telemetry, security, None, Arc::new(Metrics::new()));
 
         let tmp = tempfile::NamedTempFile::new().expect("tmp manifest file");
         let new_manifest = ChunkManifest {

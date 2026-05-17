@@ -65,6 +65,7 @@ async fn make_server() -> (TestServer, TempDir) {
         telemetry,
         Arc::new(ResolvedSecurity::from_config(&SecurityConfig::default()).unwrap()),
         None,
+        Arc::new(wundler_abs::metrics::Metrics::new()),
     );
     let server = TestServer::new(router);
 
