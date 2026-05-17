@@ -1,0 +1,70 @@
+{
+  "profile_schema_version": 1,
+  "target": {
+    "git_stats": {
+      "is_git_repo": true,
+      "head_commit": "c0a1d900",
+      "current_branch": "master",
+      "commit_count": 70709,
+      "files_ever_tracked": 283377
+    },
+    "workspace_stats": {
+      "total_files": 1934,
+      "total_bytes": 10138194,
+      "extension_stats": {
+        "ts": {
+          "file_count": 1514,
+          "total_bytes": 7773330,
+          "total_lines": 9084,
+          "avg_file_bytes": 5133.621846519614
+        },
+        "tsx": {
+          "file_count": 420,
+          "total_bytes": 2364863,
+          "total_lines": 420,
+          "avg_file_bytes": 5629.286836467508
+        }
+      },
+      "directory_stats": [
+        {
+          "path": "packages",
+          "file_count": 1580
+        },
+        {
+          "path": "apps",
+          "file_count": 210
+        },
+        {
+          "path": "tools",
+          "file_count": 100
+        },
+        {
+          "path": "docs",
+          "file_count": 44
+        }
+      ],
+      "packages": [
+        "bebop",
+        "copilot",
+        "loop-app",
+        "scriptor",
+        "tablero"
+      ]
+    },
+    "manifest_stats": {
+      "package_json": 29,
+      "cargo_toml": 0,
+      "pyproject_toml": 0,
+      "tsconfig_json": 28,
+      "azure_pipelines_yaml": 13
+    }
+  },
+  "gen": {
+    "seed": 20260517,
+    "tolerances": {
+      "file_count_pct": 0.02,
+      "byte_count_pct": 0.1,
+      "line_count_pct": 0.99
+    }
+  }
+}

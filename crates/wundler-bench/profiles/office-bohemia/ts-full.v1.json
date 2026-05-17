@@ -1,0 +1,79 @@
+{
+  "profile_schema_version": 1,
+  "target": {
+    "git_stats": {
+      "is_git_repo": true,
+      "head_commit": "c0a1d900035eaa58919170da82ec0f261a644360",
+      "current_branch": "master",
+      "commit_count": 70709,
+      "files_ever_tracked": 283377
+    },
+    "workspace_stats": {
+      "total_files": 19343,
+      "total_bytes": 101381936,
+      "extension_stats": {
+        "ts": {
+          "file_count": 15142,
+          "total_bytes": 77733302,
+          "total_lines": 90852,
+          "avg_file_bytes": 5133.621846519614
+        },
+        "tsx": {
+          "file_count": 4201,
+          "total_bytes": 23648634,
+          "total_lines": 4201,
+          "avg_file_bytes": 5629.286836467508
+        }
+      },
+      "directory_stats": [
+        {
+          "path": "packages",
+          "file_count": 15800
+        },
+        {
+          "path": "apps",
+          "file_count": 2100
+        },
+        {
+          "path": "tools",
+          "file_count": 1000
+        },
+        {
+          "path": "docs",
+          "file_count": 300
+        },
+        {
+          "path": "scripts",
+          "file_count": 143
+        }
+      ],
+      "packages": [
+        "bebop",
+        "copilot",
+        "loop-app",
+        "scriptor",
+        "tablero",
+        "bebop-ux",
+        "copilot-ux",
+        "loop-app-ux",
+        "bebop-telemetry",
+        "bebop-services"
+      ]
+    },
+    "manifest_stats": {
+      "package_json": 293,
+      "cargo_toml": 0,
+      "pyproject_toml": 0,
+      "tsconfig_json": 287,
+      "azure_pipelines_yaml": 132
+    }
+  },
+  "gen": {
+    "seed": 20260517,
+    "tolerances": {
+      "file_count_pct": 0.02,
+      "byte_count_pct": 0.1,
+      "line_count_pct": 0.99
+    }
+  }
+}

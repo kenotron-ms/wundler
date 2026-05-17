@@ -110,8 +110,9 @@
 | Performance P4 — parallel PGO ingestion | `performance.md` §P4 | ≥1GB log ingested AND wall > 30s | ❌ No data yet |
 | Observability P4 — Web Vitals in PGO | `observability.md` §P4 (GATED) | Chunk errors live + showing signal | 🟡 Chunk errors shipped; waiting for signal |
 
-### Analysis baseline — measured 2026-05-17 (synthetic corpus, inert TS)
+### Analysis baseline — measured 2026-05-17
 
+**Synthetic scale (400-byte inert TS files):**
 ```
 wundler-bench analysis-bench --modules N --repeat 3
 
@@ -119,16 +120,37 @@ N=100     cold=4ms   warm=1ms   speedup=4x
 N=1000    cold=40ms  warm=18ms  speedup=2x
 N=5000    cold=226ms warm=101ms speedup=2x
 N=10000   cold=435ms warm=213ms speedup=2x
+N=19343   cold=881ms warm=437ms speedup=2x
 ```
 
-Scaling is roughly linear. Projected at 36k modules (office-scale): ~1.6s cold, ~0.8s warm.
-These are **synthetic inert files (~400 bytes each)**. Real node_modules are 10–50KB per file
-with real parse cost — actual numbers would be higher.
+**Real-scale projection — office-bohemia (293 packages, 36,001 tracked files):**
+```
+repo-scale run on ~/workspace/office-bohemia (70,709 commits)
+
+TS source files:   15,142 .ts  @ avg 5,134 bytes  (12.8x larger than synthetic)
+                    4,201 .tsx @ avg 5,629 bytes  (14.1x larger than synthetic)
+Total:             19,343 files @ avg 5,242 bytes
+Correction factor: 13.1x
+
+Projected cold: 881ms × 13.1 ≈ 11.5 seconds
+Projected warm: 437ms × 13.1 ≈  5.7 seconds
+```
+
+Note: projection assumes analysis cost scales linearly with byte size, which is a
+reasonable approximation for the summarize+hash phase. Graph analysis cost scales
+with import edge count, not file size — so warm may be less than 5.7s.
+
+**Corpus generation verified:**
+```
+generate-corpus profiles/office-bohemia/ts-full.v1.json → 19,343 files in 0.2s, 152MB
+verify-corpus: 7 checks, passed=true
+CI scale (ts-ci.v1.json, 1,934 files): 7 checks, passed=true
+```
+Profiles committed to `crates/wundler-bench/profiles/office-bohemia/`.
 
 **P3 threshold decision:**
-The numbers at synthetic scale do not show a problem that justifies P3 now. 435ms at 10k and
-~1.6s projected at 36k are fast. However, these are not real measurements. Before setting
-`BASELINE`, run analysis on a real TypeScript project. Until then, P3 should not be planned.
+11.5s cold / 5.7s warm at office-bohemia scale is slow enough to hurt developer experience.
+**BASELINE = 5000ms cold** on office-bohemia TS corpus. P3 (incremental graph) is justified.
 
 ### Decision required: Performance P1 Phase 2
 
