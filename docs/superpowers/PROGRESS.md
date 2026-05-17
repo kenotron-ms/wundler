@@ -63,31 +63,35 @@
 - **Branch:** `feat/phase2-roadmap`
 - **Commits:** `6ce40cc`, `feace19`, `c49d8db`, `de34a95`, `4d568d0`, `ed80549`
 
-### Phase 3 — Plans written, ready to execute
+### Phase 3 — COMPLETE
 
 #### Security P2 — ed25519 manifest signing + SRI + CSP report-only
 - **Plan:** `docs/superpowers/plans/2026-05-17-security-p2-signing.md`
 - **Design:** `docs/designs/security-baseline.md` §Phase 2
-- **Status:** ⬜ Not started — 0 / 5 tasks
-- **Next task:** Task 1 — add `signature` field to `AppState`; `snapshot_signature()`; update test helpers
+- **Status:** ✅ **COMPLETE** — 5 / 5 tasks
+- **Branch:** `feat/phase3-roadmap`
+- **What shipped:** `AppState.signature` slot, `GET /manifest/full.json` with `X-Wundler-Signature`, `POST /csp-report` ingester, `security/csp.rs` builder, `wundler-html` crate (`hex_to_sri_b64` + `render_script_tags`), ManifestSigner wired into `POST /reload`, cross-language contract test (Rust half)
 
 #### Observability P2 — chunk error reporting + Prometheus /metrics
 - **Plan:** `docs/superpowers/plans/2026-05-17-observability-p2-chunk-errors.md`
 - **Design:** `docs/designs/observability.md` §P2 + §P3
-- **Status:** ⬜ Not started — 0 / 5 tasks
-- **Next task:** Task 1 — add `dashmap = "5"`; create `metrics/mod.rs` with `Metrics`, `ChunkErrorKey`, `ErrorType`
+- **Status:** ✅ **COMPLETE** — 5 / 5 tasks
+- **Branch:** `feat/phase3-roadmap`
+- **What shipped:** `Metrics` struct with DashMap counters, `POST /telemetry/chunk-error` handler, hand-rolled Prometheus `render()`, `GET /metrics`, `TelemetryEventV2` tagged enum, prune-on-reload, SW `reportChunkError()` + dedup + 3 catch-block replacements
 
 #### Performance P1 — dependency pre-bundling
 - **Plan:** `docs/superpowers/plans/2026-05-17-performance-p1-dep-prebundle.md`
 - **Design:** `docs/designs/performance.md` §P1
-- **Status:** ⬜ Not started — 0 / 3 tasks
-- **Next task:** Task 1 — create `wundler-dev` crate; `DepPrebundler`, `compute_fingerprint`; unit tests
+- **Status:** ✅ **COMPLETE** — 3 / 3 tasks
+- **Branch:** `feat/phase3-roadmap`
+- **What shipped:** `wundler-dev` crate with `DepPrebundler` (blake3 fingerprint, atomic cache-miss via tempdir+rename, GC), `[dev]` TOML section, wired into `run_dev` before watcher start
 
 #### Scale Benchmark Foundation — synthetic corpus profiler (MVP steps 1–7)
 - **Plan:** `docs/superpowers/plans/2026-05-17-scale-benchmark-foundation.md`
 - **Design:** `docs/designs/scale-benchmark-foundation.md`
-- **Status:** ⬜ Not started — 0 / 5 tasks
-- **Next task:** Task 1 — `src/profile.rs` with `BenchProfile`, `ConformanceReport`, schema-version gate
+- **Status:** ✅ **COMPLETE** — 5 / 5 tasks
+- **Branch:** `feat/phase3-roadmap`
+- **What shipped:** `BenchProfile` contract, TS/JSON/Markdown archetypes with `pad_to_target`, deterministic `generate_corpus`, V1+V3 `verify_corpus`, CLI `generate-corpus`/`verify-corpus`, committed profiles, V5 CV gate (`--repeat N --check-cv`), E2E integration test
 
 ### Still blocked (need Phase 3 to complete first)
 
@@ -142,6 +146,45 @@ Phase 4 (Performance + Web Vitals)
 ---
 
 ## Session Log
+
+### 2026-05-17 — Phase 3 complete (18 tasks)
+
+**Completed — all four Phase 3 plans (18 tasks total):**
+
+**Scale Benchmark Foundation (5 tasks):**
+- `BenchProfile` JSON contract with schema version gate
+- TypeScript/JSON/Markdown file archetypes with deterministic `pad_to_target`
+- `generate_corpus(profile, out_dir)` — seeded PRNG, proportional dir allocation, byte-aligned files
+- `verify_corpus(profile, dir)` — V1 structural conformance + V3 SWC parse sample
+- CLI `generate-corpus`/`verify-corpus` subcommands; committed `tiny.v1.json` + `large-web-app-small.v1.json`; V5 CV gate `--repeat N --check-cv <T>` on `analysis-bench`
+
+**Performance P1 — Dependency Pre-bundling (3 tasks):**
+- New `wundler-dev` crate with `DepPrebundler`, `PrebundleResult`, `compute_fingerprint` (blake3)
+- `ensure_fresh`: cache-hit fast path + atomic cache-miss via tempdir + `std::fs::rename`; `gc()` TTL-based eviction
+- `[dev]` TOML section with `dep_cache_ttl_days`; wired into `run_dev` before watcher start; >1 GB cache warning
+
+**Security P2 — ed25519 Manifest Signing (5 tasks):**
+- `AppState.signature: Arc<RwLock<Option<Signature>>>` with `snapshot_signature()` / `set_signature()` / reset on `swap_to`
+- `wundler-html` crate: `hex_to_sri_b64()` + `render_script_tags()` with `integrity="sha256-..."` tags
+- `GET /manifest/full.json`: public endpoint, `X-Wundler-Build-Id` + `X-Wundler-Signature` (base64), `Cache-Control: immutable`, exempt from bearer auth
+- `security/csp.rs`: `build_csp_report_only()` + `POST /csp-report` sink (8 KiB cap, JSONL log, 413 on oversize)
+- ManifestSigner wired into `POST /reload`; `run()` loads key from `signing_key_pem`; cross-language contract test (Rust half)
+
+**Observability P2 — Chunk Error Reporting (5 tasks):**
+- `metrics/mod.rs`: `Metrics` struct with `DashMap<ChunkErrorKey, AtomicU64>`, `prune(active_build_ids)`, `increment_chunk_error()`
+- `POST /telemetry/chunk-error`: 8 KiB cap, parse, DashMap increment, `TelemetryEventV2::ChunkError` JSONL log, 200 OK
+- Hand-rolled `metrics/prometheus.rs`: `render(&Metrics) -> String` + `GET /metrics` endpoint
+- `TelemetryEventV2` tagged enum in `types.rs` (additive); `prune` wired into `POST /reload`
+- SW `reportChunkError()`: fire-and-forget with `keepalive: true`, client-side dedup `Set`, replaced 3 silent `catch {}` blocks
+
+**Branch:** `feat/phase3-roadmap` — merged to main
+
+**Next session:**
+- Phase 4 items are all evidence-gated or require Performance P1 to be stable first
+- Options: Performance P2 (HMR, gates on P1 stable), or writing Observability P3 plan (Prometheus /metrics is already wired — it's about connecting to a real scraper + alerting)
+
+---
+
 
 ### 2026-05-16 — Phase 2 complete (18 tasks)
 
