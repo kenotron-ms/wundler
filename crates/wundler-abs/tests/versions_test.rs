@@ -42,6 +42,7 @@ async fn make_server(build_ids: &[&str]) -> (TestServer, TempDir) {
         manifest: Arc::new(RwLock::new(Arc::new(initial))),
         archive: Arc::new(archive),
         reload_lock: Arc::new(Mutex::new(())),
+        signature: Arc::new(RwLock::new(None)),
         cdn_base_url: Arc::new("https://cdn.example.com".to_string()),
         ttl_seconds: 300,
     };

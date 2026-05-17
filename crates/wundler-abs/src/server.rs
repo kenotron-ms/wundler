@@ -612,6 +612,7 @@ mod tests {
             manifest: Arc::new(RwLock::new(Arc::new(manifest))),
             archive: Arc::new(archive),
             reload_lock: Arc::new(tokio::sync::Mutex::new(())),
+            signature: Arc::new(RwLock::new(None)),
             cdn_base_url: Arc::new("https://cdn.example.com".to_string()),
             ttl_seconds: 60,
         };
