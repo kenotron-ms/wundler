@@ -240,6 +240,7 @@ pub fn build_router(
         .route("/reload", post(post_reload))
         .route("/select", post(post_select))
         .route("/versions", get(get_versions))
+        .route("/csp-report", post(post_csp_report))
         // Inner: bearer-token authentication.
         .layer(middleware::from_fn_with_state(security, require_bearer))
         // Outer: CORS — applied last so it wraps the auth layer.
@@ -623,6 +624,25 @@ async fn post_select(
         .into_response()
 }
 
+/// `POST /csp-report` — sink for browser CSP violation reports.
+/// Body limit: 8 KiB. Larger bodies return 413. Always returns 200.
+/// Exempt from bearer auth (browsers send unauthenticated).
+async fn post_csp_report(body: axum::body::Body) -> Response {
+    const MAX_CSP_REPORT_BYTES: usize = 8 * 1024;
+
+    let bytes = match axum::body::to_bytes(body, MAX_CSP_REPORT_BYTES).await {
+        Ok(b) => b,
+        Err(_) => {
+            return (StatusCode::PAYLOAD_TOO_LARGE, "csp-report body too large").into_response();
+        }
+    };
+
+    let body_str = String::from_utf8_lossy(&bytes);
+    tracing::warn!(target: "csp_report", body = %body_str, "CSP violation report");
+
+    StatusCode::OK.into_response()
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -897,6 +917,69 @@ mod tests {
         let router = super::build_router(app, telemetry, security, None);
         let resp = router
             .oneshot(Request::builder().uri("/manifest/full.json").body(Body::empty()).unwrap())
+            .await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // SEC2-4 — POST /csp-report tests
+
+    /// Internal helper to construct a `SecretToken` from a fixed string
+    /// (we can't `impl Clone` on `SecretToken` without leaking the bytes).
+    struct SecretTokenForTest;
+    impl SecretTokenForTest {
+        fn build() -> crate::security::auth::SecretToken {
+            crate::security::auth::SecretToken::new(b"unit-test-token".to_vec())
+        }
+    }
+
+    #[tokio::test]
+    async fn csp_report_accepts_small_body_and_returns_200() {
+        let (app, telemetry) = test_state();
+        let router = unsecured(app, telemetry);
+        let body = serde_json::json!({
+            "csp-report": {
+                "document-uri": "https://app.example.com/",
+                "violated-directive": "script-src",
+                "blocked-uri": "inline"
+            }
+        });
+        let resp = router
+            .oneshot(Request::builder()
+                .method("POST").uri("/csp-report")
+                .header("content-type", "application/csp-report")
+                .body(Body::from(serde_json::to_vec(&body).unwrap())).unwrap())
+            .await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn csp_report_rejects_oversize_body_with_413() {
+        let (app, telemetry) = test_state();
+        let router = unsecured(app, telemetry);
+        let huge = vec![b'x'; 8 * 1024 + 1];
+        let resp = router
+            .oneshot(Request::builder()
+                .method("POST").uri("/csp-report")
+                .header("content-type", "application/csp-report")
+                .body(Body::from(huge)).unwrap())
+            .await.unwrap();
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn csp_report_bypasses_bearer_auth() {
+        let security = Arc::new(ResolvedSecurity {
+            token: Some(SecretTokenForTest::build()),
+            allowed_origins: vec![],
+            rate_limiter: None,
+        });
+        let (app, telemetry) = test_state();
+        let router = super::build_router(app, telemetry, security, None);
+        let resp = router
+            .oneshot(Request::builder()
+                .method("POST").uri("/csp-report")
+                .header("content-type", "application/csp-report")
+                .body(Body::from("{}")).unwrap())
             .await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }

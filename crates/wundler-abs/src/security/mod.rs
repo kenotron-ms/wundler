@@ -7,6 +7,7 @@
 
 pub mod auth;
 pub mod cors;
+pub mod csp;
 pub mod ratelimit;
 
 use std::num::NonZeroU32;
