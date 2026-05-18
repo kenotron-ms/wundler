@@ -57,6 +57,57 @@ pub fn compute_fingerprint(root: &Path) -> Result<String> {
     Ok(hasher.finalize().to_hex().to_string())
 }
 
+/// Return the `node_modules` directories worth pre-warming for `project_root`.
+// Not yet called from production code; Task 3 will wire this into bundle_into.
+#[allow(dead_code)]
+///
+/// Includes:
+/// - `<project_root>/node_modules` if it is a directory.
+/// - `<project_root>/<child>/node_modules` for each direct child of
+///   `project_root` that is itself a directory (monorepo / workspace layout).
+///   Children named `node_modules` are skipped to avoid recursion.
+///
+/// Does NOT recurse further — `packages/foo/packages/bar/node_modules` is out
+/// of scope.
+///
+/// Returned paths are deduplicated by canonical path. I/O errors during
+/// enumeration are swallowed; at worst we pre-warm fewer directories.
+pub(crate) fn discover_node_modules(project_root: &Path) -> Vec<PathBuf> {
+    use std::collections::HashSet;
+
+    let mut out: Vec<PathBuf> = Vec::new();
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+
+    fn try_push(p: PathBuf, out: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>) {
+        if !p.is_dir() {
+            return;
+        }
+        let key = std::fs::canonicalize(&p).unwrap_or_else(|_| p.clone());
+        if seen.insert(key) {
+            out.push(p);
+        }
+    }
+
+    // Depth 0: <project_root>/node_modules
+    try_push(project_root.join("node_modules"), &mut out, &mut seen);
+
+    // Depth 1: each direct child's node_modules (skip "node_modules" itself).
+    if let Ok(children) = std::fs::read_dir(project_root) {
+        for entry in children.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            if path.file_name().and_then(|s| s.to_str()) == Some("node_modules") {
+                continue;
+            }
+            try_push(path.join("node_modules"), &mut out, &mut seen);
+        }
+    }
+
+    out
+}
+
 impl DepPrebundler {
     pub fn new(cache_root: PathBuf, cas_root: PathBuf, ttl_days: u32) -> Self {
         Self { cache_root, cas_root, ttl_days }
@@ -266,5 +317,92 @@ mod tests {
         write(tmp.path(), "package.json", r#"{"name":"x"}"#);
         let fp = compute_fingerprint(tmp.path()).unwrap();
         assert_eq!(fp.len(), 64);
+    }
+
+    use std::collections::HashSet;
+
+    fn mkdir(p: &std::path::Path) {
+        std::fs::create_dir_all(p).unwrap();
+    }
+
+    #[test]
+    fn discover_node_modules_finds_top_level_only() {
+        let tmp = TempDir::new().unwrap();
+        mkdir(&tmp.path().join("node_modules"));
+
+        let found = discover_node_modules(tmp.path());
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0], tmp.path().join("node_modules"));
+    }
+
+    #[test]
+    fn discover_node_modules_finds_workspace_layout_at_depth_one() {
+        // pnpm/yarn workspaces: <root>/<pkg>/node_modules
+        let tmp = TempDir::new().unwrap();
+        mkdir(&tmp.path().join("node_modules"));
+        mkdir(&tmp.path().join("pkg-a").join("node_modules"));
+        mkdir(&tmp.path().join("pkg-b").join("node_modules"));
+        mkdir(&tmp.path().join("docs")); // child without node_modules — must not break
+
+        let found: HashSet<PathBuf> = discover_node_modules(tmp.path()).into_iter().collect();
+        assert!(found.contains(&tmp.path().join("node_modules")));
+        assert!(found.contains(&tmp.path().join("pkg-a").join("node_modules")));
+        assert!(found.contains(&tmp.path().join("pkg-b").join("node_modules")));
+        assert_eq!(found.len(), 3, "found = {found:?}");
+    }
+
+    #[test]
+    fn discover_node_modules_ignores_files_named_node_modules() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("node_modules"), b"not a dir").unwrap();
+        let found = discover_node_modules(tmp.path());
+        assert!(found.is_empty(), "file (not dir) named node_modules: {found:?}");
+    }
+
+    #[test]
+    fn discover_node_modules_does_not_recurse_into_node_modules() {
+        // Must NOT walk into node_modules/ looking for nested ones.
+        let tmp = TempDir::new().unwrap();
+        mkdir(&tmp.path().join("node_modules"));
+        mkdir(&tmp.path().join("node_modules").join("foo").join("node_modules"));
+
+        let found = discover_node_modules(tmp.path());
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0], tmp.path().join("node_modules"));
+    }
+
+    #[test]
+    fn discover_node_modules_returns_empty_when_none_present() {
+        let tmp = TempDir::new().unwrap();
+        mkdir(&tmp.path().join("src"));
+        let found = discover_node_modules(tmp.path());
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn discover_node_modules_dedupes_by_canonical_path() {
+        let tmp = TempDir::new().unwrap();
+        mkdir(&tmp.path().join("node_modules"));
+        mkdir(&tmp.path().join("pkg").join("node_modules"));
+
+        let found = discover_node_modules(tmp.path());
+        let unique: HashSet<_> = found.iter().collect();
+        assert_eq!(found.len(), unique.len(), "duplicates in {found:?}");
+    }
+
+    #[test]
+    fn discover_node_modules_does_not_include_depth_two_packages() {
+        // packages/a/node_modules is depth 2 from project root — NOT included.
+        let tmp = TempDir::new().unwrap();
+        mkdir(&tmp.path().join("node_modules"));
+        mkdir(&tmp.path().join("packages").join("a").join("node_modules"));
+
+        let found: HashSet<PathBuf> = discover_node_modules(tmp.path()).into_iter().collect();
+        assert!(found.contains(&tmp.path().join("node_modules")));
+        // packages/a is at depth 2 from root, its node_modules is NOT included
+        assert!(
+            !found.contains(&tmp.path().join("packages").join("a").join("node_modules")),
+            "depth-2 node_modules must not be included: {found:?}"
+        );
     }
 }
