@@ -57,9 +57,9 @@ pub fn compute_fingerprint(root: &Path) -> Result<String> {
     Ok(hasher.finalize().to_hex().to_string())
 }
 
-/// Return the `node_modules` directories worth pre-warming for `project_root`.
 // Not yet called from production code; Task 3 will wire this into bundle_into.
 #[allow(dead_code)]
+/// Return the `node_modules` directories worth pre-warming for `project_root`.
 ///
 /// Includes:
 /// - `<project_root>/node_modules` if it is a directory.
