@@ -400,11 +400,12 @@ async fn run_dev(config_path: &Path, port: u16) -> Result<()> {
     let ttl_days = cfg.dev.as_ref()
         .and_then(|d| d.dep_cache_ttl_days)
         .unwrap_or(14);
-    let prebundler = wundler_dev::DepPrebundler::new(
-        cfg.root.join(".wundler").join("cache").join("deps"),
-        cfg.root.join(".wundler").join("cache").join("deps"),  // placeholder; Task 4 sets the real CAS path
-        ttl_days,
-    );
+    let cache_root = cfg.root.join(".wundler").join("cache").join("deps");
+    // TODO(Task 4): cas_root must be set to ~/.wundler/cache/summaries/ before Task 3 activates.
+    // Until then, cas_root == cache_root — if GC runs while Task 3 is active, it will
+    // delete CAS blobs. Task 4 fixes this by passing LocalCache::with_default_root().
+    let cas_root = cache_root.clone();
+    let prebundler = wundler_dev::DepPrebundler::new(cache_root, cas_root, ttl_days);
 
     match prebundler.ensure_fresh(&cfg.root) {
         Ok(r) if r.from_cache => tracing::debug!("dep cache hit: {}", r.fingerprint),
