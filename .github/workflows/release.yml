@@ -1,0 +1,133 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build — ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            archive: wundler-linux-x86_64.tar.gz
+
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: wundler-macos-arm64.tar.gz
+
+          - os: macos-13
+            target: x86_64-apple-darwin
+            archive: wundler-macos-x86_64.tar.gz
+
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: wundler-windows-x86_64.zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl tools (Linux)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get install -y musl-tools
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }} -p wundler-cli
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cp target/${{ matrix.target }}/release/wundler wundler
+          tar czf ${{ matrix.archive }} wundler
+          sha256sum ${{ matrix.archive }} > ${{ matrix.archive }}.sha256
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Copy-Item "target/${{ matrix.target }}/release/wundler.exe" "wundler.exe"
+          Compress-Archive -Path wundler.exe -DestinationPath ${{ matrix.archive }}
+          $hash = (Get-FileHash ${{ matrix.archive }} -Algorithm SHA256).Hash.ToLower()
+          "$hash  ${{ matrix.archive }}" | Out-File -Encoding utf8 "${{ matrix.archive }}.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: |
+            ${{ matrix.archive }}
+            ${{ matrix.archive }}.sha256
+
+  release:
+    name: Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      # On main push: force-move the 'latest' tag to HEAD so the
+      # release below always points at current code.
+      - name: Update latest tag
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git tag -f latest
+          git push -f origin latest
+
+      - name: Create or update release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'latest' }}
+          name: ${{ github.ref_type == 'tag' && github.ref_name || 'latest' }}
+          prerelease: ${{ github.ref_type != 'tag' }}
+          body: |
+            ${{ github.ref_type == 'tag' && format('Release {0}', github.ref_name) || format('Latest build from main — commit {0}', github.sha) }}
+
+            ## Downloads
+
+            | Platform | Archive |
+            |---|---|
+            | Linux x86_64 (static) | `wundler-linux-x86_64.tar.gz` |
+            | macOS ARM (Apple Silicon) | `wundler-macos-arm64.tar.gz` |
+            | macOS Intel | `wundler-macos-x86_64.tar.gz` |
+            | Windows x86_64 | `wundler-windows-x86_64.zip` |
+
+            Each archive contains a single `wundler` binary. SHA-256 checksums in the `.sha256` sidecar files.
+
+            ### Quick install (Linux/macOS)
+            ```sh
+            curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ github.ref_type == 'tag' && github.ref_name || 'latest' }}/wundler-linux-x86_64.tar.gz | tar xz
+            # or on macOS ARM:
+            curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ github.ref_type == 'tag' && github.ref_name || 'latest' }}/wundler-macos-arm64.tar.gz | tar xz
+            ```
+          files: |
+            artifacts/**/*
+          fail_on_unmatched_files: true
+          make_latest: ${{ github.ref_type == 'tag' }}
