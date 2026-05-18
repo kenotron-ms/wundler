@@ -57,8 +57,6 @@ pub fn compute_fingerprint(root: &Path) -> Result<String> {
     Ok(hasher.finalize().to_hex().to_string())
 }
 
-// Not yet called from production code; Task 3 will wire this into bundle_into.
-#[allow(dead_code)]
 /// Return the `node_modules` directories worth pre-warming for `project_root`.
 ///
 /// Includes:
@@ -155,8 +153,11 @@ impl DepPrebundler {
         &self,
         fingerprint: &str,
         final_dir: &Path,
-        _project_root: &Path,
+        project_root: &Path,
     ) -> Result<(u64, u64)> {
+        use wundler_core::cache::local::LocalCache;
+        use wundler_core::summarizer::summarize_directory_with_stats;
+
         let tmp = tempfile::Builder::new()
             .prefix(&format!(".tmp-{fingerprint}-"))
             .tempdir_in(&self.cache_root)
@@ -164,10 +165,26 @@ impl DepPrebundler {
                 format!("could not create temp dir under {}", self.cache_root.display())
             })?;
 
-        // Task 1 stub: zero stats. Task 3 replaces this with real CAS pre-warm.
-        let new_entries: u64 = 0;
-        let cached_entries: u64 = 0;
-        let total_modules: u64 = 0;
+        let cas = LocalCache::new(self.cas_root.clone())?;
+        let roots = discover_node_modules(project_root);
+
+        let mut total_modules: u64 = 0;
+        let mut new_entries: u64 = 0;
+        let mut cached_entries: u64 = 0;
+
+        for nm in &roots {
+            tracing::debug!("pre-warming CAS from {}", nm.display());
+            match summarize_directory_with_stats(nm, &cas) {
+                Ok(result) => {
+                    total_modules += result.stats.total as u64;
+                    new_entries += result.stats.cache_misses as u64;
+                    cached_entries += result.stats.cache_hits as u64;
+                }
+                Err(e) => {
+                    tracing::warn!("pre-warm failed for {} (continuing): {e}", nm.display());
+                }
+            }
+        }
 
         let index = serde_json::json!({
             "fingerprint": fingerprint,

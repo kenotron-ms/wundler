@@ -201,3 +201,103 @@ fn compute_fingerprint_is_reexported() {
     make_project(project.path());
     let _fp = compute_fingerprint(project.path()).unwrap();
 }
+
+#[test]
+fn ensure_fresh_prewarms_cas_for_node_modules() {
+    use walkdir::WalkDir;
+
+    let project = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let cas = TempDir::new().unwrap();
+    make_project(project.path());
+
+    // Fake a single dependency module under node_modules.
+    let dep = project.path().join("node_modules").join("acme");
+    std::fs::create_dir_all(&dep).unwrap();
+    std::fs::write(dep.join("index.ts"), "export const x = 1;\n").unwrap();
+    // A non-JS file must be ignored.
+    std::fs::write(dep.join("README.md"), "# acme\n").unwrap();
+
+    let pre = DepPrebundler::new(cache.path().to_path_buf(), cas.path().to_path_buf(), 14);
+    let r = pre.ensure_fresh(project.path()).unwrap();
+
+    assert!(!r.from_cache);
+    assert_eq!(r.new_entries, 1, "should have summarized one .ts file");
+    assert_eq!(r.cached_entries, 0, "first run, nothing was cached yet");
+
+    // The CAS should now contain exactly one summary JSON file.
+    let cas_files: Vec<_> = WalkDir::new(cas.path())
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("json"))
+        .collect();
+    assert_eq!(cas_files.len(), 1, "expected 1 CAS entry, got: {cas_files:?}");
+}
+
+#[test]
+fn ensure_fresh_prewarms_workspace_packages() {
+    use walkdir::WalkDir;
+
+    let project = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let cas = TempDir::new().unwrap();
+    make_project(project.path());
+
+    // Top-level node_modules with one module
+    let top_dep = project.path().join("node_modules").join("alpha");
+    std::fs::create_dir_all(&top_dep).unwrap();
+    std::fs::write(top_dep.join("a.ts"), "export const a = 1;\n").unwrap();
+
+    // Workspace package node_modules with one module
+    let pkg_dep = project.path().join("pkg-a").join("node_modules").join("beta");
+    std::fs::create_dir_all(&pkg_dep).unwrap();
+    std::fs::write(pkg_dep.join("b.ts"), "export const b = 2;\n").unwrap();
+
+    let pre = DepPrebundler::new(cache.path().to_path_buf(), cas.path().to_path_buf(), 14);
+    let r = pre.ensure_fresh(project.path()).unwrap();
+
+    assert!(!r.from_cache);
+    assert_eq!(r.new_entries, 2, "both node_modules trees should have been walked");
+    assert_eq!(r.cached_entries, 0);
+
+    let cas_files: Vec<_> = WalkDir::new(cas.path())
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("json"))
+        .collect();
+    assert_eq!(cas_files.len(), 2, "expected 2 CAS entries");
+}
+
+#[test]
+fn ensure_fresh_records_hits_on_warm_cas() {
+    // A second project with the same dep content should report cached_entries=1.
+    let cache = TempDir::new().unwrap();
+    let cas = TempDir::new().unwrap();
+
+    // Project 1 — cold CAS.
+    let project1 = TempDir::new().unwrap();
+    make_project(project1.path());
+    let dep1 = project1.path().join("node_modules").join("shared");
+    std::fs::create_dir_all(&dep1).unwrap();
+    std::fs::write(dep1.join("index.ts"), "export const shared = 42;\n").unwrap();
+
+    let pre = DepPrebundler::new(cache.path().to_path_buf(), cas.path().to_path_buf(), 14);
+    let r1 = pre.ensure_fresh(project1.path()).unwrap();
+    assert_eq!(r1.new_entries, 1);
+    assert_eq!(r1.cached_entries, 0);
+
+    // Project 2 — different fingerprint, same dep content.
+    let project2 = TempDir::new().unwrap();
+    write(project2.path(), "package.json", r#"{"name":"other","version":"9.9.9"}"#);
+    let dep2 = project2.path().join("node_modules").join("shared");
+    std::fs::create_dir_all(&dep2).unwrap();
+    std::fs::write(dep2.join("index.ts"), "export const shared = 42;\n").unwrap();
+
+    let r2 = pre.ensure_fresh(project2.path()).unwrap();
+    assert_ne!(r1.fingerprint, r2.fingerprint);
+    assert!(!r2.from_cache);
+    assert_eq!(r2.new_entries, 0, "content was already in the CAS");
+    assert_eq!(r2.cached_entries, 1, "and we should have recorded the hit");
+}
