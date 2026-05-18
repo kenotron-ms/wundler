@@ -24,10 +24,6 @@ jobs:
             target: aarch64-apple-darwin
             archive: wundler-macos-arm64.tar.gz
 
-          - os: macos-13
-            target: x86_64-apple-darwin
-            archive: wundler-macos-x86_64.tar.gz
-
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             archive: wundler-windows-x86_64.zip
