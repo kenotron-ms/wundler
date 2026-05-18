@@ -400,14 +400,34 @@ async fn run_dev(config_path: &Path, port: u16) -> Result<()> {
     let ttl_days = cfg.dev.as_ref()
         .and_then(|d| d.dep_cache_ttl_days)
         .unwrap_or(14);
+    let cache_root = cfg.root.join(".wundler").join("cache").join("deps");
+
+    // Resolve the shared summary CAS root — must match exactly what
+    // LocalCache::with_default_root() uses in wundler-core/src/cache/local.rs.
+    // Keep this in sync if that path ever changes.
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+    let cas_root = resolve_cas_root(&home);
+
     let prebundler = wundler_dev::DepPrebundler::new(
-        cfg.root.join(".wundler").join("cache").join("deps"),
+        cache_root,
+        cas_root,
         ttl_days,
     );
 
     match prebundler.ensure_fresh(&cfg.root) {
-        Ok(r) if r.from_cache => tracing::debug!("dep cache hit: {}", r.fingerprint),
-        Ok(r) => tracing::info!("dep pre-bundle complete: {}", r.fingerprint),
+        Ok(r) if r.from_cache => {
+            tracing::debug!("dep cache hit: {}", r.fingerprint);
+        }
+        Ok(r) => {
+            tracing::info!(
+                "dep pre-bundle complete: {} — CAS pre-warm: {} new, {} cached",
+                r.fingerprint,
+                r.new_entries,
+                r.cached_entries,
+            );
+        }
         Err(e) => tracing::warn!("dep pre-bundle failed (continuing): {e}"),
     }
 
@@ -431,6 +451,16 @@ async fn run_dev(config_path: &Path, port: u16) -> Result<()> {
     DevServer { root: cfg.root, port }.start().await
 }
 
+/// Resolve the shared summary CAS root — must match exactly what
+/// `LocalCache::with_default_root()` uses in `wundler-core/src/cache/local.rs`.
+/// Keep this in sync if that path ever changes.
+fn resolve_cas_root(home: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(home)
+        .join(".wundler")
+        .join("cache")
+        .join("summaries")
+}
+
 fn dir_size_bytes(dir: &std::path::Path) -> Result<u64> {
     if !dir.is_dir() { return Ok(0); }
     let mut total: u64 = 0;
@@ -446,6 +476,7 @@ fn dir_size_bytes(dir: &std::path::Path) -> Result<u64> {
 #[cfg(test)]
 mod dev_tests {
     use super::dir_size_bytes;
+    use super::resolve_cas_root;
 
     #[test]
     fn dir_size_bytes_missing_dir_is_zero() {
@@ -461,6 +492,28 @@ mod dev_tests {
         std::fs::write(tmp.path().join("a/x.txt"), b"hello").unwrap();
         std::fs::write(tmp.path().join("a/b/y.txt"), b"worldly").unwrap();
         assert_eq!(dir_size_bytes(tmp.path()).unwrap(), 12);
+    }
+
+    /// The CAS root must be the global `~/.wundler/cache/summaries` path,
+    /// independent of the per-project `cache_root`. This mirrors exactly
+    /// what `LocalCache::with_default_root()` opens.
+    #[test]
+    fn cas_root_is_global_summaries_path() {
+        let cas = resolve_cas_root("/home/testuser");
+        assert_eq!(
+            cas,
+            std::path::PathBuf::from("/home/testuser")
+                .join(".wundler")
+                .join("cache")
+                .join("summaries"),
+            "CAS root must be $HOME/.wundler/cache/summaries"
+        );
+    }
+
+    #[test]
+    fn cas_root_fallback_dot() {
+        let cas = resolve_cas_root(".");
+        assert_eq!(cas, std::path::PathBuf::from("./.wundler/cache/summaries"));
     }
 }
 

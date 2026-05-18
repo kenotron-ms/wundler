@@ -12,6 +12,7 @@ serde_json = { workspace = true }
 tempfile = "3"
 tracing = "0.1"
 walkdir = "2"
+wundler-core = { path = "../wundler-core" }
 
 [dev-dependencies]
 tempfile = "3"
