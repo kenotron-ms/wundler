@@ -17,11 +17,18 @@ pub struct PrebundleResult {
     pub cache_dir: PathBuf,
     pub from_cache: bool,
     pub fingerprint: String,
+    /// Number of summary entries newly written to the CAS during this run.
+    /// Always 0 on `from_cache == true`.
+    pub new_entries: u64,
+    /// Number of summary entries that were already warm in the CAS.
+    /// Always 0 on `from_cache == true`.
+    pub cached_entries: u64,
 }
 
 #[derive(Debug, Clone)]
 pub struct DepPrebundler {
     cache_root: PathBuf,
+    cas_root: PathBuf,
     ttl_days: u32,
 }
 
@@ -51,12 +58,16 @@ pub fn compute_fingerprint(root: &Path) -> Result<String> {
 }
 
 impl DepPrebundler {
-    pub fn new(cache_root: PathBuf, ttl_days: u32) -> Self {
-        Self { cache_root, ttl_days }
+    pub fn new(cache_root: PathBuf, cas_root: PathBuf, ttl_days: u32) -> Self {
+        Self { cache_root, cas_root, ttl_days }
     }
 
     pub fn cache_root(&self) -> &Path {
         &self.cache_root
+    }
+
+    pub fn cas_root(&self) -> &Path {
+        &self.cas_root
     }
 
     pub fn ensure_fresh(&self, project_root: &Path) -> Result<PrebundleResult> {
@@ -64,35 +75,67 @@ impl DepPrebundler {
         let cache_dir = self.cache_root.join(&fingerprint);
 
         if cache_dir.join("index.json").is_file() {
-            return Ok(PrebundleResult { cache_dir, from_cache: true, fingerprint });
+            return Ok(PrebundleResult {
+                cache_dir,
+                from_cache: true,
+                fingerprint,
+                new_entries: 0,
+                cached_entries: 0,
+            });
         }
 
         std::fs::create_dir_all(&self.cache_root).with_context(|| {
             format!("could not create cache root {}", self.cache_root.display())
         })?;
 
-        self.bundle_into(&fingerprint, &cache_dir)?;
+        let (new_entries, cached_entries) =
+            self.bundle_into(&fingerprint, &cache_dir, project_root)?;
 
-        Ok(PrebundleResult { cache_dir, from_cache: false, fingerprint })
+        Ok(PrebundleResult {
+            cache_dir,
+            from_cache: false,
+            fingerprint,
+            new_entries,
+            cached_entries,
+        })
     }
 
-    fn bundle_into(&self, fingerprint: &str, final_dir: &Path) -> Result<()> {
+    fn bundle_into(
+        &self,
+        fingerprint: &str,
+        final_dir: &Path,
+        _project_root: &Path,
+    ) -> Result<(u64, u64)> {
         let tmp = tempfile::Builder::new()
             .prefix(&format!(".tmp-{fingerprint}-"))
             .tempdir_in(&self.cache_root)
-            .with_context(|| format!("could not create temp dir under {}", self.cache_root.display()))?;
+            .with_context(|| {
+                format!("could not create temp dir under {}", self.cache_root.display())
+            })?;
 
-        let index = serde_json::json!({ "fingerprint": fingerprint });
+        // Task 1 stub: zero stats. Task 3 replaces this with real CAS pre-warm.
+        let new_entries: u64 = 0;
+        let cached_entries: u64 = 0;
+        let total_modules: u64 = 0;
+
+        let index = serde_json::json!({
+            "fingerprint": fingerprint,
+            "new_entries": new_entries,
+            "cached_entries": cached_entries,
+            "total_modules": total_modules,
+        });
         let index_bytes = serde_json::to_vec_pretty(&index)?;
         std::fs::write(tmp.path().join("index.json"), &index_bytes)
-            .with_context(|| format!("could not write index.json in {}", tmp.path().display()))?;
+            .with_context(|| {
+                format!("could not write index.json in {}", tmp.path().display())
+            })?;
 
         let staged = tmp.keep();
         match std::fs::rename(&staged, final_dir) {
-            Ok(()) => Ok(()),
+            Ok(()) => Ok((new_entries, cached_entries)),
             Err(_) if final_dir.join("index.json").is_file() => {
                 let _ = std::fs::remove_dir_all(&staged);
-                Ok(())
+                Ok((new_entries, cached_entries))
             }
             Err(e) => {
                 let _ = std::fs::remove_dir_all(&staged);

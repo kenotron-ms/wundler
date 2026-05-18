@@ -4073,6 +4073,7 @@ dependencies = [
  "tempfile",
  "tracing",
  "walkdir",
+ "wundler-core",
 ]
 
 [[package]]

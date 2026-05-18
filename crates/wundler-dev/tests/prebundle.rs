@@ -20,29 +20,38 @@ fn make_project(tmp: &Path) {
 fn cache_miss_creates_dir_with_index_json() {
     let project = TempDir::new().unwrap();
     let cache = TempDir::new().unwrap();
+    let cas = TempDir::new().unwrap();
     make_project(project.path());
 
-    let pre = DepPrebundler::new(cache.path().to_path_buf(), 14);
+    let pre = DepPrebundler::new(cache.path().to_path_buf(), cas.path().to_path_buf(), 14);
     let r = pre.ensure_fresh(project.path()).unwrap();
 
     assert!(!r.from_cache);
     assert!(r.cache_dir.is_dir());
     assert_eq!(r.cache_dir.file_name().unwrap().to_str().unwrap(), r.fingerprint);
 
+    // PrebundleResult carries pre-warm stats.
+    assert_eq!(r.new_entries, 0, "no node_modules in this fixture");
+    assert_eq!(r.cached_entries, 0, "no node_modules in this fixture");
+
     let index_path = r.cache_dir.join("index.json");
     assert!(index_path.is_file());
     let body = std::fs::read_to_string(&index_path).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(parsed["fingerprint"], serde_json::Value::String(r.fingerprint.clone()));
+    assert_eq!(parsed["new_entries"], serde_json::Value::from(0u64));
+    assert_eq!(parsed["cached_entries"], serde_json::Value::from(0u64));
+    assert_eq!(parsed["total_modules"], serde_json::Value::from(0u64));
 }
 
 #[test]
 fn cache_hit_returns_instantly_without_touching_index() {
     let project = TempDir::new().unwrap();
     let cache = TempDir::new().unwrap();
+    let cas = TempDir::new().unwrap();
     make_project(project.path());
 
-    let pre = DepPrebundler::new(cache.path().to_path_buf(), 14);
+    let pre = DepPrebundler::new(cache.path().to_path_buf(), cas.path().to_path_buf(), 14);
     let r1 = pre.ensure_fresh(project.path()).unwrap();
     assert!(!r1.from_cache);
 
@@ -59,9 +68,10 @@ fn cache_hit_returns_instantly_without_touching_index() {
 fn fingerprint_changes_invalidate_cache() {
     let project = TempDir::new().unwrap();
     let cache = TempDir::new().unwrap();
+    let cas = TempDir::new().unwrap();
     make_project(project.path());
 
-    let pre = DepPrebundler::new(cache.path().to_path_buf(), 14);
+    let pre = DepPrebundler::new(cache.path().to_path_buf(), cas.path().to_path_buf(), 14);
     let r1 = pre.ensure_fresh(project.path()).unwrap();
 
     write(project.path(), "package.json", r#"{"name":"app","version":"2.0.0"}"#);
@@ -77,9 +87,10 @@ fn fingerprint_changes_invalidate_cache() {
 fn ensure_fresh_leaves_no_tmp_dirs_behind() {
     let project = TempDir::new().unwrap();
     let cache = TempDir::new().unwrap();
+    let cas = TempDir::new().unwrap();
     make_project(project.path());
 
-    let pre = DepPrebundler::new(cache.path().to_path_buf(), 14);
+    let pre = DepPrebundler::new(cache.path().to_path_buf(), cas.path().to_path_buf(), 14);
     pre.ensure_fresh(project.path()).unwrap();
 
     for entry in std::fs::read_dir(cache.path()).unwrap() {
@@ -93,20 +104,32 @@ fn ensure_fresh_leaves_no_tmp_dirs_behind() {
 fn concurrent_ensure_fresh_does_not_error() {
     let project = TempDir::new().unwrap();
     let cache = TempDir::new().unwrap();
+    let cas = TempDir::new().unwrap();
     make_project(project.path());
 
     let proj = project.path().to_path_buf();
     let cache_root = cache.path().to_path_buf();
+    let cas_root = cas.path().to_path_buf();
 
     let t1 = {
         let proj = proj.clone();
         let cache_root = cache_root.clone();
-        thread::spawn(move || DepPrebundler::new(cache_root, 14).ensure_fresh(&proj).unwrap())
+        let cas_root = cas_root.clone();
+        thread::spawn(move || {
+            DepPrebundler::new(cache_root, cas_root, 14)
+                .ensure_fresh(&proj)
+                .unwrap()
+        })
     };
     let t2 = {
         let proj = proj.clone();
         let cache_root = cache_root.clone();
-        thread::spawn(move || DepPrebundler::new(cache_root, 14).ensure_fresh(&proj).unwrap())
+        let cas_root = cas_root.clone();
+        thread::spawn(move || {
+            DepPrebundler::new(cache_root, cas_root, 14)
+                .ensure_fresh(&proj)
+                .unwrap()
+        })
     };
 
     let r1 = t1.join().unwrap();
@@ -120,9 +143,10 @@ fn concurrent_ensure_fresh_does_not_error() {
 fn gc_deletes_stale_dirs_and_keeps_fresh_ones() {
     let project = TempDir::new().unwrap();
     let cache = TempDir::new().unwrap();
+    let cas = TempDir::new().unwrap();
     make_project(project.path());
 
-    let pre = DepPrebundler::new(cache.path().to_path_buf(), 0);
+    let pre = DepPrebundler::new(cache.path().to_path_buf(), cas.path().to_path_buf(), 0);
     let r = pre.ensure_fresh(project.path()).unwrap();
     assert!(r.cache_dir.is_dir());
 
@@ -136,9 +160,10 @@ fn gc_deletes_stale_dirs_and_keeps_fresh_ones() {
 fn gc_keeps_fresh_dirs_under_default_ttl() {
     let project = TempDir::new().unwrap();
     let cache = TempDir::new().unwrap();
+    let cas = TempDir::new().unwrap();
     make_project(project.path());
 
-    let pre = DepPrebundler::new(cache.path().to_path_buf(), 14);
+    let pre = DepPrebundler::new(cache.path().to_path_buf(), cas.path().to_path_buf(), 14);
     let r = pre.ensure_fresh(project.path()).unwrap();
     pre.gc().unwrap();
     assert!(r.cache_dir.is_dir());
@@ -147,8 +172,9 @@ fn gc_keeps_fresh_dirs_under_default_ttl() {
 #[test]
 fn gc_on_missing_root_is_not_an_error() {
     let cache = TempDir::new().unwrap();
+    let cas = TempDir::new().unwrap();
     let missing = cache.path().join("never-created");
-    let pre = DepPrebundler::new(missing, 14);
+    let pre = DepPrebundler::new(missing, cas.path().to_path_buf(), 14);
     pre.gc().unwrap();
 }
 
@@ -156,13 +182,14 @@ fn gc_on_missing_root_is_not_an_error() {
 fn ensure_fresh_does_not_call_gc_inline() {
     let project = TempDir::new().unwrap();
     let cache = TempDir::new().unwrap();
+    let cas = TempDir::new().unwrap();
     make_project(project.path());
 
     let stale = cache.path().join("deadbeef".repeat(8));
     std::fs::create_dir_all(&stale).unwrap();
     std::fs::write(stale.join("index.json"), "{}").unwrap();
 
-    let pre = DepPrebundler::new(cache.path().to_path_buf(), 14);
+    let pre = DepPrebundler::new(cache.path().to_path_buf(), cas.path().to_path_buf(), 14);
     let _ = pre.ensure_fresh(project.path()).unwrap();
 
     assert!(stale.is_dir(), "ensure_fresh must not touch unrelated entries");

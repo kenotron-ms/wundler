@@ -402,6 +402,7 @@ async fn run_dev(config_path: &Path, port: u16) -> Result<()> {
         .unwrap_or(14);
     let prebundler = wundler_dev::DepPrebundler::new(
         cfg.root.join(".wundler").join("cache").join("deps"),
+        cfg.root.join(".wundler").join("cache").join("deps"),  // placeholder; Task 4 sets the real CAS path
         ttl_days,
     );
 
