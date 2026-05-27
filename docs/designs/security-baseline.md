@@ -20,14 +20,14 @@ This design specifies two phases:
 - **Phase 2 — Integrity (depends on VRC stable `build_id`).** ed25519 manifest
   signing served as an HTTP header, SRI helper for HTML generators, CSP header.
 
-The signing primitives **already exist** in `crates/wundler-abs/src/signing.rs`
+The signing primitives **already exist** in `crates/cloudpack-abs/src/signing.rs`
 (`ManifestSigner`, `ManifestVerifier`, `manifest_signature_bytes`). Phase 2 is wiring,
 not invention. mTLS is explicitly deferred.
 
 The recommended designs are **Phase 1 → C2** (static token + CORS + in-process rate limiter)
 and **Phase 2 → C2** (signing + SRI helper + CSP report-only). Linux/Unix philosophy
 governs every choice: ABS provides the *mechanism*; token issuance, key custody, origin
-list, and CSP report destination are *policy* and live in `wundler.toml` or env.
+list, and CSP report destination are *policy* and live in `cloudpack.toml` or env.
 
 ---
 
@@ -116,7 +116,7 @@ disk-write authority is no longer sufficient.
 
 #### C1 — Static bearer token only
 
-- One token from `wundler.toml [security] bearer_token_file = "..."` or env `WUNDLER_BEARER_TOKEN`.
+- One token from `cloudpack.toml [security] bearer_token_file = "..."` or env `CLOUDPACK_BEARER_TOKEN`.
 - Tower middleware applied to every route except `GET /health`.
 - No CORS changes. No rate limit. Anyone with the token gets full access.
 
@@ -137,7 +137,7 @@ disk-write authority is no longer sufficient.
 
 ### Phase 1 — Component design (concrete Rust)
 
-New files in `crates/wundler-abs/src/`:
+New files in `crates/cloudpack-abs/src/`:
 
 ```
 src/
@@ -148,7 +148,7 @@ src/
 │   ├── auth.rs             # bearer-token middleware
 │   ├── cors.rs             # CORS layer builder
 │   ├── ratelimit.rs        # per-IP rate limiter (governor)
-│   └── config.rs           # SecurityConfig from wundler.toml
+│   └── config.rs           # SecurityConfig from cloudpack.toml
 ```
 
 #### `security/config.rs`
@@ -159,7 +159,7 @@ pub struct SecurityConfig {
     /// Path to a file containing the bearer token (one line, no whitespace).
     /// If both this and `bearer_token_env` are set, the file wins.
     pub bearer_token_file: Option<PathBuf>,
-    /// Env var name to read the bearer token from. Default: WUNDLER_BEARER_TOKEN.
+    /// Env var name to read the bearer token from. Default: CLOUDPACK_BEARER_TOKEN.
     pub bearer_token_env: Option<String>,
     /// CORS allowlist. Empty = deny all cross-origin. No wildcard supported.
     #[serde(default)]
@@ -278,7 +278,7 @@ pub async fn rate_limit_mw(
 Only applied to `POST /manifest` via `.route_layer(...)`. Per-route, not global, so
 `/health` and `/sw.js` are not rate-limited.
 
-New `[dependencies]` in `crates/wundler-abs/Cargo.toml`:
+New `[dependencies]` in `crates/cloudpack-abs/Cargo.toml`:
 
 ```toml
 governor = "0.7"
@@ -342,15 +342,15 @@ Depends on VRC SCA delivering a stable, deterministic `build_id`.
 #### C1 — ed25519 manifest signing only
 
 - ABS signs `manifest_signature_bytes(manifest)` at load time, caches the signature.
-- Every `POST /manifest` response carries `X-Wundler-Signature: base64(sig)` and
-  `X-Wundler-Build-Id: ...`.
+- Every `POST /manifest` response carries `X-Cloudpack-Signature: base64(sig)` and
+  `X-Cloudpack-Build-Id: ...`.
 - SW fetches `GET /manifest/full.json` once per build_id, verifies, caches.
 - No SRI. No CSP.
 
 #### C2 — Signing + SRI helper + CSP report-only  ← **recommended**
 
 - C1, plus:
-- A small `wundler-html` helper crate (or module inside `wundler-graph`) that, given a
+- A small `cloudpack-html` helper crate (or module inside `cloudpack-graph`) that, given a
   `ChunkManifest` and entry-point, emits `<script src="..." integrity="sha256-..." crossorigin>`
   tags. Lives outside ABS because ABS does not generate HTML; consumers do.
 - ABS attaches a CSP **report-only** header on `/sw.js` and (optionally) any HTML it serves
@@ -371,22 +371,22 @@ Depends on VRC SCA delivering a stable, deterministic `build_id`.
 
 What already exists (no work needed):
 
-- `crates/wundler-abs/src/signing.rs`
+- `crates/cloudpack-abs/src/signing.rs`
   - `ManifestSigner::from_pem(pem) → ManifestSigner`
   - `ManifestSigner::sign_manifest(&ChunkManifest) → Signature`
   - `ManifestVerifier::from_pem` / `verify`
   - `manifest_signature_bytes(&ChunkManifest)` — canonical bytes, deliberately excludes
     advisory PGO fields. **This is the contract the SW must replicate.**
-- `crates/wundler-abs/src/state.rs::AppState::load_signed_from_disk` — already accepts an
+- `crates/cloudpack-abs/src/state.rs::AppState::load_signed_from_disk` — already accepts an
   optional verifier and signature.
-- `crates/wundler-graph/src/types.rs:89` — `ChunkManifest.build_id` (filled in by VRC SCA).
+- `crates/cloudpack-graph/src/types.rs:89` — `ChunkManifest.build_id` (filled in by VRC SCA).
 
 What is missing (Phase 2 work):
 
 ```
 src/
 ├── state.rs                # extend AppState with `signature: Arc<RwLock<Option<Signature>>>`
-├── server.rs               # add: GET /manifest/full.json, X-Wundler-Signature header
+├── server.rs               # add: GET /manifest/full.json, X-Cloudpack-Signature header
 └── security/
     └── csp.rs              # build CSP value from manifest chunk hashes
 ```
@@ -394,7 +394,7 @@ src/
 And, separately:
 
 ```
-crates/wundler-html/        # new tiny crate (≤300 LOC)
+crates/cloudpack-html/        # new tiny crate (≤300 LOC)
 ├── Cargo.toml
 └── src/
     ├── lib.rs              # pub fn render_script_tags(manifest, entry) -> String
@@ -426,10 +426,10 @@ async fn get_manifest_full(State(state): State<RouterState>) -> impl IntoRespons
     let body = serde_json::to_vec(&*manifest).expect("manifest serializes");
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
-    headers.insert("x-wundler-build-id", manifest.build_id.parse().unwrap());
+    headers.insert("x-cloudpack-build-id", manifest.build_id.parse().unwrap());
     if let Some(s) = sig.as_ref() {
         let b64 = base64::engine::general_purpose::STANDARD.encode(s.to_bytes());
-        headers.insert("x-wundler-signature", b64.parse().unwrap());
+        headers.insert("x-cloudpack-signature", b64.parse().unwrap());
     }
     headers.insert(
         header::CACHE_CONTROL,
@@ -442,14 +442,14 @@ async fn get_manifest_full(State(state): State<RouterState>) -> impl IntoRespons
 `/manifest/full.json` is **publicly readable** (auth-exempt). The signature, not the
 transport, is the trust anchor. Cacheable at the CDN.
 
-The Service Worker (`crates/wundler-abs/assets/sw.js`) gains:
+The Service Worker (`crates/cloudpack-abs/assets/sw.js`) gains:
 
 ```js
 // Pseudocode
 async function getTrustedManifest() {
   const r = await fetch('/manifest/full.json');
-  const sig = r.headers.get('x-wundler-signature');
-  const buildId = r.headers.get('x-wundler-build-id');
+  const sig = r.headers.get('x-cloudpack-signature');
+  const buildId = r.headers.get('x-cloudpack-build-id');
   const bytes = await r.arrayBuffer();
   const ok = await verifyEd25519(PINNED_PUBKEY, canonicalBytesFromJson(bytes), b64decode(sig));
   if (!ok) throw new Error('manifest signature invalid');
@@ -462,7 +462,7 @@ We will ship a contract test that signs a fixture in Rust and verifies it in
 Node + browser via the SW's verifier. **This is the most fragile contract in the system
 and gets its own test file.**
 
-#### `wundler-html` crate
+#### `cloudpack-html` crate
 
 ```rust
 pub fn render_script_tags(manifest: &ChunkManifest, entry: &str) -> String {
@@ -511,7 +511,7 @@ pub fn build_csp(manifest: &ChunkManifest, report_only: bool) -> (HeaderName, He
 | Security      | ★★★☆☆ (one layer)            | ★★★★☆ (three layers; CSP signals)    | ★★★★★ (pin closes "trust ABS" loop) |
 | Operability   | ★★★★★ (one rotation)         | ★★★★☆ (CSP reports = signal)         | ★★☆☆☆ (pin = redeploy to rotate)     |
 | Evolvability  | ★★★★☆                        | ★★★★☆ (CSP can flip to enforce later)| ★★☆☆☆ (pin couples binary + key)     |
-| Cost          | ★★★★★ (signing already exists)| ★★★★☆ (+wundler-html, +csp.rs)       | ★★★☆☆ (+SW build pipeline)           |
+| Cost          | ★★★★★ (signing already exists)| ★★★★☆ (+cloudpack-html, +csp.rs)       | ★★★☆☆ (+SW build pipeline)           |
 
 ---
 
@@ -527,7 +527,7 @@ pub fn build_csp(manifest: &ChunkManifest, report_only: bool) -> (HeaderName, He
   Both deferred to "operationally needed?" — at POC stage neither is.
 - **Linux/Unix posture:** ABS provides the *mechanism* (verify a token, enforce an origin,
   count per IP). The *policy* — which tokens exist, when to rotate, which origins are
-  legitimate, what rate to allow — lives entirely in `wundler.toml` and in operator
+  legitimate, what rate to allow — lives entirely in `cloudpack.toml` and in operator
   process. Token issuance and storage are explicitly not ABS's job.
 
 ### Phase 2 → C2
@@ -543,7 +543,7 @@ pub fn build_csp(manifest: &ChunkManifest, report_only: bool) -> (HeaderName, He
   pipeline that POC doesn't have yet. We capture the migration in a follow-up.
 - **Linux/Unix posture:** the signing primitive (already exists), the SRI encoder, and the
   CSP builder are three independent small tools. Each does one thing. Each can be
-  consumed without the others. HTML emission lives in `wundler-html` because ABS does not
+  consumed without the others. HTML emission lives in `cloudpack-html` because ABS does not
   emit HTML — the *consumer* chooses the policy of which entry points get SRI tags.
 
 ---
@@ -557,7 +557,7 @@ pub fn build_csp(manifest: &ChunkManifest, report_only: bool) -> (HeaderName, He
 | 3 | **ed25519 key rotation without client re-deployment.** SW pins or browser-cached signatures from old key remain "valid" to a cached SW. | High | 2 | C2 does *not* pin in SW — verifying key is fetched alongside the manifest. Rotation = swap key on disk + `POST /reload` → next build gets new signature, all clients refetch within `ttl_seconds`. Pinning is explicitly deferred to a later design. | If C3 is adopted later, rotation becomes a redeploy. Accepted tradeoff documented. |
 | 4 | **Rate limiter in-process vs per-replica.** A 2-replica deployment with `manifest_rate_per_sec = 100` allows 200 rps under round-robin. | Medium | 1 | Documented. Configure rate **per replica**, not total. When HA lands, revisit with Redis-backed governor or perimeter rate limiting (Cloudflare/WAF). | None — for POC, in-process is sufficient. |
 | 5 | **SW caching a valid manifest, then signing key compromised.** Cached manifest remains verifiable until the SW refetches. | Medium | 2 | `Cache-Control: max-age={ttl_seconds}` on `/manifest/full.json`. Operators set `ttl_seconds` according to their tolerance. After key rotation, push a new build; old key signatures become stale at next refetch. Document a "panic" procedure: unregister SW + force reload. | Window of vulnerability = `ttl_seconds`. Operator-tunable. |
-| 6 | **SRI breaking on mutable chunk URLs.** SRI compares the *fetched* hash to the *declared* hash. If a chunk's URL maps to mutable bytes, every page load fails. | Medium | 2 | Wundler's CAS guarantees: a chunk URL contains the hash; the bytes at that URL are immutable. We add a startup invariant check in `wundler-html` that hash extracted from URL == hash in manifest. Refuse to start otherwise. | Only breaks if CAS contract is broken elsewhere. |
+| 6 | **SRI breaking on mutable chunk URLs.** SRI compares the *fetched* hash to the *declared* hash. If a chunk's URL maps to mutable bytes, every page load fails. | Medium | 2 | Cloudpack's CAS guarantees: a chunk URL contains the hash; the bytes at that URL are immutable. We add a startup invariant check in `cloudpack-html` that hash extracted from URL == hash in manifest. Refuse to start otherwise. | Only breaks if CAS contract is broken elsewhere. |
 | 7 | **CORS misconfig allows credentialed cross-origin.** `Access-Control-Allow-Credentials: true` combined with a too-broad origin = session theft. | Medium | 1 | We **never** set `allow_credentials(true)` in C2's CORS layer. Bearer auth is server-to-server; no browser uses it. Wildcard origin is unrepresentable in config (no `*` accepted). | None. |
 | 8 | **Two-replica auth race during token rotation.** Replica A loaded new token, replica B still has old; a single client request hits whichever, half fail. | Low | 1 | Support **two-token grace**: `bearer_token_file` may contain *one or two* tokens, newline-separated. Auth accepts either. Rotation procedure: add new, deploy, remove old. | Operator process, documented. |
 | 9 | **Constant-time compare bypass via length oracle.** Naïve `==` on token bytes leaks length. | Low | 1 | `subtle::ConstantTimeEq` in `SecretToken::ct_eq`. Length is intentionally compared in constant time too (`subtle` handles this). | None. |
@@ -641,10 +641,10 @@ lands. No serialization across phases beyond the SCA gate.
 
 If "do the minimum that materially reduces risk without requiring a security audit":
 
-> **Phase 1.1 alone** — Static bearer token via `WUNDLER_BEARER_TOKEN` env var,
+> **Phase 1.1 alone** — Static bearer token via `CLOUDPACK_BEARER_TOKEN` env var,
 > middleware on every route except `/health`, constant-time compare, no logging.
 >
-> One file: `crates/wundler-abs/src/security/auth.rs`. ~80 LOC. One new dep: `subtle`.
+> One file: `crates/cloudpack-abs/src/security/auth.rs`. ~80 LOC. One new dep: `subtle`.
 > One config knob: the env var name. Zero changes to manifest, signing, SW, or HTML.
 
 Why this is *credible* and not just *cheap*:
@@ -694,7 +694,7 @@ explicitly accept T1/T3/T4 until Phase 2 lands.
 3. **Two-token grace file format.** Newline-separated plaintext or a TOML list? Plaintext
    is simpler and aligns with the "policy out of the binary" stance. Confirm.
 4. **Does the bench harness need to bypass auth?** The bench currently hits ABS directly.
-   We expose `[security.bench_bypass_token = "..."]` that auto-generates on `wundler bench`
+   We expose `[security.bench_bypass_token = "..."]` that auto-generates on `cloudpack bench`
    for the duration of the run; never persists to telemetry; not in default config.
 
 ---
@@ -702,7 +702,7 @@ explicitly accept T1/T3/T4 until Phase 2 lands.
 ## Acceptance criteria
 
 ### Phase 1
-- [ ] Default `wundler.toml` with no `[security]` section preserves existing behavior (no migration forced).
+- [ ] Default `cloudpack.toml` with no `[security]` section preserves existing behavior (no migration forced).
 - [ ] With `[security] bearer_token_file = "..."`, every non-exempt route returns 401 without `Authorization: Bearer <token>`.
 - [ ] `tracing` capture from a failing-auth request never contains the token bytes.
 - [ ] `subtle::ConstantTimeEq` is the only comparison path; lint rule forbids `==` on `SecretToken`.
@@ -711,8 +711,8 @@ explicitly accept T1/T3/T4 until Phase 2 lands.
 - [ ] Two-token grace: token file with two lines, requests authenticated with either succeed; with neither, 401.
 
 ### Phase 2
-- [ ] `AppState` exposes `signature: Option<Signature>`; `/manifest/full.json` returns it as `X-Wundler-Signature` header (base64).
+- [ ] `AppState` exposes `signature: Option<Signature>`; `/manifest/full.json` returns it as `X-Cloudpack-Signature` header (base64).
 - [ ] SW fixture test: Rust signs a fixture manifest; Node-side verifier (mirroring `manifest_signature_bytes` byte-for-byte) verifies.
-- [ ] `wundler-html::render_script_tags` emits `integrity="sha256-..."` matching the chunk hash, base64-encoded from CAS hex.
+- [ ] `cloudpack-html::render_script_tags` emits `integrity="sha256-..."` matching the chunk hash, base64-encoded from CAS hex.
 - [ ] CSP report-only: violating a derived CSP produces a `/csp-report` log line; no enforce header is ever set in this milestone.
 - [ ] Key rotation drill: swap signing key on disk, `POST /reload`, new signature in next response, all clients refresh within `ttl_seconds`.

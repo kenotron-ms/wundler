@@ -1,0 +1,34 @@
+[package]
+name = "cloudpack-abs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cloudpack-core = { path = "../cloudpack-core" }
+cloudpack-graph = { path = "../cloudpack-graph" }
+axum = { version = "0.8", features = ["json"] }
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ed25519-dalek = { version = "2", features = ["pem", "rand_core"] }
+pkcs8 = { version = "0.10", features = ["pem"] }
+rand = "0.8"
+uuid = { version = "1", features = ["v4"] }
+dashmap = "5"
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+subtle = "2"
+governor = "0.7"
+base64 = "0.22"
+hex = "0.4"
+tempfile = "3"
+
+[dev-dependencies]
+axum-test = "20"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tower = { version = "0.5", features = ["util"] }

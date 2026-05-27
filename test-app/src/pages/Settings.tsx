@@ -54,7 +54,7 @@ export default function Settings() {
         ))}
 
         <div>
-          <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '4px' }}>Chunking Strategy (Wundler)</label>
+          <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '4px' }}>Chunking Strategy (Cloudpack)</label>
           <select
             value={settings.chunkingStrategy}
             onChange={e => setSettings(s => ({ ...s, chunkingStrategy: e.target.value as any }))}

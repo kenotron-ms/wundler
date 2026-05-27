@@ -4,12 +4,12 @@
 
 **Goal:** Surface ed25519 manifest signatures to clients via a new `GET /manifest/full.json` endpoint, ship an SRI-aware HTML rendering crate, and add a tamper-evidence `POST /csp-report` sink — finishing the server-side half of the Phase 2 supply-chain story.
 
-**Architecture:** The `ManifestSigner` / `ManifestVerifier` machinery already exists in `wundler-abs::signing`. This plan threads a fresh `Option<Signature>` slot through `AppState` so the most-recently-loaded signature can be served alongside the manifest, wires a `ManifestSigner` into the `POST /reload` path so operator-driven swaps re-sign, and exposes the signature as an `X-Wundler-Signature` header on a new public read endpoint. A new `wundler-html` crate produces `<script integrity="sha256-…">` tags from a manifest, and a `security/csp.rs` module supplies report-only CSP headers and a small `/csp-report` ingester. A cross-language contract test pins down the deterministic byte format of `manifest_signature_bytes` so a future JavaScript verifier can re-derive the same bytes.
+**Architecture:** The `ManifestSigner` / `ManifestVerifier` machinery already exists in `cloudpack-abs::signing`. This plan threads a fresh `Option<Signature>` slot through `AppState` so the most-recently-loaded signature can be served alongside the manifest, wires a `ManifestSigner` into the `POST /reload` path so operator-driven swaps re-sign, and exposes the signature as an `X-Cloudpack-Signature` header on a new public read endpoint. A new `cloudpack-html` crate produces `<script integrity="sha256-…">` tags from a manifest, and a `security/csp.rs` module supplies report-only CSP headers and a small `/csp-report` ingester. A cross-language contract test pins down the deterministic byte format of `manifest_signature_bytes` so a future JavaScript verifier can re-derive the same bytes.
 
 **Tech Stack:** Rust 2021, axum 0.8, tokio 1, ed25519-dalek 2, base64 0.22, hex 0.4, anyhow 1, serde 1, tower 0.5 (tests), axum-test 20 (tests), tempfile 3.
 
 **Scope Boundary:**
-- **In scope:** `AppState.signature` field + `snapshot_signature()`, `GET /manifest/full.json` route, `POST /csp-report` route, `wundler-abs::security::csp`, new `wundler-html` crate (`render_script_tags`, `hex_to_sri_b64`), Rust half of the cross-language signing contract test, wiring the signing key into `POST /reload`.
+- **In scope:** `AppState.signature` field + `snapshot_signature()`, `GET /manifest/full.json` route, `POST /csp-report` route, `cloudpack-abs::security::csp`, new `cloudpack-html` crate (`render_script_tags`, `hex_to_sri_b64`), Rust half of the cross-language signing contract test, wiring the signing key into `POST /reload`.
 - **Out of scope:** Service-Worker ed25519 verification, SW public-key pinning, CSP enforce mode (we only emit `Content-Security-Policy-Report-Only`), JWT / OAuth / mTLS, automatic key rotation, the JavaScript half of the contract test, and the pre-existing `session_id`-carries-`build_id` bug — do **not** touch that.
 
 ---
@@ -17,31 +17,31 @@
 ## File Structure
 
 **Created:**
-- `crates/wundler-html/Cargo.toml`
-- `crates/wundler-html/src/lib.rs` — `render_script_tags(manifest, entry, cdn_base_url) -> String`
-- `crates/wundler-html/src/sri.rs` — `hex_to_sri_b64(hex) -> String`
-- `crates/wundler-abs/src/security/csp.rs` — `build_csp_report_only`, `hex_to_sri_b64` (local copy for ABS)
-- `crates/wundler-abs/tests/signing_contract_test.rs` — Rust half of cross-language contract test
+- `crates/cloudpack-html/Cargo.toml`
+- `crates/cloudpack-html/src/lib.rs` — `render_script_tags(manifest, entry, cdn_base_url) -> String`
+- `crates/cloudpack-html/src/sri.rs` — `hex_to_sri_b64(hex) -> String`
+- `crates/cloudpack-abs/src/security/csp.rs` — `build_csp_report_only`, `hex_to_sri_b64` (local copy for ABS)
+- `crates/cloudpack-abs/tests/signing_contract_test.rs` — Rust half of cross-language contract test
 
 **Modified:**
-- `Cargo.toml` (workspace) — add `crates/wundler-html` to `members`
-- `crates/wundler-abs/Cargo.toml` — add `base64 = "0.22"`, `hex = "0.4"`, `wundler-html` path dep
-- `crates/wundler-abs/src/state.rs` — add `signature` field, `snapshot_signature`, `set_signature`; reset on `swap_to`
-- `crates/wundler-abs/src/server.rs` — add `signer` to `RouterState`, change `build_router` signature, add `GET /manifest/full.json` and `POST /csp-report` handlers, wire signing into `POST /reload`
-- `crates/wundler-abs/src/security/auth.rs` — extend `EXEMPT_PATHS`
-- `crates/wundler-abs/src/security/mod.rs` — declare `pub mod csp`
+- `Cargo.toml` (workspace) — add `crates/cloudpack-html` to `members`
+- `crates/cloudpack-abs/Cargo.toml` — add `base64 = "0.22"`, `hex = "0.4"`, `cloudpack-html` path dep
+- `crates/cloudpack-abs/src/state.rs` — add `signature` field, `snapshot_signature`, `set_signature`; reset on `swap_to`
+- `crates/cloudpack-abs/src/server.rs` — add `signer` to `RouterState`, change `build_router` signature, add `GET /manifest/full.json` and `POST /csp-report` handlers, wire signing into `POST /reload`
+- `crates/cloudpack-abs/src/security/auth.rs` — extend `EXEMPT_PATHS`
+- `crates/cloudpack-abs/src/security/mod.rs` — declare `pub mod csp`
 
 ---
 
 ## Task 1: Add `signature` to `AppState`
 
 **Files:**
-- Modify: `crates/wundler-abs/src/state.rs`
-- Modify: `crates/wundler-abs/src/server.rs` (test helper only — `test_state()` in `mod tests`)
+- Modify: `crates/cloudpack-abs/src/state.rs`
+- Modify: `crates/cloudpack-abs/src/server.rs` (test helper only — `test_state()` in `mod tests`)
 
 ### Step 1.1 — Write the failing unit test for `snapshot_signature`
 
-- [ ] Add this test inside `crates/wundler-abs/src/state.rs` (append a `#[cfg(test)] mod tests` block at the end if one doesn't exist):
+- [ ] Add this test inside `crates/cloudpack-abs/src/state.rs` (append a `#[cfg(test)] mod tests` block at the end if one doesn't exist):
 
 ```rust
 #[cfg(test)]
@@ -50,7 +50,7 @@ mod tests {
     use ed25519_dalek::{Signer as _, SigningKey};
     use rand::rngs::OsRng;
     use std::collections::HashMap;
-    use wundler_graph::ChunkManifest;
+    use cloudpack_graph::ChunkManifest;
 
     fn empty_manifest(build_id: &str) -> ChunkManifest {
         ChunkManifest {
@@ -117,14 +117,14 @@ mod tests {
 - [ ] **Step 1.2 — Run the test and confirm it fails to compile**
 
 ```bash
-cargo test -p wundler-abs --lib state::tests
+cargo test -p cloudpack-abs --lib state::tests
 ```
 
 Expected: compile error — `signature`, `snapshot_signature`, `set_signature` do not exist.
 
 ### Step 1.3 — Add the field and methods to `AppState`
 
-- [ ] Edit `crates/wundler-abs/src/state.rs`. Replace the existing `AppState` struct and impl block. Final shape:
+- [ ] Edit `crates/cloudpack-abs/src/state.rs`. Replace the existing `AppState` struct and impl block. Final shape:
 
 ```rust
 //! Application state for the Asset Bundling Server.
@@ -153,7 +153,7 @@ use anyhow::{Context, Result};
 use ed25519_dalek::Signature;
 use serde::Serialize;
 use tokio::sync::{Mutex, RwLock};
-use wundler_graph::ChunkManifest;
+use cloudpack_graph::ChunkManifest;
 
 use crate::archive::ManifestArchive;
 use crate::signing::ManifestVerifier;
@@ -307,7 +307,7 @@ impl AppState {
 
 - [ ] **Step 1.4 — Update the `test_state()` helper in `server.rs`**
 
-In `crates/wundler-abs/src/server.rs`, find the test helper around line 611 and add the `signature` field:
+In `crates/cloudpack-abs/src/server.rs`, find the test helper around line 611 and add the `signature` field:
 
 ```rust
         let app = AppState {
@@ -323,15 +323,15 @@ In `crates/wundler-abs/src/server.rs`, find the test helper around line 611 and 
 - [ ] **Step 1.5 — Run the new tests and the existing suite**
 
 ```bash
-cargo test -p wundler-abs --lib
+cargo test -p cloudpack-abs --lib
 ```
 
 Expected: all tests pass, including the three new `state::tests` cases.
 
-- [ ] **Step 1.6 — Run clippy on wundler-abs (zero new warnings policy)**
+- [ ] **Step 1.6 — Run clippy on cloudpack-abs (zero new warnings policy)**
 
 ```bash
-cargo clippy -p wundler-abs --all-targets -- -D warnings
+cargo clippy -p cloudpack-abs --all-targets -- -D warnings
 ```
 
 Expected: clean.
@@ -339,7 +339,7 @@ Expected: clean.
 - [ ] **Step 1.7 — Commit**
 
 ```bash
-git add crates/wundler-abs/src/state.rs crates/wundler-abs/src/server.rs
+git add crates/cloudpack-abs/src/state.rs crates/cloudpack-abs/src/server.rs
 git commit -m "feat(abs): add Signature slot to AppState
 
 - AppState.signature: Arc<RwLock<Option<Signature>>> (None by default)
@@ -352,13 +352,13 @@ No behavior change for existing endpoints; the field is unused until P2 tasks 3 
 
 ---
 
-## Task 2: Create the `wundler-html` crate
+## Task 2: Create the `cloudpack-html` crate
 
 **Files:**
-- Create: `crates/wundler-html/Cargo.toml`
-- Create: `crates/wundler-html/src/lib.rs`
-- Create: `crates/wundler-html/src/sri.rs`
-- Modify: `Cargo.toml` (workspace) — add `crates/wundler-html` to `members`
+- Create: `crates/cloudpack-html/Cargo.toml`
+- Create: `crates/cloudpack-html/src/lib.rs`
+- Create: `crates/cloudpack-html/src/sri.rs`
+- Modify: `Cargo.toml` (workspace) — add `crates/cloudpack-html` to `members`
 
 ### Step 2.1 — Add the crate to the workspace
 
@@ -368,41 +368,41 @@ No behavior change for existing endpoints; the field is unused until P2 tasks 3 
 [workspace]
 resolver = "2"
 members = [
-    "crates/wundler-core",
-    "crates/wundler-cli",
-    "crates/wundler-graph",
-    "crates/wundler-transform",
-    "crates/wundler-pipeline",
-    "crates/wundler-abs",
-    "crates/wundler-pgo",
-    "crates/wundler-bench",
-    "crates/wundler-html",
+    "crates/cloudpack-core",
+    "crates/cloudpack-cli",
+    "crates/cloudpack-graph",
+    "crates/cloudpack-transform",
+    "crates/cloudpack-pipeline",
+    "crates/cloudpack-abs",
+    "crates/cloudpack-pgo",
+    "crates/cloudpack-bench",
+    "crates/cloudpack-html",
 ]
 ```
 
-### Step 2.2 — Create `crates/wundler-html/Cargo.toml`
+### Step 2.2 — Create `crates/cloudpack-html/Cargo.toml`
 
 - [ ] Write:
 
 ```toml
 [package]
-name = "wundler-html"
+name = "cloudpack-html"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-wundler-graph = { path = "../wundler-graph" }
+cloudpack-graph = { path = "../cloudpack-graph" }
 hex = "0.4"
 base64 = "0.22"
 
 [dev-dependencies]
-wundler-core = { path = "../wundler-core" }
+cloudpack-core = { path = "../cloudpack-core" }
 ```
 
 ### Step 2.3 — Write the failing test for `hex_to_sri_b64`
 
-- [ ] Create `crates/wundler-html/src/sri.rs`:
+- [ ] Create `crates/cloudpack-html/src/sri.rs`:
 
 ```rust
 //! Convert hex-encoded SHA-256 digests (the CAS format) into the base64
@@ -417,7 +417,7 @@ use base64::engine::general_purpose::STANDARD;
 /// # Panics
 ///
 /// Panics if `hex` is not valid hexadecimal. CAS hashes are produced by
-/// `wundler-core::ContentHash::from_bytes`, which always emits valid hex, so
+/// `cloudpack-core::ContentHash::from_bytes`, which always emits valid hex, so
 /// this is a programmer-error guard, not a runtime input validator.
 pub fn hex_to_sri_b64(hex: &str) -> String {
     let bytes = hex::decode(hex).expect("CAS hash must be valid hex");
@@ -454,10 +454,10 @@ mod tests {
 }
 ```
 
-- [ ] Create `crates/wundler-html/src/lib.rs` with **just** the module declaration so the test compiles:
+- [ ] Create `crates/cloudpack-html/src/lib.rs` with **just** the module declaration so the test compiles:
 
 ```rust
-//! HTML rendering helpers for Wundler-bundled apps.
+//! HTML rendering helpers for Cloudpack-bundled apps.
 //!
 //! Today this crate exposes a single function — [`render_script_tags`] — which
 //! emits `<script src="…" integrity="sha256-…" crossorigin defer>` tags for
@@ -471,22 +471,22 @@ pub use sri::hex_to_sri_b64;
 ### Step 2.4 — Run the SRI tests; confirm they pass
 
 ```bash
-cargo test -p wundler-html
+cargo test -p cloudpack-html
 ```
 
 Expected: 3 tests pass.
 
 ### Step 2.5 — Write the failing test for `render_script_tags`
 
-- [ ] Append to `crates/wundler-html/src/lib.rs` (at the bottom, before any future code):
+- [ ] Append to `crates/cloudpack-html/src/lib.rs` (at the bottom, before any future code):
 
 ```rust
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use wundler_core::types::ContentHash;
-    use wundler_graph::types::{Chunk, ChunkManifest, LoadCondition};
+    use cloudpack_core::types::ContentHash;
+    use cloudpack_graph::types::{Chunk, ChunkManifest, LoadCondition};
 
     fn manifest_with_two_chunks() -> ChunkManifest {
         let h0 = ContentHash("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string());
@@ -575,17 +575,17 @@ mod tests {
 ### Step 2.6 — Run the failing test
 
 ```bash
-cargo test -p wundler-html
+cargo test -p cloudpack-html
 ```
 
 Expected: compile error — `render_script_tags` is undefined.
 
 ### Step 2.7 — Implement `render_script_tags`
 
-- [ ] Replace `crates/wundler-html/src/lib.rs` with:
+- [ ] Replace `crates/cloudpack-html/src/lib.rs` with:
 
 ```rust
-//! HTML rendering helpers for Wundler-bundled apps.
+//! HTML rendering helpers for Cloudpack-bundled apps.
 //!
 //! Today this crate exposes a single function — [`render_script_tags`] — which
 //! emits `<script src="…" integrity="sha256-…" crossorigin defer>` tags for
@@ -593,7 +593,7 @@ Expected: compile error — `render_script_tags` is undefined.
 
 use std::collections::HashMap;
 
-use wundler_graph::types::{Chunk, ChunkManifest};
+use cloudpack_graph::types::{Chunk, ChunkManifest};
 
 pub mod sri;
 
@@ -661,10 +661,10 @@ integrity=\"sha256-{sri_b64}\" crossorigin defer></script>"
 }
 ```
 
-### Step 2.8 — Run the wundler-html test suite
+### Step 2.8 — Run the cloudpack-html test suite
 
 ```bash
-cargo test -p wundler-html
+cargo test -p cloudpack-html
 ```
 
 Expected: all 6 tests pass.
@@ -672,7 +672,7 @@ Expected: all 6 tests pass.
 ### Step 2.9 — Clippy
 
 ```bash
-cargo clippy -p wundler-html --all-targets -- -D warnings
+cargo clippy -p cloudpack-html --all-targets -- -D warnings
 ```
 
 Expected: clean.
@@ -680,8 +680,8 @@ Expected: clean.
 ### Step 2.10 — Commit
 
 ```bash
-git add Cargo.toml crates/wundler-html
-git commit -m "feat(html): new wundler-html crate with SRI script-tag renderer
+git add Cargo.toml crates/cloudpack-html
+git commit -m "feat(html): new cloudpack-html crate with SRI script-tag renderer
 
 - hex_to_sri_b64(): CAS hex -> base64 (SRI body)
 - render_script_tags(manifest, entry, cdn_base_url): emits
@@ -695,13 +695,13 @@ git commit -m "feat(html): new wundler-html crate with SRI script-tag renderer
 ## Task 3: `GET /manifest/full.json` endpoint
 
 **Files:**
-- Modify: `crates/wundler-abs/Cargo.toml` — add `base64 = "0.22"`
-- Modify: `crates/wundler-abs/src/security/auth.rs` — extend `EXEMPT_PATHS`
-- Modify: `crates/wundler-abs/src/server.rs` — add route + handler
+- Modify: `crates/cloudpack-abs/Cargo.toml` — add `base64 = "0.22"`
+- Modify: `crates/cloudpack-abs/src/security/auth.rs` — extend `EXEMPT_PATHS`
+- Modify: `crates/cloudpack-abs/src/server.rs` — add route + handler
 
-### Step 3.1 — Add `base64` to wundler-abs
+### Step 3.1 — Add `base64` to cloudpack-abs
 
-- [ ] Edit `crates/wundler-abs/Cargo.toml`. Append below `governor = "0.7"`:
+- [ ] Edit `crates/cloudpack-abs/Cargo.toml`. Append below `governor = "0.7"`:
 
 ```toml
 base64 = "0.22"
@@ -710,7 +710,7 @@ hex = "0.4"
 
 ### Step 3.2 — Extend `EXEMPT_PATHS`
 
-- [ ] In `crates/wundler-abs/src/security/auth.rs`, replace the `EXEMPT_PATHS` constant:
+- [ ] In `crates/cloudpack-abs/src/security/auth.rs`, replace the `EXEMPT_PATHS` constant:
 
 ```rust
 /// Routes that always bypass the bearer-token check, regardless of whether
@@ -720,7 +720,7 @@ hex = "0.4"
 /// * `/health`              — liveness probe, no secrets.
 /// * `/sw.js`               — service worker source, served to any origin.
 /// * `/manifest/full.json`  — full manifest JSON; trust anchor is the
-///   detached ed25519 signature in the `X-Wundler-Signature` header, not
+///   detached ed25519 signature in the `X-Cloudpack-Signature` header, not
 ///   the bearer token.
 /// * `/csp-report`          — browsers POST CSP violations unauthenticated.
 const EXEMPT_PATHS: &[&str] = &[
@@ -733,13 +733,13 @@ const EXEMPT_PATHS: &[&str] = &[
 
 ### Step 3.3 — Write the failing integration test for `GET /manifest/full.json`
 
-- [ ] In `crates/wundler-abs/src/server.rs`, append these tests inside `mod tests`:
+- [ ] In `crates/cloudpack-abs/src/server.rs`, append these tests inside `mod tests`:
 
 ```rust
     use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
     use ed25519_dalek::{Signer as _, SigningKey};
     use rand::rngs::OsRng;
-    use wundler_graph::ChunkManifest;
+    use cloudpack_graph::ChunkManifest;
 
     fn unsecured(app: AppState, telemetry: TelemetryLogger) -> axum::Router {
         let security = Arc::new(ResolvedSecurity {
@@ -770,14 +770,14 @@ const EXEMPT_PATHS: &[&str] = &[
         );
         assert_eq!(
             resp.headers()
-                .get("x-wundler-build-id")
-                .expect("X-Wundler-Build-Id present")
+                .get("x-cloudpack-build-id")
+                .expect("X-Cloudpack-Build-Id present")
                 .to_str()
                 .unwrap(),
             "test-build"
         );
         // No signing key configured → no signature header.
-        assert!(resp.headers().get("x-wundler-signature").is_none());
+        assert!(resp.headers().get("x-cloudpack-signature").is_none());
 
         let cache = resp.headers().get(CACHE_CONTROL).unwrap().to_str().unwrap();
         assert!(cache.contains("public"));
@@ -812,8 +812,8 @@ const EXEMPT_PATHS: &[&str] = &[
         assert_eq!(resp.status(), StatusCode::OK);
         let header = resp
             .headers()
-            .get("x-wundler-signature")
-            .expect("X-Wundler-Signature present when signature is stored")
+            .get("x-cloudpack-signature")
+            .expect("X-Cloudpack-Signature present when signature is stored")
             .to_str()
             .unwrap()
             .to_string();
@@ -865,14 +865,14 @@ const EXEMPT_PATHS: &[&str] = &[
 ### Step 3.4 — Run the failing test
 
 ```bash
-cargo test -p wundler-abs --lib server::tests::manifest_full_json_returns_manifest_body_and_build_id_header
+cargo test -p cloudpack-abs --lib server::tests::manifest_full_json_returns_manifest_body_and_build_id_header
 ```
 
 Expected: compile error — `build_router` takes 3 args, not 4; route doesn't exist.
 
 ### Step 3.5 — Update `build_router` and `RouterState`; add the handler
 
-- [ ] In `crates/wundler-abs/src/server.rs`, change the `RouterState` struct:
+- [ ] In `crates/cloudpack-abs/src/server.rs`, change the `RouterState` struct:
 
 ```rust
 /// State threaded through every Axum handler.
@@ -956,7 +956,7 @@ pub async fn run(config: AbsConfig) -> Result<()> {
     let addr = format!("0.0.0.0:{}", config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     let local_addr = listener.local_addr()?;
-    tracing::info!("wundler-abs listening on {}", local_addr);
+    tracing::info!("cloudpack-abs listening on {}", local_addr);
 
     axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await?;
 
@@ -970,12 +970,12 @@ pub async fn run(config: AbsConfig) -> Result<()> {
 /// `GET /manifest/full.json` — return the full manifest JSON.
 ///
 /// Public endpoint (no bearer required). The trust anchor is the detached
-/// signature returned in `X-Wundler-Signature`, not the transport.
+/// signature returned in `X-Cloudpack-Signature`, not the transport.
 ///
 /// Response headers:
 /// * `Content-Type: application/json`
-/// * `X-Wundler-Build-Id: <build_id>`
-/// * `X-Wundler-Signature: <base64(sig.to_bytes())>` (only when a signature
+/// * `X-Cloudpack-Build-Id: <build_id>`
+/// * `X-Cloudpack-Signature: <base64(sig.to_bytes())>` (only when a signature
 ///    is currently stored in `AppState`).
 /// * `Cache-Control: public, max-age={ttl_seconds}, immutable`
 async fn get_manifest_full_json(State(state): State<RouterState>) -> Response {
@@ -1014,7 +1014,7 @@ async fn get_manifest_full_json(State(state): State<RouterState>) -> Response {
     let mut resp = Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/json")
-        .header("x-wundler-build-id", build_id_header)
+        .header("x-cloudpack-build-id", build_id_header)
         .header(header::CACHE_CONTROL, cache_value)
         .body(axum::body::Body::from(body))
         .expect("static-shape response must build");
@@ -1022,7 +1022,7 @@ async fn get_manifest_full_json(State(state): State<RouterState>) -> Response {
     if let Some(sig) = sig {
         let b64 = base64::engine::general_purpose::STANDARD.encode(sig.to_bytes());
         if let Ok(hv) = axum::http::HeaderValue::from_str(&b64) {
-            resp.headers_mut().insert("x-wundler-signature", hv);
+            resp.headers_mut().insert("x-cloudpack-signature", hv);
         }
     }
 
@@ -1053,15 +1053,15 @@ async fn get_manifest_full_json(State(state): State<RouterState>) -> Response {
 ### Step 3.6 — Run the new tests
 
 ```bash
-cargo test -p wundler-abs --lib server::tests::manifest_full_json
+cargo test -p cloudpack-abs --lib server::tests::manifest_full_json
 ```
 
 Expected: all three `manifest_full_json_*` tests pass.
 
-### Step 3.7 — Full wundler-abs suite
+### Step 3.7 — Full cloudpack-abs suite
 
 ```bash
-cargo test -p wundler-abs
+cargo test -p cloudpack-abs
 ```
 
 Expected: clean.
@@ -1069,7 +1069,7 @@ Expected: clean.
 ### Step 3.8 — Clippy
 
 ```bash
-cargo clippy -p wundler-abs --all-targets -- -D warnings
+cargo clippy -p cloudpack-abs --all-targets -- -D warnings
 ```
 
 Expected: clean.
@@ -1077,11 +1077,11 @@ Expected: clean.
 ### Step 3.9 — Commit
 
 ```bash
-git add crates/wundler-abs
+git add crates/cloudpack-abs
 git commit -m "feat(abs): GET /manifest/full.json public endpoint
 
-- Returns full manifest JSON with X-Wundler-Build-Id header
-- X-Wundler-Signature header (base64) when a signature is stored
+- Returns full manifest JSON with X-Cloudpack-Build-Id header
+- X-Cloudpack-Signature header (base64) when a signature is stored
 - Cache-Control: public, max-age=<ttl>, immutable
 - Exempt from bearer auth (EXEMPT_PATHS)
 - build_router signature gains optional ManifestSigner arg (Task 5 wires it in)"
@@ -1092,13 +1092,13 @@ git commit -m "feat(abs): GET /manifest/full.json public endpoint
 ## Task 4: CSP module + `POST /csp-report`
 
 **Files:**
-- Create: `crates/wundler-abs/src/security/csp.rs`
-- Modify: `crates/wundler-abs/src/security/mod.rs` — declare module
-- Modify: `crates/wundler-abs/src/server.rs` — register route + handler
+- Create: `crates/cloudpack-abs/src/security/csp.rs`
+- Modify: `crates/cloudpack-abs/src/security/mod.rs` — declare module
+- Modify: `crates/cloudpack-abs/src/server.rs` — register route + handler
 
 ### Step 4.1 — Declare the new module
 
-- [ ] In `crates/wundler-abs/src/security/mod.rs`, change the module declarations near the top to:
+- [ ] In `crates/cloudpack-abs/src/security/mod.rs`, change the module declarations near the top to:
 
 ```rust
 pub mod auth;
@@ -1109,7 +1109,7 @@ pub mod ratelimit;
 
 ### Step 4.2 — Write the failing unit tests for `csp.rs`
 
-- [ ] Create `crates/wundler-abs/src/security/csp.rs`:
+- [ ] Create `crates/cloudpack-abs/src/security/csp.rs`:
 
 ```rust
 //! Content-Security-Policy helpers.
@@ -1122,7 +1122,7 @@ pub mod ratelimit;
 use axum::http::{HeaderName, HeaderValue};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use wundler_graph::ChunkManifest;
+use cloudpack_graph::ChunkManifest;
 
 /// Convert a hex-encoded SHA-256 digest (CAS format) to the base64 form
 /// that CSP `script-src` directives expect inside `'sha256-…'`.
@@ -1130,7 +1130,7 @@ use wundler_graph::ChunkManifest;
 /// # Panics
 ///
 /// Panics if `hex` is not valid hexadecimal — CAS hashes are produced by
-/// `wundler-core::ContentHash::from_bytes` and are always valid hex.
+/// `cloudpack-core::ContentHash::from_bytes` and are always valid hex.
 pub fn hex_to_sri_b64(hex: &str) -> String {
     let bytes = hex::decode(hex).expect("CAS hash must be valid hex");
     STANDARD.encode(bytes)
@@ -1173,8 +1173,8 @@ pub fn build_csp_report_only(manifest: &ChunkManifest) -> (HeaderName, HeaderVal
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use wundler_core::types::ContentHash;
-    use wundler_graph::types::{Chunk, ChunkManifest, LoadCondition};
+    use cloudpack_core::types::ContentHash;
+    use cloudpack_graph::types::{Chunk, ChunkManifest, LoadCondition};
 
     fn manifest_with_chunks(hashes: &[&str]) -> ChunkManifest {
         let chunks = hashes
@@ -1238,14 +1238,14 @@ mod tests {
 ### Step 4.3 — Run the CSP unit tests
 
 ```bash
-cargo test -p wundler-abs --lib security::csp
+cargo test -p cloudpack-abs --lib security::csp
 ```
 
 Expected: 4 tests pass.
 
 ### Step 4.4 — Write the failing integration tests for `POST /csp-report`
 
-- [ ] In `crates/wundler-abs/src/server.rs`, append to `mod tests`:
+- [ ] In `crates/cloudpack-abs/src/server.rs`, append to `mod tests`:
 
 ```rust
     #[tokio::test]
@@ -1322,14 +1322,14 @@ Expected: 4 tests pass.
 ### Step 4.5 — Run the failing test
 
 ```bash
-cargo test -p wundler-abs --lib server::tests::csp_report
+cargo test -p cloudpack-abs --lib server::tests::csp_report
 ```
 
 Expected: route 404s (not registered yet).
 
 ### Step 4.6 — Add the handler + route
 
-- [ ] In `crates/wundler-abs/src/server.rs`, add the handler. Use a JSONL line via `tracing` (we don't need a separate sink — telemetry log is for `TelemetryEvent`s, not browser reports):
+- [ ] In `crates/cloudpack-abs/src/server.rs`, add the handler. Use a JSONL line via `tracing` (we don't need a separate sink — telemetry log is for `TelemetryEvent`s, not browser reports):
 
 ```rust
 /// `POST /csp-report` — sink for browser CSP violation reports.
@@ -1379,7 +1379,7 @@ async fn post_csp_report(body: axum::body::Body) -> Response {
 ### Step 4.7 — Run the CSP integration tests
 
 ```bash
-cargo test -p wundler-abs --lib server::tests::csp_report
+cargo test -p cloudpack-abs --lib server::tests::csp_report
 ```
 
 Expected: 3 tests pass.
@@ -1387,8 +1387,8 @@ Expected: 3 tests pass.
 ### Step 4.8 — Full suite + clippy
 
 ```bash
-cargo test -p wundler-abs
-cargo clippy -p wundler-abs --all-targets -- -D warnings
+cargo test -p cloudpack-abs
+cargo clippy -p cloudpack-abs --all-targets -- -D warnings
 ```
 
 Expected: clean.
@@ -1396,11 +1396,11 @@ Expected: clean.
 ### Step 4.9 — Commit
 
 ```bash
-git add crates/wundler-abs
+git add crates/cloudpack-abs
 git commit -m "feat(abs): CSP report-only header builder + POST /csp-report sink
 
 - security/csp.rs: build_csp_report_only(manifest) returns header tuple
-- hex_to_sri_b64() helper (local to ABS; mirrors wundler-html)
+- hex_to_sri_b64() helper (local to ABS; mirrors cloudpack-html)
 - POST /csp-report accepts <=8 KiB bodies, logs via tracing, returns 200
 - Bodies >8 KiB rejected with 413
 - Route is exempt from bearer auth (browsers send unauthenticated)"
@@ -1411,12 +1411,12 @@ git commit -m "feat(abs): CSP report-only header builder + POST /csp-report sink
 ## Task 5: Wire signing into `POST /reload` + cross-language contract test
 
 **Files:**
-- Modify: `crates/wundler-abs/src/server.rs` — load signer in `run()`, re-sign in `post_reload`
-- Create: `crates/wundler-abs/tests/signing_contract_test.rs`
+- Modify: `crates/cloudpack-abs/src/server.rs` — load signer in `run()`, re-sign in `post_reload`
+- Create: `crates/cloudpack-abs/tests/signing_contract_test.rs`
 
 ### Step 5.1 — Write the failing integration test for re-signing on reload
 
-- [ ] In `crates/wundler-abs/src/server.rs`, append to `mod tests`:
+- [ ] In `crates/cloudpack-abs/src/server.rs`, append to `mod tests`:
 
 ```rust
     use base64::Engine as _;
@@ -1480,7 +1480,7 @@ git commit -m "feat(abs): CSP report-only header builder + POST /csp-report sink
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let header = resp.headers().get("x-wundler-signature").unwrap().to_str().unwrap();
+        let header = resp.headers().get("x-cloudpack-signature").unwrap().to_str().unwrap();
         let decoded = base64::engine::general_purpose::STANDARD.decode(header).unwrap();
         assert_eq!(decoded.as_slice(), sig.to_bytes().as_slice());
     }
@@ -1526,14 +1526,14 @@ git commit -m "feat(abs): CSP report-only header builder + POST /csp-report sink
 ### Step 5.2 — Run the failing test
 
 ```bash
-cargo test -p wundler-abs --lib server::tests::reload_resigns
+cargo test -p cloudpack-abs --lib server::tests::reload_resigns
 ```
 
 Expected: `app.snapshot_signature()` returns `None` — the handler doesn't sign yet.
 
 ### Step 5.3 — Implement re-signing in `post_reload`
 
-- [ ] In `crates/wundler-abs/src/server.rs`, replace the existing `post_reload` function with this version (adds the re-sign block at the end):
+- [ ] In `crates/cloudpack-abs/src/server.rs`, replace the existing `post_reload` function with this version (adds the re-sign block at the end):
 
 ```rust
 async fn post_reload(
@@ -1660,7 +1660,7 @@ pub async fn run(config: AbsConfig) -> Result<()> {
     let addr = format!("0.0.0.0:{}", config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     let local_addr = listener.local_addr()?;
-    tracing::info!("wundler-abs listening on {}", local_addr);
+    tracing::info!("cloudpack-abs listening on {}", local_addr);
 
     axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await?;
 
@@ -1671,14 +1671,14 @@ pub async fn run(config: AbsConfig) -> Result<()> {
 ### Step 5.4 — Run the reload tests
 
 ```bash
-cargo test -p wundler-abs --lib server::tests::reload_
+cargo test -p cloudpack-abs --lib server::tests::reload_
 ```
 
 Expected: both new reload tests pass.
 
 ### Step 5.5 — Write the cross-language contract test (Rust half)
 
-- [ ] Create `crates/wundler-abs/tests/signing_contract_test.rs`:
+- [ ] Create `crates/cloudpack-abs/tests/signing_contract_test.rs`:
 
 ```rust
 //! Cross-language contract test for `manifest_signature_bytes`.
@@ -1710,9 +1710,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use base64::Engine as _;
-use wundler_abs::signing::{generate_keypair, manifest_signature_bytes, ManifestSigner, ManifestVerifier};
-use wundler_core::types::ContentHash;
-use wundler_graph::types::{Chunk, ChunkManifest, LoadCondition};
+use cloudpack_abs::signing::{generate_keypair, manifest_signature_bytes, ManifestSigner, ManifestVerifier};
+use cloudpack_core::types::ContentHash;
+use cloudpack_graph::types::{Chunk, ChunkManifest, LoadCondition};
 
 /// A small but representative manifest:
 /// * two chunks
@@ -1817,7 +1817,7 @@ fn round_trip_sign_then_verify_succeeds() {
 /// Emit fixture artifacts to `target/contract-fixtures/` for the future
 /// Node-side verifier. Marked `#[ignore]` by default so CI doesn't pollute
 /// `target/` on every run; the JS PR will run it explicitly with
-/// `cargo test -p wundler-abs --test signing_contract_test -- --ignored`.
+/// `cargo test -p cloudpack-abs --test signing_contract_test -- --ignored`.
 #[test]
 #[ignore]
 fn emit_fixture_artifacts() {
@@ -1854,7 +1854,7 @@ fn emit_fixture_artifacts() {
 
 > Note: the `#[ignore]` test uses `env!("CARGO_TARGET_TMPDIR")` which is set automatically by cargo for integration tests; no extra config needed. The non-ignored tests do *not* touch the filesystem and run in normal CI.
 
-- [ ] Add `hex` and `wundler-core` to wundler-abs `[dev-dependencies]` so the test compiles. Edit `crates/wundler-abs/Cargo.toml`'s `[dev-dependencies]` section:
+- [ ] Add `hex` and `cloudpack-core` to cloudpack-abs `[dev-dependencies]` so the test compiles. Edit `crates/cloudpack-abs/Cargo.toml`'s `[dev-dependencies]` section:
 
 ```toml
 [dev-dependencies]
@@ -1863,13 +1863,13 @@ tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5", features = ["util"] }
 hex = "0.4"
-wundler-core = { path = "../wundler-core" }
+cloudpack-core = { path = "../cloudpack-core" }
 ```
 
 ### Step 5.6 — Run the contract test
 
 ```bash
-cargo test -p wundler-abs --test signing_contract_test
+cargo test -p cloudpack-abs --test signing_contract_test
 ```
 
 Expected: 4 tests pass (the `#[ignore]` one is skipped).
@@ -1877,7 +1877,7 @@ Expected: 4 tests pass (the `#[ignore]` one is skipped).
 Then verify the emit path also works:
 
 ```bash
-cargo test -p wundler-abs --test signing_contract_test -- --ignored
+cargo test -p cloudpack-abs --test signing_contract_test -- --ignored
 ```
 
 Expected: 1 ignored test passes; prints the fixture directory.
@@ -1895,7 +1895,7 @@ Expected: clean.
 ### Step 5.8 — Commit
 
 ```bash
-git add crates/wundler-abs crates/wundler-html
+git add crates/cloudpack-abs crates/cloudpack-html
 git commit -m "feat(abs): re-sign manifest on /reload + cross-language contract test
 
 - post_reload now re-signs the swapped-in manifest when a signing key is
@@ -1912,19 +1912,19 @@ git commit -m "feat(abs): re-sign manifest on /reload + cross-language contract 
 
 Run all of these from the repo root and confirm green output.
 
-- [ ] `cargo test -p wundler-abs` — all unit + integration tests pass
-- [ ] `cargo test -p wundler-html` — 6 tests pass
+- [ ] `cargo test -p cloudpack-abs` — all unit + integration tests pass
+- [ ] `cargo test -p cloudpack-html` — 6 tests pass
 - [ ] `cargo test --workspace` — full workspace green
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings` — no warnings
 - [ ] `cargo fmt --all -- --check` — clean
-- [ ] `GET /manifest/full.json` (via integration test `manifest_full_json_returns_manifest_body_and_build_id_header`) returns 200, JSON body, `X-Wundler-Build-Id` header, `Cache-Control: public, max-age=<ttl>, immutable`
-- [ ] When a signing key is configured and `/reload` succeeded, `X-Wundler-Signature` is present and base64-decodes to 64 bytes (`reload_resigns_manifest_when_signer_configured`)
-- [ ] When no signing key is configured, `X-Wundler-Signature` is absent (`manifest_full_json_returns_manifest_body_and_build_id_header`)
+- [ ] `GET /manifest/full.json` (via integration test `manifest_full_json_returns_manifest_body_and_build_id_header`) returns 200, JSON body, `X-Cloudpack-Build-Id` header, `Cache-Control: public, max-age=<ttl>, immutable`
+- [ ] When a signing key is configured and `/reload` succeeded, `X-Cloudpack-Signature` is present and base64-decodes to 64 bytes (`reload_resigns_manifest_when_signer_configured`)
+- [ ] When no signing key is configured, `X-Cloudpack-Signature` is absent (`manifest_full_json_returns_manifest_body_and_build_id_header`)
 - [ ] `POST /csp-report` with an 8 KiB+1 byte body returns `413 Payload Too Large` (`csp_report_rejects_oversize_body_with_413`)
 - [ ] `POST /csp-report` with a small JSON body returns `200 OK` and logs via `tracing` (`csp_report_accepts_small_body_and_returns_200`)
 - [ ] `POST /csp-report` and `GET /manifest/full.json` bypass bearer auth even when the rest of the router requires it (`csp_report_bypasses_bearer_auth`, `manifest_full_json_bypasses_bearer_auth`)
-- [ ] `wundler_html::render_script_tags` emits `<script src integrity="sha256-<b64>" crossorigin defer>` per chunk in entry order
-- [ ] `wundler_html::hex_to_sri_b64` converts the known sha256("") hash to `47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=`
+- [ ] `cloudpack_html::render_script_tags` emits `<script src integrity="sha256-<b64>" crossorigin defer>` per chunk in entry order
+- [ ] `cloudpack_html::hex_to_sri_b64` converts the known sha256("") hash to `47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=`
 - [ ] `manifest_signature_bytes` produces the byte-for-byte fixture in `signing_contract_test::signing_bytes_are_byte_for_byte_stable` — this is the cross-language contract anchor
 
 ---
@@ -1937,7 +1937,7 @@ Run all of these from the repo root and confirm green output.
 - `GET /manifest/full.json` with all four headers → Task 3
 - `POST /csp-report` (8 KiB cap, exempt, 200/413) → Task 4
 - `security/csp.rs` (`build_csp_report_only`, `hex_to_sri_b64`) → Task 4
-- `wundler-html` crate (`render_script_tags`, `sri::hex_to_sri_b64`, startup-invariant panic) → Task 2
+- `cloudpack-html` crate (`render_script_tags`, `sri::hex_to_sri_b64`, startup-invariant panic) → Task 2
 - Re-sign on `POST /reload` → Task 5
 - Rust half of contract test (`manifest_signature_bytes` byte stability) → Task 5
 - All exemptions in `EXEMPT_PATHS` → Task 3 (`/manifest/full.json`, `/csp-report`)
@@ -1950,6 +1950,6 @@ Run all of these from the repo root and confirm green output.
 - `build_router(app, telemetry, security, signer)` — 4-arg form used consistently in Task 3, Task 4, and Task 5 (`router_with_ip` helper updated in Task 3.5, `unsecured` helper introduced in Task 3.3).
 - `RouterState { app, telemetry, signer }` — `signer` field added in Task 3.5, consumed in Task 5.3.
 - `AppState.set_signature(Option<Signature>)` / `snapshot_signature() -> Option<Signature>` — defined in Task 1.3, used in Task 3, Task 5.
-- `hex_to_sri_b64` exists in both `wundler_html::sri` (Task 2.3) and `wundler_abs::security::csp` (Task 4.2). This is intentional duplication — ABS doesn't depend on wundler-html and we don't want to add a path dep just for one helper. Both implementations have the same known-answer test against `sha256("")`.
+- `hex_to_sri_b64` exists in both `cloudpack_html::sri` (Task 2.3) and `cloudpack_abs::security::csp` (Task 4.2). This is intentional duplication — ABS doesn't depend on cloudpack-html and we don't want to add a path dep just for one helper. Both implementations have the same known-answer test against `sha256("")`.
 
 **Placeholder scan:** every code block is complete; every command has expected output stated.

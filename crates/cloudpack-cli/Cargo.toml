@@ -1,0 +1,30 @@
+[package]
+name = "cloudpack-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "cloudpack"
+path = "src/main.rs"
+
+[dependencies]
+cloudpack-core = { path = "../cloudpack-core" }
+cloudpack-graph = { path = "../cloudpack-graph" }
+cloudpack-transform = { path = "../cloudpack-transform" }
+cloudpack-pipeline = { path = "../cloudpack-pipeline" }
+cloudpack-abs = { path = "../cloudpack-abs" }
+cloudpack-pgo = { path = "../cloudpack-pgo" }
+cloudpack-bench = { path = "../cloudpack-bench" }
+cloudpack-dev = { path = "../cloudpack-dev" }
+clap = { version = "4", features = ["derive"] }
+anyhow = { workspace = true }
+serde = { workspace = true }
+indicatif = "0.17"
+tokio = { version = "1", features = ["full"] }
+serde_json = "1"
+toml = "0.8"
+walkdir = "2"
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"

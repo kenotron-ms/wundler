@@ -4,15 +4,15 @@
 
 **Plan:** 2 of 5
 **Date:** 2026-05-13
-**Owner:** Wundler core
+**Owner:** Cloudpack core
 **Status:** Ready to execute
-**Depends on:** Plan 1 (Summarizer, `wundler-core`)
+**Depends on:** Plan 1 (Summarizer, `cloudpack-core`)
 
-**Goal:** Take the `Vec<BundleGraphNode>` produced by the Summarizer and turn it into a chunked, reachability-pruned, dead-code-eliminated `ChunkManifest`. The Analyzer is the second stage of the Wundler pipeline; its output is the immutable description that downstream emitters consume.
+**Goal:** Take the `Vec<BundleGraphNode>` produced by the Summarizer and turn it into a chunked, reachability-pruned, dead-code-eliminated `ChunkManifest`. The Analyzer is the second stage of the Cloudpack pipeline; its output is the immutable description that downstream emitters consume.
 
-**Architecture:** A new crate `wundler-graph` with five focused modules — `types` (chunk/manifest DTOs), `graph` (adjacency builder + Tarjan SCC), `reachability` (BFS pruning), `dce` (call-edge dead-export detection), `chunks` (route-based splitter + commons extraction), and `manifest` (assembly + content hashing). One top-level `GraphAnalyzer::analyze()` wires them together. A `wundler analyze` CLI subcommand in `wundler-cli` exposes the pipeline at the command line.
+**Architecture:** A new crate `cloudpack-graph` with five focused modules — `types` (chunk/manifest DTOs), `graph` (adjacency builder + Tarjan SCC), `reachability` (BFS pruning), `dce` (call-edge dead-export detection), `chunks` (route-based splitter + commons extraction), and `manifest` (assembly + content hashing). One top-level `GraphAnalyzer::analyze()` wires them together. A `cloudpack analyze` CLI subcommand in `cloudpack-cli` exposes the pipeline at the command line.
 
-**Tech Stack:** Rust (edition 2021), `petgraph 0.6` (Tarjan SCC, BFS traversal helpers), `sha2 0.10` + `hex 0.4` (chunk and build hashing), `serde` + `serde_json` (manifest JSON), `indexmap 2` (deterministic chunk-member ordering), `anyhow` + `thiserror` (error handling), `wundler-core` (re-uses `BundleGraphNode`, `ContentHash`, `ModuleSummary`, `Import`, `ImportKind`, `CallEdge`).
+**Tech Stack:** Rust (edition 2021), `petgraph 0.6` (Tarjan SCC, BFS traversal helpers), `sha2 0.10` + `hex 0.4` (chunk and build hashing), `serde` + `serde_json` (manifest JSON), `indexmap 2` (deterministic chunk-member ordering), `anyhow` + `thiserror` (error handling), `cloudpack-core` (re-uses `BundleGraphNode`, `ContentHash`, `ModuleSummary`, `Import`, `ImportKind`, `CallEdge`).
 
 ---
 
@@ -29,35 +29,35 @@
 | Commons extraction (modules in ≥ N chunks) | Co-request scoring (PGO, Plan 5) |
 | Deterministic chunk and build hashing | Adaptive Bundle Service (Plan 4) |
 | `ChunkManifest` JSON round-trip | Service worker / CDN integration |
-| `wundler analyze` CLI subcommand | `wundler build` (Plan 3) |
+| `cloudpack analyze` CLI subcommand | `cloudpack build` (Plan 3) |
 
 ## Pre-Flight Verification
 
 Before starting, confirm Plan 1 state:
 
 ```bash
-cd /Users/ken/workspace/ms/wundler
-cargo build -p wundler-core
-cargo test -p wundler-core --lib
+cd /Users/ken/workspace/ms/cloudpack
+cargo build -p cloudpack-core
+cargo test -p cloudpack-core --lib
 ```
 
 Both must succeed. Verify required types exist:
 
 ```bash
-grep -rn "pub struct BundleGraphNode" crates/wundler-core/src
-grep -rn "pub struct ModuleSummary"   crates/wundler-core/src
-grep -rn "pub struct ContentHash"     crates/wundler-core/src
-grep -rn "pub struct Import"          crates/wundler-core/src
-grep -rn "pub enum ImportKind"        crates/wundler-core/src
-grep -rn "pub struct CallEdge"        crates/wundler-core/src
-grep -rn "pub fn summarize_directory" crates/wundler-core/src
+grep -rn "pub struct BundleGraphNode" crates/cloudpack-core/src
+grep -rn "pub struct ModuleSummary"   crates/cloudpack-core/src
+grep -rn "pub struct ContentHash"     crates/cloudpack-core/src
+grep -rn "pub struct Import"          crates/cloudpack-core/src
+grep -rn "pub enum ImportKind"        crates/cloudpack-core/src
+grep -rn "pub struct CallEdge"        crates/cloudpack-core/src
+grep -rn "pub fn summarize_directory" crates/cloudpack-core/src
 ```
 
 Each `grep` must return at least one match. If any type or function is missing, stop and resolve before continuing.
 
-## Types Used Directly From `wundler-core` (Plan 1)
+## Types Used Directly From `cloudpack-core` (Plan 1)
 
-This plan does **not** redefine these — it imports them from `wundler_core::types`:
+This plan does **not** redefine these — it imports them from `cloudpack_core::types`:
 
 ```rust
 pub struct ContentHash(pub String);                   // SHA-256 hex; ContentHash::of(&str) -> Self
@@ -75,7 +75,7 @@ pub struct BundleGraphNode { id: ContentHash, path: String, summary: ModuleSumma
 
 ## Task Index
 
-1. Register `wundler-graph` in the workspace; create skeleton crate
+1. Register `cloudpack-graph` in the workspace; create skeleton crate
 2. `types.rs` — `ChunkId`, `LoadCondition`, `Chunk`, `ChunkManifest` + JSON round-trip helpers
 3. `graph.rs` — build path-indexed adjacency map (ContentHash → Vec<ContentHash>) from `&[BundleGraphNode]`
 4. `graph.rs` — Tarjan SCC via `petgraph::algo::tarjan_scc`; detect circular import groups
@@ -89,28 +89,28 @@ pub struct BundleGraphNode { id: ContentHash, path: String, summary: ModuleSumma
 12. `manifest.rs` — `ChunkManifest` assembly (`build_id`, `entry_chunks`, `module_index`)
 13. `manifest.rs` — `to_json` / `from_json` round-trip
 14. `analyzer.rs` — `GraphAnalyzer::analyze()` wires summarize-output → manifest; integration test on `multi_entry.json`
-15. `wundler-cli` — `wundler analyze <dir> --entry route=path` subcommand
+15. `cloudpack-cli` — `cloudpack analyze <dir> --entry route=path` subcommand
 
 Each task is TDD-shaped: failing test first, run-and-confirm-failure, minimal implementation, run-and-confirm-pass, commit.
 
 ---
 
-## Task 1 — Register `wundler-graph` in the workspace; create skeleton crate
+## Task 1 — Register `cloudpack-graph` in the workspace; create skeleton crate
 
 **Files:**
 - Modify: `Cargo.toml`
-- Create: `crates/wundler-graph/Cargo.toml`
-- Create: `crates/wundler-graph/src/lib.rs`
-- Test:   `crates/wundler-graph/tests/smoke.rs`
+- Create: `crates/cloudpack-graph/Cargo.toml`
+- Create: `crates/cloudpack-graph/src/lib.rs`
+- Test:   `crates/cloudpack-graph/tests/smoke.rs`
 
 ### Step 1: Write the failing test
 
-- [ ] Create `crates/wundler-graph/tests/smoke.rs`:
+- [ ] Create `crates/cloudpack-graph/tests/smoke.rs`:
 
 ```rust
 #[test]
 fn crate_loads() {
-    assert_eq!(wundler_graph::hello(), "wundler-graph");
+    assert_eq!(cloudpack_graph::hello(), "cloudpack-graph");
 }
 ```
 
@@ -119,22 +119,22 @@ fn crate_loads() {
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test smoke
+cargo test -p cloudpack-graph --test smoke
 ```
 
-Expected failure: `error: package ID specification 'wundler-graph' did not match any packages` — the crate does not exist yet.
+Expected failure: `error: package ID specification 'cloudpack-graph' did not match any packages` — the crate does not exist yet.
 
 ### Step 3: Write minimal implementation
 
-- [ ] Modify `Cargo.toml` (workspace root) so `[workspace] members` contains `crates/wundler-graph`:
+- [ ] Modify `Cargo.toml` (workspace root) so `[workspace] members` contains `crates/cloudpack-graph`:
 
 ```toml
 [workspace]
 resolver = "2"
 members = [
-    "crates/wundler-core",
-    "crates/wundler-cli",
-    "crates/wundler-graph",
+    "crates/cloudpack-core",
+    "crates/cloudpack-cli",
+    "crates/cloudpack-graph",
 ]
 
 [workspace.package]
@@ -149,17 +149,17 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ```
 
-- [ ] Create `crates/wundler-graph/Cargo.toml`:
+- [ ] Create `crates/cloudpack-graph/Cargo.toml`:
 
 ```toml
 [package]
-name = "wundler-graph"
+name = "cloudpack-graph"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
 
 [dependencies]
-wundler-core = { path = "../wundler-core" }
+cloudpack-core = { path = "../cloudpack-core" }
 petgraph = "0.6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -173,15 +173,15 @@ thiserror = "2"
 tempfile = "3"
 ```
 
-- [ ] Create `crates/wundler-graph/src/lib.rs`:
+- [ ] Create `crates/cloudpack-graph/src/lib.rs`:
 
 ```rust
-//! Wundler Graph Analyzer — consumes the Summarizer's `Vec<BundleGraphNode>`
+//! Cloudpack Graph Analyzer — consumes the Summarizer's `Vec<BundleGraphNode>`
 //! and produces a chunked, reachability-pruned, dead-code-eliminated
 //! `ChunkManifest` describing one bundle-graph view.
 
 pub fn hello() -> &'static str {
-    "wundler-graph"
+    "cloudpack-graph"
 }
 ```
 
@@ -190,7 +190,7 @@ pub fn hello() -> &'static str {
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test smoke
+cargo test -p cloudpack-graph --test smoke
 ```
 
 Expected: `test result: ok. 1 passed; 0 failed`.
@@ -200,8 +200,8 @@ Expected: `test result: ok. 1 passed; 0 failed`.
 - [ ] Run:
 
 ```bash
-git add Cargo.toml crates/wundler-graph
-git commit -m "wundler-graph: register crate in workspace, add skeleton"
+git add Cargo.toml crates/cloudpack-graph
+git commit -m "cloudpack-graph: register crate in workspace, add skeleton"
 ```
 
 ---
@@ -209,18 +209,18 @@ git commit -m "wundler-graph: register crate in workspace, add skeleton"
 ## Task 2 — `types.rs`: `ChunkId`, `LoadCondition`, `Chunk`, `ChunkManifest`
 
 **Files:**
-- Create: `crates/wundler-graph/src/types.rs`
-- Modify: `crates/wundler-graph/src/lib.rs`
-- Test:   `crates/wundler-graph/tests/types_shape.rs`
+- Create: `crates/cloudpack-graph/src/types.rs`
+- Modify: `crates/cloudpack-graph/src/lib.rs`
+- Test:   `crates/cloudpack-graph/tests/types_shape.rs`
 
 ### Step 1: Write the failing test
 
-- [ ] Create `crates/wundler-graph/tests/types_shape.rs`:
+- [ ] Create `crates/cloudpack-graph/tests/types_shape.rs`:
 
 ```rust
 use std::collections::HashMap;
-use wundler_core::types::ContentHash;
-use wundler_graph::types::{Chunk, ChunkManifest, LoadCondition};
+use cloudpack_core::types::ContentHash;
+use cloudpack_graph::types::{Chunk, ChunkManifest, LoadCondition};
 
 #[test]
 fn chunk_construction_populates_all_fields() {
@@ -296,21 +296,21 @@ fn from_json_rejects_invalid_payload() {
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test types_shape
+cargo test -p cloudpack-graph --test types_shape
 ```
 
-Expected failure: `error[E0432]: unresolved import wundler_graph::types` — the module does not exist yet.
+Expected failure: `error[E0432]: unresolved import cloudpack_graph::types` — the module does not exist yet.
 
 ### Step 3: Write minimal implementation
 
-- [ ] Create `crates/wundler-graph/src/types.rs`:
+- [ ] Create `crates/cloudpack-graph/src/types.rs`:
 
 ```rust
 //! Chunk and manifest DTOs produced by `GraphAnalyzer`.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use wundler_core::types::ContentHash;
+use cloudpack_core::types::ContentHash;
 
 /// Stable identifier for a chunk. Strings keep the manifest JSON readable.
 pub type ChunkId = String;
@@ -372,17 +372,17 @@ impl ChunkManifest {
 }
 ```
 
-- [ ] Modify `crates/wundler-graph/src/lib.rs`:
+- [ ] Modify `crates/cloudpack-graph/src/lib.rs`:
 
 ```rust
-//! Wundler Graph Analyzer — consumes the Summarizer's `Vec<BundleGraphNode>`
+//! Cloudpack Graph Analyzer — consumes the Summarizer's `Vec<BundleGraphNode>`
 //! and produces a chunked, reachability-pruned, dead-code-eliminated
 //! `ChunkManifest` describing one bundle-graph view.
 
 pub mod types;
 
 pub fn hello() -> &'static str {
-    "wundler-graph"
+    "cloudpack-graph"
 }
 ```
 
@@ -391,7 +391,7 @@ pub fn hello() -> &'static str {
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test types_shape
+cargo test -p cloudpack-graph --test types_shape
 ```
 
 Expected: `test result: ok. 4 passed; 0 failed`.
@@ -401,8 +401,8 @@ Expected: `test result: ok. 4 passed; 0 failed`.
 - [ ] Run:
 
 ```bash
-git add crates/wundler-graph
-git commit -m "wundler-graph: define ChunkId, LoadCondition, Chunk, ChunkManifest with JSON round-trip"
+git add crates/cloudpack-graph
+git commit -m "cloudpack-graph: define ChunkId, LoadCondition, Chunk, ChunkManifest with JSON round-trip"
 ```
 
 ---
@@ -410,20 +410,20 @@ git commit -m "wundler-graph: define ChunkId, LoadCondition, Chunk, ChunkManifes
 ## Task 3 — `graph.rs`: build path-indexed adjacency map
 
 **Files:**
-- Create: `crates/wundler-graph/src/graph.rs`
-- Modify: `crates/wundler-graph/src/lib.rs`
-- Test:   `crates/wundler-graph/tests/graph_adjacency.rs`
+- Create: `crates/cloudpack-graph/src/graph.rs`
+- Modify: `crates/cloudpack-graph/src/lib.rs`
+- Test:   `crates/cloudpack-graph/tests/graph_adjacency.rs`
 
 ### Step 1: Write the failing test
 
-- [ ] Create `crates/wundler-graph/tests/graph_adjacency.rs`:
+- [ ] Create `crates/cloudpack-graph/tests/graph_adjacency.rs`:
 
 ```rust
-use wundler_core::types::{
+use cloudpack_core::types::{
     BundleGraphNode, ContentHash, Export, ExportKind, Import, ImportKind, ModuleSummary,
     SideEffectMarker,
 };
-use wundler_graph::graph::build_adjacency;
+use cloudpack_graph::graph::build_adjacency;
 
 fn node(path: &str, imports: Vec<(&str, ImportKind)>) -> BundleGraphNode {
     BundleGraphNode {
@@ -514,14 +514,14 @@ fn adjacency_preserves_duplicate_edges_at_most_once() {
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test graph_adjacency
+cargo test -p cloudpack-graph --test graph_adjacency
 ```
 
-Expected failure: `error[E0432]: unresolved import wundler_graph::graph`.
+Expected failure: `error[E0432]: unresolved import cloudpack_graph::graph`.
 
 ### Step 3: Write minimal implementation
 
-- [ ] Create `crates/wundler-graph/src/graph.rs`:
+- [ ] Create `crates/cloudpack-graph/src/graph.rs`:
 
 ```rust
 //! Adjacency-map construction over `[BundleGraphNode]` and SCC detection
@@ -530,7 +530,7 @@ Expected failure: `error[E0432]: unresolved import wundler_graph::graph`.
 //! The adjacency map is the input substrate for `reachability` and `chunks`.
 
 use std::collections::{HashMap, HashSet};
-use wundler_core::types::{BundleGraphNode, ContentHash};
+use cloudpack_core::types::{BundleGraphNode, ContentHash};
 
 /// Build a directed adjacency map: source-module hash → unique list of
 /// imported-module hashes. Imports whose `source` does not match the `path`
@@ -567,10 +567,10 @@ pub fn build_adjacency(
 }
 ```
 
-- [ ] Modify `crates/wundler-graph/src/lib.rs`:
+- [ ] Modify `crates/cloudpack-graph/src/lib.rs`:
 
 ```rust
-//! Wundler Graph Analyzer — consumes the Summarizer's `Vec<BundleGraphNode>`
+//! Cloudpack Graph Analyzer — consumes the Summarizer's `Vec<BundleGraphNode>`
 //! and produces a chunked, reachability-pruned, dead-code-eliminated
 //! `ChunkManifest` describing one bundle-graph view.
 
@@ -578,7 +578,7 @@ pub mod graph;
 pub mod types;
 
 pub fn hello() -> &'static str {
-    "wundler-graph"
+    "cloudpack-graph"
 }
 ```
 
@@ -587,7 +587,7 @@ pub fn hello() -> &'static str {
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test graph_adjacency
+cargo test -p cloudpack-graph --test graph_adjacency
 ```
 
 Expected: `test result: ok. 5 passed; 0 failed`.
@@ -597,8 +597,8 @@ Expected: `test result: ok. 5 passed; 0 failed`.
 - [ ] Run:
 
 ```bash
-git add crates/wundler-graph
-git commit -m "wundler-graph: build_adjacency — path-indexed import map from BundleGraphNode slice"
+git add crates/cloudpack-graph
+git commit -m "cloudpack-graph: build_adjacency — path-indexed import map from BundleGraphNode slice"
 ```
 
 ---
@@ -606,19 +606,19 @@ git commit -m "wundler-graph: build_adjacency — path-indexed import map from B
 ## Task 4 — `graph.rs`: Tarjan SCC for circular import groups
 
 **Files:**
-- Modify: `crates/wundler-graph/src/graph.rs`
-- Test:   `crates/wundler-graph/tests/graph_scc.rs`
+- Modify: `crates/cloudpack-graph/src/graph.rs`
+- Test:   `crates/cloudpack-graph/tests/graph_scc.rs`
 
 ### Step 1: Write the failing test
 
-- [ ] Create `crates/wundler-graph/tests/graph_scc.rs`:
+- [ ] Create `crates/cloudpack-graph/tests/graph_scc.rs`:
 
 ```rust
 use std::collections::HashSet;
-use wundler_core::types::{
+use cloudpack_core::types::{
     BundleGraphNode, ContentHash, Import, ImportKind, ModuleSummary, SideEffectMarker,
 };
-use wundler_graph::graph::{build_adjacency, tarjan_sccs};
+use cloudpack_graph::graph::{build_adjacency, tarjan_sccs};
 
 fn node(path: &str, imports: Vec<&str>) -> BundleGraphNode {
     BundleGraphNode {
@@ -706,14 +706,14 @@ fn empty_graph_has_no_sccs() {
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test graph_scc
+cargo test -p cloudpack-graph --test graph_scc
 ```
 
-Expected failure: `error[E0432]: unresolved import wundler_graph::graph::tarjan_sccs` — the function does not exist yet.
+Expected failure: `error[E0432]: unresolved import cloudpack_graph::graph::tarjan_sccs` — the function does not exist yet.
 
 ### Step 3: Write minimal implementation
 
-- [ ] Append to `crates/wundler-graph/src/graph.rs`:
+- [ ] Append to `crates/cloudpack-graph/src/graph.rs`:
 
 ```rust
 use petgraph::algo::tarjan_scc as petgraph_tarjan;
@@ -768,7 +768,7 @@ pub fn tarjan_sccs(
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test graph_scc
+cargo test -p cloudpack-graph --test graph_scc
 ```
 
 Expected: `test result: ok. 4 passed; 0 failed`.
@@ -778,8 +778,8 @@ Expected: `test result: ok. 4 passed; 0 failed`.
 - [ ] Run:
 
 ```bash
-git add crates/wundler-graph
-git commit -m "wundler-graph: tarjan_sccs — circular-import groups via petgraph"
+git add crates/cloudpack-graph
+git commit -m "cloudpack-graph: tarjan_sccs — circular-import groups via petgraph"
 ```
 
 ---
@@ -787,14 +787,14 @@ git commit -m "wundler-graph: tarjan_sccs — circular-import groups via petgrap
 ## Task 5 — `reachability.rs`: BFS from entry hashes (static + dynamic imports)
 
 **Files:**
-- Create: `crates/wundler-graph/src/reachability.rs`
-- Create: `crates/wundler-graph/tests/fixtures/multi_entry.json`
-- Modify: `crates/wundler-graph/src/lib.rs`
-- Test:   `crates/wundler-graph/tests/reachability_bfs.rs`
+- Create: `crates/cloudpack-graph/src/reachability.rs`
+- Create: `crates/cloudpack-graph/tests/fixtures/multi_entry.json`
+- Modify: `crates/cloudpack-graph/src/lib.rs`
+- Test:   `crates/cloudpack-graph/tests/reachability_bfs.rs`
 
 ### Step 1: Write the failing test and fixture
 
-- [ ] Create `crates/wundler-graph/tests/fixtures/multi_entry.json`:
+- [ ] Create `crates/cloudpack-graph/tests/fixtures/multi_entry.json`:
 
 ```json
 [
@@ -818,12 +818,12 @@ git commit -m "wundler-graph: tarjan_sccs — circular-import groups via petgrap
 
 > **Note:** The `id` strings are illustrative — they don't have to be valid SHA-256 hex for unit tests; they only need to be unique and stable strings.
 
-- [ ] Create `crates/wundler-graph/tests/reachability_bfs.rs`:
+- [ ] Create `crates/cloudpack-graph/tests/reachability_bfs.rs`:
 
 ```rust
 use std::collections::HashSet;
-use wundler_core::types::{BundleGraphNode, ContentHash};
-use wundler_graph::reachability::compute_reachability;
+use cloudpack_core::types::{BundleGraphNode, ContentHash};
+use cloudpack_graph::reachability::compute_reachability;
 
 fn load_fixture(name: &str) -> Vec<BundleGraphNode> {
     let path = format!("tests/fixtures/{name}");
@@ -898,14 +898,14 @@ fn entry_with_no_imports_is_alive_alone() {
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test reachability_bfs
+cargo test -p cloudpack-graph --test reachability_bfs
 ```
 
-Expected failure: `error[E0432]: unresolved import wundler_graph::reachability`.
+Expected failure: `error[E0432]: unresolved import cloudpack_graph::reachability`.
 
 ### Step 3: Write minimal implementation
 
-- [ ] Create `crates/wundler-graph/src/reachability.rs`:
+- [ ] Create `crates/cloudpack-graph/src/reachability.rs`:
 
 ```rust
 //! Liveness via BFS from entry hashes. Follows both static and dynamic imports.
@@ -914,7 +914,7 @@ Expected failure: `error[E0432]: unresolved import wundler_graph::reachability`.
 
 use crate::graph::build_adjacency;
 use std::collections::{HashSet, VecDeque};
-use wundler_core::types::{BundleGraphNode, ContentHash};
+use cloudpack_core::types::{BundleGraphNode, ContentHash};
 
 /// Compute the set of `ContentHash`es reachable from any entry hash by
 /// following imports of any kind (Static or Dynamic). Module-resolution is
@@ -946,10 +946,10 @@ pub fn compute_reachability(
 }
 ```
 
-- [ ] Modify `crates/wundler-graph/src/lib.rs`:
+- [ ] Modify `crates/cloudpack-graph/src/lib.rs`:
 
 ```rust
-//! Wundler Graph Analyzer — consumes the Summarizer's `Vec<BundleGraphNode>`
+//! Cloudpack Graph Analyzer — consumes the Summarizer's `Vec<BundleGraphNode>`
 //! and produces a chunked, reachability-pruned, dead-code-eliminated
 //! `ChunkManifest` describing one bundle-graph view.
 
@@ -958,7 +958,7 @@ pub mod reachability;
 pub mod types;
 
 pub fn hello() -> &'static str {
-    "wundler-graph"
+    "cloudpack-graph"
 }
 ```
 
@@ -967,7 +967,7 @@ pub fn hello() -> &'static str {
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test reachability_bfs
+cargo test -p cloudpack-graph --test reachability_bfs
 ```
 
 Expected: `test result: ok. 4 passed; 0 failed`.
@@ -977,8 +977,8 @@ Expected: `test result: ok. 4 passed; 0 failed`.
 - [ ] Run:
 
 ```bash
-git add crates/wundler-graph
-git commit -m "wundler-graph: compute_reachability — BFS from entries across static + dynamic imports"
+git add crates/cloudpack-graph
+git commit -m "cloudpack-graph: compute_reachability — BFS from entries across static + dynamic imports"
 ```
 
 ---
@@ -986,19 +986,19 @@ git commit -m "wundler-graph: compute_reachability — BFS from entries across s
 ## Task 6 — `reachability.rs`: SCC-aware liveness
 
 **Files:**
-- Modify: `crates/wundler-graph/src/reachability.rs`
-- Test:   `crates/wundler-graph/tests/reachability_scc.rs`
+- Modify: `crates/cloudpack-graph/src/reachability.rs`
+- Test:   `crates/cloudpack-graph/tests/reachability_scc.rs`
 
 ### Step 1: Write the failing test
 
-- [ ] Create `crates/wundler-graph/tests/reachability_scc.rs`:
+- [ ] Create `crates/cloudpack-graph/tests/reachability_scc.rs`:
 
 ```rust
 use std::collections::HashSet;
-use wundler_core::types::{
+use cloudpack_core::types::{
     BundleGraphNode, ContentHash, Import, ImportKind, ModuleSummary, SideEffectMarker,
 };
-use wundler_graph::reachability::compute_reachability_with_sccs;
+use cloudpack_graph::reachability::compute_reachability_with_sccs;
 
 fn node(path: &str, imports: Vec<&str>) -> BundleGraphNode {
     BundleGraphNode {
@@ -1083,7 +1083,7 @@ fn scc_aware_matches_plain_bfs_on_acyclic_graph() {
     let mut entries = HashSet::new();
     entries.insert(ContentHash::of("a"));
     let alive =
-        wundler_graph::reachability::compute_reachability(&nodes, &entries);
+        cloudpack_graph::reachability::compute_reachability(&nodes, &entries);
     let alive_scc = compute_reachability_with_sccs(&nodes, &entries);
     assert_eq!(alive, alive_scc);
 }
@@ -1094,14 +1094,14 @@ fn scc_aware_matches_plain_bfs_on_acyclic_graph() {
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test reachability_scc
+cargo test -p cloudpack-graph --test reachability_scc
 ```
 
-Expected failure: `error[E0432]: unresolved import wundler_graph::reachability::compute_reachability_with_sccs`.
+Expected failure: `error[E0432]: unresolved import cloudpack_graph::reachability::compute_reachability_with_sccs`.
 
 ### Step 3: Write minimal implementation
 
-- [ ] Append to `crates/wundler-graph/src/reachability.rs`:
+- [ ] Append to `crates/cloudpack-graph/src/reachability.rs`:
 
 ```rust
 use crate::graph::tarjan_sccs;
@@ -1171,8 +1171,8 @@ pub fn compute_reachability_with_sccs(
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test reachability_scc
-cargo test -p wundler-graph --test reachability_bfs
+cargo test -p cloudpack-graph --test reachability_scc
+cargo test -p cloudpack-graph --test reachability_bfs
 ```
 
 Expected: each test binary reports `test result: ok` with all tests passing.
@@ -1182,8 +1182,8 @@ Expected: each test binary reports `test result: ok` with all tests passing.
 - [ ] Run:
 
 ```bash
-git add crates/wundler-graph
-git commit -m "wundler-graph: SCC-aware reachability — circular imports are alive/dead together"
+git add crates/cloudpack-graph
+git commit -m "cloudpack-graph: SCC-aware reachability — circular imports are alive/dead together"
 ```
 
 ---
@@ -1191,14 +1191,14 @@ git commit -m "wundler-graph: SCC-aware reachability — circular imports are al
 ## Task 7 — `dce.rs`: call-edge transitive DCE
 
 **Files:**
-- Create: `crates/wundler-graph/src/dce.rs`
-- Create: `crates/wundler-graph/tests/fixtures/dead_code.json`
-- Modify: `crates/wundler-graph/src/lib.rs`
-- Test:   `crates/wundler-graph/tests/dce_call_edges.rs`
+- Create: `crates/cloudpack-graph/src/dce.rs`
+- Create: `crates/cloudpack-graph/tests/fixtures/dead_code.json`
+- Modify: `crates/cloudpack-graph/src/lib.rs`
+- Test:   `crates/cloudpack-graph/tests/dce_call_edges.rs`
 
 ### Step 1: Write the failing test and fixture
 
-- [ ] Create `crates/wundler-graph/tests/fixtures/dead_code.json`:
+- [ ] Create `crates/cloudpack-graph/tests/fixtures/dead_code.json`:
 
 ```json
 [
@@ -1227,13 +1227,13 @@ git commit -m "wundler-graph: SCC-aware reachability — circular imports are al
 
 > **Layout:** 20 modules. 1 entry (`entry`) → reaches `util_a`, `util_b`, `util_a_dep`, `r1..r8` via static imports (12 reachable including entry). `d1..d8` are unreachable (8 dead). Within `util_a`, only the `a` export is called; `a_dead` has no inbound call edge. Within `util_a_dep`, only `live` is called.
 
-- [ ] Create `crates/wundler-graph/tests/dce_call_edges.rs`:
+- [ ] Create `crates/cloudpack-graph/tests/dce_call_edges.rs`:
 
 ```rust
 use std::collections::HashSet;
-use wundler_core::types::{BundleGraphNode, ContentHash};
-use wundler_graph::dce::compute_dead_exports;
-use wundler_graph::reachability::compute_reachability_with_sccs;
+use cloudpack_core::types::{BundleGraphNode, ContentHash};
+use cloudpack_graph::dce::compute_dead_exports;
+use cloudpack_graph::reachability::compute_reachability_with_sccs;
 
 fn load_fixture(name: &str) -> Vec<BundleGraphNode> {
     let text = std::fs::read_to_string(format!("tests/fixtures/{name}")).unwrap();
@@ -1308,14 +1308,14 @@ fn default_exports_with_no_inbound_calls_are_still_alive() {
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test dce_call_edges
+cargo test -p cloudpack-graph --test dce_call_edges
 ```
 
-Expected failure: `error[E0432]: unresolved import wundler_graph::dce`.
+Expected failure: `error[E0432]: unresolved import cloudpack_graph::dce`.
 
 ### Step 3: Write minimal implementation
 
-- [ ] Create `crates/wundler-graph/src/dce.rs`:
+- [ ] Create `crates/cloudpack-graph/src/dce.rs`:
 
 ```rust
 //! Call-edge transitive dead-export detection.
@@ -1336,7 +1336,7 @@ Expected failure: `error[E0432]: unresolved import wundler_graph::dce`.
 //! `"<export_name>"` for same-module calls. Plan 1 emits both forms.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use wundler_core::types::{BundleGraphNode, ContentHash, ExportKind};
+use cloudpack_core::types::{BundleGraphNode, ContentHash, ExportKind};
 
 /// Map: module ContentHash → set of dead named-export names within that module.
 /// Only alive modules appear as keys; dead modules are handled at the
@@ -1427,10 +1427,10 @@ pub fn compute_dead_exports(
 }
 ```
 
-- [ ] Modify `crates/wundler-graph/src/lib.rs`:
+- [ ] Modify `crates/cloudpack-graph/src/lib.rs`:
 
 ```rust
-//! Wundler Graph Analyzer — consumes the Summarizer's `Vec<BundleGraphNode>`
+//! Cloudpack Graph Analyzer — consumes the Summarizer's `Vec<BundleGraphNode>`
 //! and produces a chunked, reachability-pruned, dead-code-eliminated
 //! `ChunkManifest` describing one bundle-graph view.
 
@@ -1440,7 +1440,7 @@ pub mod reachability;
 pub mod types;
 
 pub fn hello() -> &'static str {
-    "wundler-graph"
+    "cloudpack-graph"
 }
 ```
 
@@ -1449,7 +1449,7 @@ pub fn hello() -> &'static str {
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test dce_call_edges
+cargo test -p cloudpack-graph --test dce_call_edges
 ```
 
 Expected: `test result: ok. 4 passed; 0 failed`.
@@ -1459,8 +1459,8 @@ Expected: `test result: ok. 4 passed; 0 failed`.
 - [ ] Run:
 
 ```bash
-git add crates/wundler-graph
-git commit -m "wundler-graph: compute_dead_exports — call-edge transitive DCE on alive modules"
+git add crates/cloudpack-graph
+git commit -m "cloudpack-graph: compute_dead_exports — call-edge transitive DCE on alive modules"
 ```
 
 ---
@@ -1468,21 +1468,21 @@ git commit -m "wundler-graph: compute_dead_exports — call-edge transitive DCE 
 ## Task 8 — `chunks.rs`: INITIAL chunks via static-import BFS per entry point
 
 **Files:**
-- Create: `crates/wundler-graph/src/chunks.rs`
-- Modify: `crates/wundler-graph/src/lib.rs`
-- Test:   `crates/wundler-graph/tests/chunks_initial.rs`
+- Create: `crates/cloudpack-graph/src/chunks.rs`
+- Modify: `crates/cloudpack-graph/src/lib.rs`
+- Test:   `crates/cloudpack-graph/tests/chunks_initial.rs`
 
 ### Step 1: Write the failing test
 
-- [ ] Create `crates/wundler-graph/tests/chunks_initial.rs`:
+- [ ] Create `crates/cloudpack-graph/tests/chunks_initial.rs`:
 
 ```rust
 use std::collections::{HashMap, HashSet};
-use wundler_core::types::{
+use cloudpack_core::types::{
     BundleGraphNode, ContentHash, Import, ImportKind, ModuleSummary, SideEffectMarker,
 };
-use wundler_graph::chunks::assign_chunks;
-use wundler_graph::types::LoadCondition;
+use cloudpack_graph::chunks::assign_chunks;
+use cloudpack_graph::types::LoadCondition;
 
 fn node(path: &str, imports: Vec<(&str, ImportKind)>) -> BundleGraphNode {
     BundleGraphNode {
@@ -1587,14 +1587,14 @@ fn dynamic_imports_do_not_pull_into_initial_chunk() {
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test chunks_initial
+cargo test -p cloudpack-graph --test chunks_initial
 ```
 
-Expected failure: `error[E0432]: unresolved import wundler_graph::chunks`.
+Expected failure: `error[E0432]: unresolved import cloudpack_graph::chunks`.
 
 ### Step 3: Write minimal implementation
 
-- [ ] Create `crates/wundler-graph/src/chunks.rs`:
+- [ ] Create `crates/cloudpack-graph/src/chunks.rs`:
 
 ```rust
 //! Chunk assignment.
@@ -1611,7 +1611,7 @@ Expected failure: `error[E0432]: unresolved import wundler_graph::chunks`.
 
 use crate::types::{Chunk, ChunkId, LoadCondition};
 use std::collections::{HashMap, HashSet, VecDeque};
-use wundler_core::types::{BundleGraphNode, ContentHash, ImportKind};
+use cloudpack_core::types::{BundleGraphNode, ContentHash, ImportKind};
 
 /// Assign every alive module to exactly one chunk.
 ///
@@ -1715,10 +1715,10 @@ fn chunk_id_slug(route: &str) -> String {
 }
 ```
 
-- [ ] Modify `crates/wundler-graph/src/lib.rs`:
+- [ ] Modify `crates/cloudpack-graph/src/lib.rs`:
 
 ```rust
-//! Wundler Graph Analyzer — consumes the Summarizer's `Vec<BundleGraphNode>`
+//! Cloudpack Graph Analyzer — consumes the Summarizer's `Vec<BundleGraphNode>`
 //! and produces a chunked, reachability-pruned, dead-code-eliminated
 //! `ChunkManifest` describing one bundle-graph view.
 
@@ -1729,7 +1729,7 @@ pub mod reachability;
 pub mod types;
 
 pub fn hello() -> &'static str {
-    "wundler-graph"
+    "cloudpack-graph"
 }
 ```
 
@@ -1738,7 +1738,7 @@ pub fn hello() -> &'static str {
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test chunks_initial
+cargo test -p cloudpack-graph --test chunks_initial
 ```
 
 Expected: `test result: ok. 3 passed; 0 failed`.
@@ -1748,8 +1748,8 @@ Expected: `test result: ok. 3 passed; 0 failed`.
 - [ ] Run:
 
 ```bash
-git add crates/wundler-graph
-git commit -m "wundler-graph: assign_chunks — INITIAL chunks via static-import BFS per entry point"
+git add crates/cloudpack-graph
+git commit -m "cloudpack-graph: assign_chunks — INITIAL chunks via static-import BFS per entry point"
 ```
 
 ---
@@ -1757,20 +1757,20 @@ git commit -m "wundler-graph: assign_chunks — INITIAL chunks via static-import
 ## Task 9 — `chunks.rs`: LAZY chunks at dynamic-import boundaries
 
 **Files:**
-- Modify: `crates/wundler-graph/src/chunks.rs`
-- Test:   `crates/wundler-graph/tests/chunks_lazy.rs`
+- Modify: `crates/cloudpack-graph/src/chunks.rs`
+- Test:   `crates/cloudpack-graph/tests/chunks_lazy.rs`
 
 ### Step 1: Write the failing test
 
-- [ ] Create `crates/wundler-graph/tests/chunks_lazy.rs`:
+- [ ] Create `crates/cloudpack-graph/tests/chunks_lazy.rs`:
 
 ```rust
 use std::collections::{HashMap, HashSet};
-use wundler_core::types::{
+use cloudpack_core::types::{
     BundleGraphNode, ContentHash, Import, ImportKind, ModuleSummary, SideEffectMarker,
 };
-use wundler_graph::chunks::assign_chunks;
-use wundler_graph::types::LoadCondition;
+use cloudpack_graph::chunks::assign_chunks;
+use cloudpack_graph::types::LoadCondition;
 
 fn node(path: &str, imports: Vec<(&str, ImportKind)>) -> BundleGraphNode {
     BundleGraphNode {
@@ -1896,14 +1896,14 @@ fn dynamic_import_from_inside_a_lazy_chunk_spawns_nested_lazy() {
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test chunks_lazy
+cargo test -p cloudpack-graph --test chunks_lazy
 ```
 
 Expected failure: existing `assign_chunks` has no LAZY-chunk code path — tests will report 0 lazy chunks instead of the expected 1+, e.g. `assertion left == right failed: left: 0, right: 1`.
 
 ### Step 3: Write minimal implementation
 
-- [ ] Replace `assign_chunks` and add a helper in `crates/wundler-graph/src/chunks.rs`:
+- [ ] Replace `assign_chunks` and add a helper in `crates/cloudpack-graph/src/chunks.rs`:
 
 ```rust
 pub fn assign_chunks(
@@ -2053,8 +2053,8 @@ fn static_bfs_chunk_with_dynamic_capture(
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test chunks_lazy
-cargo test -p wundler-graph --test chunks_initial
+cargo test -p cloudpack-graph --test chunks_lazy
+cargo test -p cloudpack-graph --test chunks_initial
 ```
 
 Expected: both test binaries report `test result: ok` with all tests passing.
@@ -2064,8 +2064,8 @@ Expected: both test binaries report `test result: ok` with all tests passing.
 - [ ] Run:
 
 ```bash
-git add crates/wundler-graph
-git commit -m "wundler-graph: LAZY chunks at dynamic-import boundaries"
+git add crates/cloudpack-graph
+git commit -m "cloudpack-graph: LAZY chunks at dynamic-import boundaries"
 ```
 
 ---
@@ -2073,13 +2073,13 @@ git commit -m "wundler-graph: LAZY chunks at dynamic-import boundaries"
 ## Task 10 — `chunks.rs`: commons extraction
 
 **Files:**
-- Modify: `crates/wundler-graph/src/chunks.rs`
-- Create: `crates/wundler-graph/tests/fixtures/commons.json`
-- Test:   `crates/wundler-graph/tests/chunks_commons.rs`
+- Modify: `crates/cloudpack-graph/src/chunks.rs`
+- Create: `crates/cloudpack-graph/tests/fixtures/commons.json`
+- Test:   `crates/cloudpack-graph/tests/chunks_commons.rs`
 
 ### Step 1: Write the failing test and fixture
 
-- [ ] Create `crates/wundler-graph/tests/fixtures/commons.json`:
+- [ ] Create `crates/cloudpack-graph/tests/fixtures/commons.json`:
 
 ```json
 [
@@ -2096,13 +2096,13 @@ git commit -m "wundler-graph: LAZY chunks at dynamic-import boundaries"
 ]
 ```
 
-- [ ] Create `crates/wundler-graph/tests/chunks_commons.rs`:
+- [ ] Create `crates/cloudpack-graph/tests/chunks_commons.rs`:
 
 ```rust
 use std::collections::{HashMap, HashSet};
-use wundler_core::types::{BundleGraphNode, ContentHash};
-use wundler_graph::chunks::assign_chunks;
-use wundler_graph::types::LoadCondition;
+use cloudpack_core::types::{BundleGraphNode, ContentHash};
+use cloudpack_graph::chunks::assign_chunks;
+use cloudpack_graph::types::LoadCondition;
 
 fn load_fixture(name: &str) -> Vec<BundleGraphNode> {
     let text = std::fs::read_to_string(format!("tests/fixtures/{name}")).unwrap();
@@ -2180,14 +2180,14 @@ fn high_threshold_disables_commons_extraction() {
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test chunks_commons
+cargo test -p cloudpack-graph --test chunks_commons
 ```
 
 Expected failure: no `commons` chunk is produced — the first assertion fails with `expected exactly one commons chunk` (the existing implementation duplicates `shared_util` across the three INITIAL chunks via `entry(...).or_insert_with(...)`, so the first chunk wins and the rest silently drop it — but the test asserts a dedicated `commons` chunk).
 
 ### Step 3: Write minimal implementation
 
-- [ ] Refactor `assign_chunks` in `crates/wundler-graph/src/chunks.rs` to (a) record every chunk a module appears in across all routes, (b) build each route's INITIAL chunk *without* the `entry().or_insert_with` deduplication trick, (c) extract commons in a final pass. Replace the function body:
+- [ ] Refactor `assign_chunks` in `crates/cloudpack-graph/src/chunks.rs` to (a) record every chunk a module appears in across all routes, (b) build each route's INITIAL chunk *without* the `entry().or_insert_with` deduplication trick, (c) extract commons in a final pass. Replace the function body:
 
 ```rust
 pub fn assign_chunks(
@@ -2332,9 +2332,9 @@ pub fn assign_chunks(
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test chunks_commons
-cargo test -p wundler-graph --test chunks_initial
-cargo test -p wundler-graph --test chunks_lazy
+cargo test -p cloudpack-graph --test chunks_commons
+cargo test -p cloudpack-graph --test chunks_initial
+cargo test -p cloudpack-graph --test chunks_lazy
 ```
 
 Expected: each test binary reports `test result: ok` with all tests passing.
@@ -2344,8 +2344,8 @@ Expected: each test binary reports `test result: ok` with all tests passing.
 - [ ] Run:
 
 ```bash
-git add crates/wundler-graph
-git commit -m "wundler-graph: commons extraction — modules in >= threshold chunks move to commons chunk"
+git add crates/cloudpack-graph
+git commit -m "cloudpack-graph: commons extraction — modules in >= threshold chunks move to commons chunk"
 ```
 
 ---
@@ -2353,16 +2353,16 @@ git commit -m "wundler-graph: commons extraction — modules in >= threshold chu
 ## Task 11 — `chunks.rs`: chunk hashing
 
 **Files:**
-- Modify: `crates/wundler-graph/src/chunks.rs`
-- Test:   `crates/wundler-graph/tests/chunks_hashing.rs`
+- Modify: `crates/cloudpack-graph/src/chunks.rs`
+- Test:   `crates/cloudpack-graph/tests/chunks_hashing.rs`
 
 ### Step 1: Write the failing test
 
-- [ ] Create `crates/wundler-graph/tests/chunks_hashing.rs`:
+- [ ] Create `crates/cloudpack-graph/tests/chunks_hashing.rs`:
 
 ```rust
-use wundler_core::types::ContentHash;
-use wundler_graph::chunks::hash_chunk;
+use cloudpack_core::types::ContentHash;
+use cloudpack_graph::chunks::hash_chunk;
 
 #[test]
 fn hash_is_deterministic() {
@@ -2409,14 +2409,14 @@ fn hash_is_64_char_hex() {
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test chunks_hashing
+cargo test -p cloudpack-graph --test chunks_hashing
 ```
 
-Expected failure: `error[E0425]: cannot find function hash_chunk in module wundler_graph::chunks`.
+Expected failure: `error[E0425]: cannot find function hash_chunk in module cloudpack_graph::chunks`.
 
 ### Step 3: Write minimal implementation
 
-- [ ] Append to `crates/wundler-graph/src/chunks.rs`:
+- [ ] Append to `crates/cloudpack-graph/src/chunks.rs`:
 
 ```rust
 use sha2::{Digest, Sha256};
@@ -2469,10 +2469,10 @@ chunks.push(Chunk {
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test chunks_hashing
-cargo test -p wundler-graph --test chunks_initial
-cargo test -p wundler-graph --test chunks_lazy
-cargo test -p wundler-graph --test chunks_commons
+cargo test -p cloudpack-graph --test chunks_hashing
+cargo test -p cloudpack-graph --test chunks_initial
+cargo test -p cloudpack-graph --test chunks_lazy
+cargo test -p cloudpack-graph --test chunks_commons
 ```
 
 Expected: each test binary reports `test result: ok` with all tests passing.
@@ -2482,8 +2482,8 @@ Expected: each test binary reports `test result: ok` with all tests passing.
 - [ ] Run:
 
 ```bash
-git add crates/wundler-graph
-git commit -m "wundler-graph: hash_chunk — SHA-256 over sorted member hashes; wire into assign_chunks"
+git add crates/cloudpack-graph
+git commit -m "cloudpack-graph: hash_chunk — SHA-256 over sorted member hashes; wire into assign_chunks"
 ```
 
 ---
@@ -2491,19 +2491,19 @@ git commit -m "wundler-graph: hash_chunk — SHA-256 over sorted member hashes; 
 ## Task 12 — `manifest.rs`: `ChunkManifest` assembly
 
 **Files:**
-- Create: `crates/wundler-graph/src/manifest.rs`
-- Modify: `crates/wundler-graph/src/lib.rs`
-- Test:   `crates/wundler-graph/tests/manifest_build.rs`
+- Create: `crates/cloudpack-graph/src/manifest.rs`
+- Modify: `crates/cloudpack-graph/src/lib.rs`
+- Test:   `crates/cloudpack-graph/tests/manifest_build.rs`
 
 ### Step 1: Write the failing test
 
-- [ ] Create `crates/wundler-graph/tests/manifest_build.rs`:
+- [ ] Create `crates/cloudpack-graph/tests/manifest_build.rs`:
 
 ```rust
 use std::collections::HashMap;
-use wundler_core::types::ContentHash;
-use wundler_graph::manifest::build_manifest;
-use wundler_graph::types::{Chunk, LoadCondition};
+use cloudpack_core::types::ContentHash;
+use cloudpack_graph::manifest::build_manifest;
+use cloudpack_graph::types::{Chunk, LoadCondition};
 
 fn dummy_chunk(id: &str, members: Vec<ContentHash>) -> Chunk {
     Chunk {
@@ -2588,14 +2588,14 @@ fn module_index_is_preserved() {
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test manifest_build
+cargo test -p cloudpack-graph --test manifest_build
 ```
 
-Expected failure: `error[E0432]: unresolved import wundler_graph::manifest`.
+Expected failure: `error[E0432]: unresolved import cloudpack_graph::manifest`.
 
 ### Step 3: Write minimal implementation
 
-- [ ] Create `crates/wundler-graph/src/manifest.rs`:
+- [ ] Create `crates/cloudpack-graph/src/manifest.rs`:
 
 ```rust
 //! Assemble a `ChunkManifest` from chunks, entry points, and a module index.
@@ -2608,7 +2608,7 @@ Expected failure: `error[E0432]: unresolved import wundler_graph::manifest`.
 use crate::types::{Chunk, ChunkId, ChunkManifest, EntryPoint};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use wundler_core::types::ContentHash;
+use cloudpack_core::types::ContentHash;
 
 pub fn build_manifest(
     chunks: Vec<Chunk>,
@@ -2651,10 +2651,10 @@ fn compute_build_id(entry_hashes: &HashMap<String, ContentHash>) -> String {
 }
 ```
 
-- [ ] Modify `crates/wundler-graph/src/lib.rs`:
+- [ ] Modify `crates/cloudpack-graph/src/lib.rs`:
 
 ```rust
-//! Wundler Graph Analyzer — consumes the Summarizer's `Vec<BundleGraphNode>`
+//! Cloudpack Graph Analyzer — consumes the Summarizer's `Vec<BundleGraphNode>`
 //! and produces a chunked, reachability-pruned, dead-code-eliminated
 //! `ChunkManifest` describing one bundle-graph view.
 
@@ -2666,7 +2666,7 @@ pub mod reachability;
 pub mod types;
 
 pub fn hello() -> &'static str {
-    "wundler-graph"
+    "cloudpack-graph"
 }
 ```
 
@@ -2675,7 +2675,7 @@ pub fn hello() -> &'static str {
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test manifest_build
+cargo test -p cloudpack-graph --test manifest_build
 ```
 
 Expected: `test result: ok. 4 passed; 0 failed`.
@@ -2685,8 +2685,8 @@ Expected: `test result: ok. 4 passed; 0 failed`.
 - [ ] Run:
 
 ```bash
-git add crates/wundler-graph
-git commit -m "wundler-graph: build_manifest — build_id, entry_chunks, module_index assembly"
+git add crates/cloudpack-graph
+git commit -m "cloudpack-graph: build_manifest — build_id, entry_chunks, module_index assembly"
 ```
 
 ---
@@ -2694,17 +2694,17 @@ git commit -m "wundler-graph: build_manifest — build_id, entry_chunks, module_
 ## Task 13 — `manifest.rs`: `ChunkManifest` JSON round-trip
 
 **Files:**
-- Test:   `crates/wundler-graph/tests/manifest_json.rs`
+- Test:   `crates/cloudpack-graph/tests/manifest_json.rs`
 
 ### Step 1: Write the failing test
 
-- [ ] Create `crates/wundler-graph/tests/manifest_json.rs`:
+- [ ] Create `crates/cloudpack-graph/tests/manifest_json.rs`:
 
 ```rust
 use std::collections::HashMap;
-use wundler_core::types::ContentHash;
-use wundler_graph::manifest::build_manifest;
-use wundler_graph::types::{Chunk, ChunkManifest, LoadCondition};
+use cloudpack_core::types::ContentHash;
+use cloudpack_graph::manifest::build_manifest;
+use cloudpack_graph::types::{Chunk, ChunkManifest, LoadCondition};
 
 fn fixture() -> ChunkManifest {
     let chunks = vec![
@@ -2795,7 +2795,7 @@ fn malformed_json_returns_error() {
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test manifest_json
+cargo test -p cloudpack-graph --test manifest_json
 ```
 
 Expected: this test exercises only existing code — it should pass immediately. If it does **not**, that constitutes the "failing test" for the implementation step below: a real bug has been surfaced and the manifest/types module must be fixed before continuing.
@@ -2805,10 +2805,10 @@ Expected: this test exercises only existing code — it should pass immediately.
 - [ ] If all `manifest_json` tests already pass, no code change is needed for this task — the previous implementations are correct. Confirm by re-running the whole crate's test suite:
 
 ```bash
-cargo test -p wundler-graph
+cargo test -p cloudpack-graph
 ```
 
-If any test fails, investigate and patch `crates/wundler-graph/src/types.rs` or `crates/wundler-graph/src/manifest.rs` until all pass. Most-likely failure modes and their fixes:
+If any test fails, investigate and patch `crates/cloudpack-graph/src/types.rs` or `crates/cloudpack-graph/src/manifest.rs` until all pass. Most-likely failure modes and their fixes:
 - `co_request_score` deserializes as `null` even when `Some` → make sure `#[serde(skip_serializing_if = "Option::is_none")]` is **not** applied (we want the field always present for downstream tooling).
 - `LoadCondition` round-trip mismatch → confirm `#[derive(Serialize, Deserialize)]` is intact on the enum.
 
@@ -2817,8 +2817,8 @@ If any test fails, investigate and patch `crates/wundler-graph/src/types.rs` or 
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test manifest_json
-cargo test -p wundler-graph
+cargo test -p cloudpack-graph --test manifest_json
+cargo test -p cloudpack-graph
 ```
 
 Expected: `manifest_json` reports `test result: ok. 3 passed; 0 failed`. Full crate run also clean.
@@ -2828,8 +2828,8 @@ Expected: `manifest_json` reports `test result: ok. 3 passed; 0 failed`. Full cr
 - [ ] Run:
 
 ```bash
-git add crates/wundler-graph
-git commit -m "wundler-graph: ChunkManifest JSON round-trip — full integration test for serde"
+git add crates/cloudpack-graph
+git commit -m "cloudpack-graph: ChunkManifest JSON round-trip — full integration test for serde"
 ```
 
 ---
@@ -2837,20 +2837,20 @@ git commit -m "wundler-graph: ChunkManifest JSON round-trip — full integration
 ## Task 14 — `analyzer.rs`: `GraphAnalyzer::analyze()` end-to-end integration
 
 **Files:**
-- Create: `crates/wundler-graph/src/analyzer.rs`
-- Modify: `crates/wundler-graph/src/lib.rs`
-- Test:   `crates/wundler-graph/tests/analyze_integration.rs`
+- Create: `crates/cloudpack-graph/src/analyzer.rs`
+- Modify: `crates/cloudpack-graph/src/lib.rs`
+- Test:   `crates/cloudpack-graph/tests/analyze_integration.rs`
 
 ### Step 1: Write the failing test
 
-- [ ] Create `crates/wundler-graph/tests/analyze_integration.rs`:
+- [ ] Create `crates/cloudpack-graph/tests/analyze_integration.rs`:
 
 ```rust
 use std::collections::HashMap;
 use std::path::PathBuf;
-use wundler_core::types::{BundleGraphNode, ContentHash};
-use wundler_graph::analyzer::{AnalysisResult, GraphAnalyzer};
-use wundler_graph::types::LoadCondition;
+use cloudpack_core::types::{BundleGraphNode, ContentHash};
+use cloudpack_graph::analyzer::{AnalysisResult, GraphAnalyzer};
+use cloudpack_graph::types::LoadCondition;
 
 fn load_fixture(name: &str) -> Vec<BundleGraphNode> {
     let text = std::fs::read_to_string(format!("tests/fixtures/{name}")).unwrap();
@@ -2970,14 +2970,14 @@ fn analyze_fails_when_entry_point_path_unknown() {
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test analyze_integration
+cargo test -p cloudpack-graph --test analyze_integration
 ```
 
-Expected failure: `error[E0432]: unresolved import wundler_graph::analyzer`.
+Expected failure: `error[E0432]: unresolved import cloudpack_graph::analyzer`.
 
 ### Step 3: Write minimal implementation
 
-- [ ] Create `crates/wundler-graph/src/analyzer.rs`:
+- [ ] Create `crates/cloudpack-graph/src/analyzer.rs`:
 
 ```rust
 //! Top-level orchestrator. `GraphAnalyzer::analyze()` wires together
@@ -2991,7 +2991,7 @@ use crate::types::ChunkManifest;
 use anyhow::{anyhow, Result};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use wundler_core::types::{BundleGraphNode, ContentHash};
+use cloudpack_core::types::{BundleGraphNode, ContentHash};
 
 #[derive(Debug, Clone)]
 pub struct GraphAnalyzer {
@@ -3093,10 +3093,10 @@ impl GraphAnalyzer {
 }
 ```
 
-- [ ] Modify `crates/wundler-graph/src/lib.rs`:
+- [ ] Modify `crates/cloudpack-graph/src/lib.rs`:
 
 ```rust
-//! Wundler Graph Analyzer — consumes the Summarizer's `Vec<BundleGraphNode>`
+//! Cloudpack Graph Analyzer — consumes the Summarizer's `Vec<BundleGraphNode>`
 //! and produces a chunked, reachability-pruned, dead-code-eliminated
 //! `ChunkManifest` describing one bundle-graph view.
 
@@ -3112,7 +3112,7 @@ pub use analyzer::{AnalysisResult, AnalysisStats, GraphAnalyzer};
 pub use types::{Chunk, ChunkId, ChunkManifest, EntryPoint, LoadCondition};
 
 pub fn hello() -> &'static str {
-    "wundler-graph"
+    "cloudpack-graph"
 }
 ```
 
@@ -3121,8 +3121,8 @@ pub fn hello() -> &'static str {
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-graph --test analyze_integration
-cargo test -p wundler-graph
+cargo test -p cloudpack-graph --test analyze_integration
+cargo test -p cloudpack-graph
 ```
 
 Expected: `analyze_integration` reports `test result: ok. 3 passed; 0 failed`; full crate run reports all tests passing.
@@ -3132,29 +3132,29 @@ Expected: `analyze_integration` reports `test result: ok. 3 passed; 0 failed`; f
 - [ ] Run:
 
 ```bash
-git add crates/wundler-graph
-git commit -m "wundler-graph: GraphAnalyzer::analyze() — wire reachability + DCE + chunks + manifest"
+git add crates/cloudpack-graph
+git commit -m "cloudpack-graph: GraphAnalyzer::analyze() — wire reachability + DCE + chunks + manifest"
 ```
 
 ---
 
-## Task 15 — `wundler analyze` CLI subcommand
+## Task 15 — `cloudpack analyze` CLI subcommand
 
 **Files:**
-- Modify: `crates/wundler-cli/Cargo.toml`
-- Modify: `crates/wundler-cli/src/main.rs`
-- Test:   `crates/wundler-cli/tests/cli_analyze.rs`
+- Modify: `crates/cloudpack-cli/Cargo.toml`
+- Modify: `crates/cloudpack-cli/src/main.rs`
+- Test:   `crates/cloudpack-cli/tests/cli_analyze.rs`
 
 ### Step 1: Write the failing test
 
-- [ ] Create `crates/wundler-cli/tests/cli_analyze.rs`:
+- [ ] Create `crates/cloudpack-cli/tests/cli_analyze.rs`:
 
 ```rust
 use std::process::Command;
 use tempfile::tempdir;
 
 fn cargo_bin() -> String {
-    env!("CARGO_BIN_EXE_wundler").to_string()
+    env!("CARGO_BIN_EXE_cloudpack").to_string()
 }
 
 #[test]
@@ -3178,11 +3178,11 @@ fn analyze_emits_manifest_json_for_minimal_project() {
         .arg("--entry")
         .arg(format!("/={}", dir.path().join("src/index.ts").display()))
         .output()
-        .expect("spawn wundler");
+        .expect("spawn cloudpack");
 
     assert!(
         output.status.success(),
-        "wundler analyze failed: stdout={} stderr={}",
+        "cloudpack analyze failed: stdout={} stderr={}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
@@ -3212,7 +3212,7 @@ fn analyze_supports_multiple_entries() {
         .arg("--entry")
         .arg(format!("/b={}", dir.path().join("src/b.ts").display()))
         .output()
-        .expect("spawn wundler");
+        .expect("spawn cloudpack");
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -3234,7 +3234,7 @@ fn analyze_rejects_malformed_entry_argument() {
         .arg("--entry")
         .arg("no_equals_sign_here")
         .output()
-        .expect("spawn wundler");
+        .expect("spawn cloudpack");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -3247,19 +3247,19 @@ fn analyze_rejects_malformed_entry_argument() {
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-cli --test cli_analyze
+cargo test -p cloudpack-cli --test cli_analyze
 ```
 
-Expected failure: either `wundler-cli` does not yet depend on `wundler-graph` (compile error), or the `analyze` subcommand is missing (`error: unrecognized subcommand 'analyze'`).
+Expected failure: either `cloudpack-cli` does not yet depend on `cloudpack-graph` (compile error), or the `analyze` subcommand is missing (`error: unrecognized subcommand 'analyze'`).
 
 ### Step 3: Write minimal implementation
 
-- [ ] Modify `crates/wundler-cli/Cargo.toml` so it depends on `wundler-graph` and `tempfile` (for test data). The complete `[dependencies]` and `[dev-dependencies]` sections:
+- [ ] Modify `crates/cloudpack-cli/Cargo.toml` so it depends on `cloudpack-graph` and `tempfile` (for test data). The complete `[dependencies]` and `[dev-dependencies]` sections:
 
 ```toml
 [dependencies]
-wundler-core = { path = "../wundler-core" }
-wundler-graph = { path = "../wundler-graph" }
+cloudpack-core = { path = "../cloudpack-core" }
+cloudpack-graph = { path = "../cloudpack-graph" }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 serde_json = "1"
@@ -3270,20 +3270,20 @@ indicatif = "0.17"
 tempfile = "3"
 ```
 
-- [ ] Modify `crates/wundler-cli/src/main.rs` to add the `Analyze` subcommand. The complete file (replacing any existing `main.rs`):
+- [ ] Modify `crates/cloudpack-cli/src/main.rs` to add the `Analyze` subcommand. The complete file (replacing any existing `main.rs`):
 
 ```rust
-//! Wundler CLI: summarize / validate-scale / analyze.
+//! Cloudpack CLI: summarize / validate-scale / analyze.
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use wundler_core::summarizer::ModuleSummarizer;
-use wundler_graph::analyzer::GraphAnalyzer;
+use cloudpack_core::summarizer::ModuleSummarizer;
+use cloudpack_graph::analyzer::GraphAnalyzer;
 
 #[derive(Parser)]
-#[command(name = "wundler", version, about = "Wundler — continuously-maintained module graph")]
+#[command(name = "cloudpack", version, about = "Cloudpack — continuously-maintained module graph")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -3384,28 +3384,28 @@ fn main() -> Result<()> {
 }
 ```
 
-> **Note on `ModuleSummarizer::default()`:** Plan 1 exposes `ModuleSummarizer::new()`. If Plan 1's struct does not implement `Default`, replace `ModuleSummarizer::default()` with `ModuleSummarizer::new()` (and `wundler-core` must export `summarize_directory` as a method on the summarizer per Plan 1's published interface).
+> **Note on `ModuleSummarizer::default()`:** Plan 1 exposes `ModuleSummarizer::new()`. If Plan 1's struct does not implement `Default`, replace `ModuleSummarizer::default()` with `ModuleSummarizer::new()` (and `cloudpack-core` must export `summarize_directory` as a method on the summarizer per Plan 1's published interface).
 
 ### Step 4: Run test, verify it PASSES
 
 - [ ] Run:
 
 ```bash
-cargo test -p wundler-cli --test cli_analyze
-cargo build -p wundler-cli
-cargo test -p wundler-graph
+cargo test -p cloudpack-cli --test cli_analyze
+cargo build -p cloudpack-cli
+cargo test -p cloudpack-graph
 ```
 
-Expected: `cli_analyze` reports `test result: ok. 3 passed; 0 failed`; `wundler-cli` builds cleanly; `wundler-graph` regression suite still passes.
+Expected: `cli_analyze` reports `test result: ok. 3 passed; 0 failed`; `cloudpack-cli` builds cleanly; `cloudpack-graph` regression suite still passes.
 
 - [ ] Optional manual smoke test (outside the test runner):
 
 ```bash
-mkdir -p /tmp/wundler-demo/src
-echo 'import { x } from "./util"; export default x;' > /tmp/wundler-demo/src/index.ts
-echo 'export const x = 1;' > /tmp/wundler-demo/src/util.ts
-cargo run -p wundler-cli -- analyze /tmp/wundler-demo/src \
-  --entry /=/tmp/wundler-demo/src/index.ts | jq .
+mkdir -p /tmp/cloudpack-demo/src
+echo 'import { x } from "./util"; export default x;' > /tmp/cloudpack-demo/src/index.ts
+echo 'export const x = 1;' > /tmp/cloudpack-demo/src/util.ts
+cargo run -p cloudpack-cli -- analyze /tmp/cloudpack-demo/src \
+  --entry /=/tmp/cloudpack-demo/src/index.ts | jq .
 ```
 
 Expected: a pretty-printed JSON ChunkManifest with one INITIAL chunk containing both modules and a `build_id` field.
@@ -3415,8 +3415,8 @@ Expected: a pretty-printed JSON ChunkManifest with one INITIAL chunk containing 
 - [ ] Run:
 
 ```bash
-git add crates/wundler-cli
-git commit -m "wundler-cli: add 'analyze' subcommand — summarize → GraphAnalyzer → ChunkManifest JSON"
+git add crates/cloudpack-cli
+git commit -m "cloudpack-cli: add 'analyze' subcommand — summarize → GraphAnalyzer → ChunkManifest JSON"
 ```
 
 ---
@@ -3426,7 +3426,7 @@ git commit -m "wundler-cli: add 'analyze' subcommand — summarize → GraphAnal
 After all 15 tasks are complete, run the full suite once more:
 
 ```bash
-cd /Users/ken/workspace/ms/wundler
+cd /Users/ken/workspace/ms/cloudpack
 cargo build --workspace
 cargo test --workspace
 ```
@@ -3434,14 +3434,14 @@ cargo test --workspace
 Both must succeed with zero failures. Confirm the public surface matches what Plan 3 expects:
 
 ```bash
-grep -rn "pub fn analyze"              crates/wundler-graph/src
-grep -rn "pub struct GraphAnalyzer"    crates/wundler-graph/src
-grep -rn "pub struct AnalysisResult"   crates/wundler-graph/src
-grep -rn "pub struct ChunkManifest"    crates/wundler-graph/src
-grep -rn "pub struct Chunk"            crates/wundler-graph/src
-grep -rn "pub enum LoadCondition"      crates/wundler-graph/src
-grep -rn "pub fn to_json"              crates/wundler-graph/src
-grep -rn "pub fn from_json"            crates/wundler-graph/src
+grep -rn "pub fn analyze"              crates/cloudpack-graph/src
+grep -rn "pub struct GraphAnalyzer"    crates/cloudpack-graph/src
+grep -rn "pub struct AnalysisResult"   crates/cloudpack-graph/src
+grep -rn "pub struct ChunkManifest"    crates/cloudpack-graph/src
+grep -rn "pub struct Chunk"            crates/cloudpack-graph/src
+grep -rn "pub enum LoadCondition"      crates/cloudpack-graph/src
+grep -rn "pub fn to_json"              crates/cloudpack-graph/src
+grep -rn "pub fn from_json"            crates/cloudpack-graph/src
 ```
 
 Each must return at least one hit. With this in place, Plan 3 (Level 0 Build Pipeline) can begin.

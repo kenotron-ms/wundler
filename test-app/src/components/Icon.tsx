@@ -22,7 +22,7 @@ export function TrashIcon({ size = 16 }: { size?: number }) {
   );
 }
 
-// CloseIcon is DEAD — never imported anywhere (for wundler DCE testing)
+// CloseIcon is DEAD — never imported anywhere (for cloudpack DCE testing)
 export function CloseIcon({ size = 16 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>

@@ -8,7 +8,7 @@ export function formatTime(date: Date): string {
   return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 }
 
-// formatPhone is DEAD — never imported anywhere (wundler DCE test target)
+// formatPhone is DEAD — never imported anywhere (cloudpack DCE test target)
 export function formatPhone(phone: string): string {
   const cleaned = phone.replace(/\D/g, '');
   const match = cleaned.match(/^(\d{3})(\d{3})(\d{4})$/);

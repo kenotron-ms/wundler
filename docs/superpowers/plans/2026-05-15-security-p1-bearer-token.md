@@ -4,7 +4,7 @@
 
 **Goal:** Add optional bearer token authentication as Axum middleware on all ABS routes except `/health` and `/sw.js`, with zero breaking changes when `[security]` is absent from config.
 
-**Architecture:** New `crates/wundler-abs/src/security/` module containing `SecurityConfig` (parsed from wundler.toml), `ResolvedSecurity` (loaded at startup by reading the token file), `SecretToken` (constant-time compare via `subtle`, Debug/Display redacted), and `require_bearer` (Axum `from_fn_with_state` middleware). The middleware short-circuits to `next.run()` when security is disabled, preserving today's unauthenticated behavior exactly. `build_router` gains a third `Arc<ResolvedSecurity>` parameter; existing callers are updated to pass `ResolvedSecurity::from_config(&SecurityConfig::default())` (i.e., security off) so all existing tests continue to pass unchanged.
+**Architecture:** New `crates/cloudpack-abs/src/security/` module containing `SecurityConfig` (parsed from cloudpack.toml), `ResolvedSecurity` (loaded at startup by reading the token file), `SecretToken` (constant-time compare via `subtle`, Debug/Display redacted), and `require_bearer` (Axum `from_fn_with_state` middleware). The middleware short-circuits to `next.run()` when security is disabled, preserving today's unauthenticated behavior exactly. `build_router` gains a third `Arc<ResolvedSecurity>` parameter; existing callers are updated to pass `ResolvedSecurity::from_config(&SecurityConfig::default())` (i.e., security off) so all existing tests continue to pass unchanged.
 
 **Tech Stack:** Rust, axum 0.8, subtle = "2" (new, for constant-time comparison), serde/toml (already used), thiserror (already used), tempfile (already a dev-dependency).
 
@@ -15,7 +15,7 @@
 Do **not** add any of the following (they are separate plans):
 - CORS allowlist (P1.2)
 - Per-IP rate limiter (P1.3)
-- Env var token source (`WUNDLER_BEARER_TOKEN`)
+- Env var token source (`CLOUDPACK_BEARER_TOKEN`)
 - Two-token grace period (multiple tokens per file)
 - X-Forwarded-For handling
 - Any Phase 2 signing, SRI, or CSP work
@@ -27,8 +27,8 @@ Do **not** add any of the following (they are separate plans):
 Before starting Task 1, verify:
 
 ```bash
-cd /Users/ken/workspace/ms/wundler
-cargo test -p wundler-abs 2>&1 | tail -5
+cd /Users/ken/workspace/ms/cloudpack
+cargo test -p cloudpack-abs 2>&1 | tail -5
 ```
 
 Expected: all tests pass, working tree clean.
@@ -38,14 +38,14 @@ Expected: all tests pass, working tree clean.
 ### Task 1: Add `subtle` dependency and create the security module skeleton
 
 **Files:**
-- Modify: `crates/wundler-abs/Cargo.toml`
-- Create: `crates/wundler-abs/src/security/mod.rs`
-- Create: `crates/wundler-abs/src/security/auth.rs`
-- Modify: `crates/wundler-abs/src/lib.rs`
+- Modify: `crates/cloudpack-abs/Cargo.toml`
+- Create: `crates/cloudpack-abs/src/security/mod.rs`
+- Create: `crates/cloudpack-abs/src/security/auth.rs`
+- Modify: `crates/cloudpack-abs/src/lib.rs`
 
 **Step 1: Add `subtle` to Cargo.toml**
 
-Open `crates/wundler-abs/Cargo.toml`. Add one line under `[dependencies]` (the `subtle` crate is not in the workspace — add it directly here):
+Open `crates/cloudpack-abs/Cargo.toml`. Add one line under `[dependencies]` (the `subtle` crate is not in the workspace — add it directly here):
 
 ```toml
 subtle = "2"
@@ -55,8 +55,8 @@ The `[dependencies]` section should look like this afterward:
 
 ```toml
 [dependencies]
-wundler-core = { path = "../wundler-core" }
-wundler-graph = { path = "../wundler-graph" }
+cloudpack-core = { path = "../cloudpack-core" }
+cloudpack-graph = { path = "../cloudpack-graph" }
 axum = { version = "0.8", features = ["json"] }
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
@@ -75,20 +75,20 @@ subtle = "2"
 
 **Step 2: Create the empty security module files**
 
-Create `crates/wundler-abs/src/security/mod.rs` with this content:
+Create `crates/cloudpack-abs/src/security/mod.rs` with this content:
 
 ```rust
 //! Security middleware for the Asset Bundling Server.
 //!
 //! This module provides optional bearer-token authentication applied as an
 //! Axum middleware layer. When the `[security]` section is absent from
-//! `wundler.toml`, the middleware is a transparent pass-through — existing
+//! `cloudpack.toml`, the middleware is a transparent pass-through — existing
 //! behaviour is unchanged.
 
 pub mod auth;
 ```
 
-Create `crates/wundler-abs/src/security/auth.rs` with this content:
+Create `crates/cloudpack-abs/src/security/auth.rs` with this content:
 
 ```rust
 //! Bearer-token authentication middleware and secret-token type.
@@ -96,7 +96,7 @@ Create `crates/wundler-abs/src/security/auth.rs` with this content:
 
 **Step 3: Wire `pub mod security;` into lib.rs**
 
-Open `crates/wundler-abs/src/lib.rs`. Add the line:
+Open `crates/cloudpack-abs/src/lib.rs`. Add the line:
 
 ```rust
 pub mod security;
@@ -105,7 +105,7 @@ pub mod security;
 The file should look like:
 
 ```rust
-//! # wundler-abs
+//! # cloudpack-abs
 //!
 //! ... (existing doc comment) ...
 
@@ -121,7 +121,7 @@ pub mod types;
 **Step 4: Verify compilation**
 
 ```bash
-cargo check -p wundler-abs
+cargo check -p cloudpack-abs
 ```
 
 Expected: compiles cleanly (zero errors, zero warnings).
@@ -129,10 +129,10 @@ Expected: compiles cleanly (zero errors, zero warnings).
 **Step 5: Commit**
 
 ```bash
-git add crates/wundler-abs/Cargo.toml \
-        crates/wundler-abs/src/security/mod.rs \
-        crates/wundler-abs/src/security/auth.rs \
-        crates/wundler-abs/src/lib.rs \
+git add crates/cloudpack-abs/Cargo.toml \
+        crates/cloudpack-abs/src/security/mod.rs \
+        crates/cloudpack-abs/src/security/auth.rs \
+        crates/cloudpack-abs/src/lib.rs \
         Cargo.lock
 git commit -m "feat(abs/security): add security module skeleton and subtle dependency"
 ```
@@ -142,18 +142,18 @@ git commit -m "feat(abs/security): add security module skeleton and subtle depen
 ### Task 2: `SecretToken` type — unit tests first, then implementation
 
 **Files:**
-- Extend: `crates/wundler-abs/src/security/auth.rs`
-- Create: `crates/wundler-abs/tests/auth_test.rs`
+- Extend: `crates/cloudpack-abs/src/security/auth.rs`
+- Create: `crates/cloudpack-abs/tests/auth_test.rs`
 
 **Step 1: Write the failing unit tests**
 
-Create `crates/wundler-abs/tests/auth_test.rs` with the following content. These tests will fail to compile because `SecretToken` does not exist yet.
+Create `crates/cloudpack-abs/tests/auth_test.rs` with the following content. These tests will fail to compile because `SecretToken` does not exist yet.
 
 ```rust
 //! Tests for bearer-token authentication — unit tests (SecretToken) and
 //! HTTP integration tests (require_bearer middleware end-to-end).
 
-use wundler_abs::security::auth::SecretToken;
+use cloudpack_abs::security::auth::SecretToken;
 
 // ── SecretToken unit tests ────────────────────────────────────────────────────
 
@@ -227,14 +227,14 @@ fn test_verify_empty_string_returns_false() {
 **Step 2: Run the failing tests to confirm the error**
 
 ```bash
-cargo test -p wundler-abs --test auth_test 2>&1 | head -20
+cargo test -p cloudpack-abs --test auth_test 2>&1 | head -20
 ```
 
 Expected: compilation error — `cannot find module 'auth'` or `unresolved import`. This is the expected failure.
 
 **Step 3: Implement `SecretToken` in `security/auth.rs`**
 
-Replace the entire contents of `crates/wundler-abs/src/security/auth.rs` with:
+Replace the entire contents of `crates/cloudpack-abs/src/security/auth.rs` with:
 
 ```rust
 //! Bearer-token authentication middleware and secret-token type.
@@ -316,7 +316,7 @@ impl fmt::Display for SecretToken {
 /// * Paths in [`EXEMPT_PATHS`] (`/health`, `/sw.js`) always pass through,
 ///   even when security is enabled.
 /// * When `security.is_enabled()` is `false` (no `[security]` section in
-///   `wundler.toml`), every request passes through unchanged — zero
+///   `cloudpack.toml`), every request passes through unchanged — zero
 ///   behaviour change from today.
 /// * With security enabled, the request **must** carry
 ///   `Authorization: Bearer <token>`. Any other value, a missing header, or
@@ -388,8 +388,8 @@ fn unauthorized_response() -> Response {
 **Step 4: Run the unit tests and verify they pass**
 
 ```bash
-cargo test -p wundler-abs --test auth_test test_secret_token 2>&1
-cargo test -p wundler-abs --test auth_test test_verify 2>&1
+cargo test -p cloudpack-abs --test auth_test test_secret_token 2>&1
+cargo test -p cloudpack-abs --test auth_test test_verify 2>&1
 ```
 
 Expected output:
@@ -404,8 +404,8 @@ test test_verify_empty_string_returns_false ... ok
 **Step 5: Commit**
 
 ```bash
-git add crates/wundler-abs/src/security/auth.rs \
-        crates/wundler-abs/tests/auth_test.rs
+git add crates/cloudpack-abs/src/security/auth.rs \
+        crates/cloudpack-abs/tests/auth_test.rs
 git commit -m "feat(abs/security): add SecretToken type with constant-time verify and Debug redaction"
 ```
 
@@ -414,19 +414,19 @@ git commit -m "feat(abs/security): add SecretToken type with constant-time verif
 ### Task 3: `SecurityError`, `SecurityConfig`, and `ResolvedSecurity` — tests first
 
 **Files:**
-- Extend: `crates/wundler-abs/tests/auth_test.rs`
-- Extend: `crates/wundler-abs/src/security/mod.rs`
+- Extend: `crates/cloudpack-abs/tests/auth_test.rs`
+- Extend: `crates/cloudpack-abs/src/security/mod.rs`
 
 **Step 1: Write the failing tests**
 
-Append the following to `crates/wundler-abs/tests/auth_test.rs`:
+Append the following to `crates/cloudpack-abs/tests/auth_test.rs`:
 
 ```rust
 // ── SecurityConfig / ResolvedSecurity unit tests ──────────────────────────────
 
 use std::io::Write as _;
 use tempfile::NamedTempFile;
-use wundler_abs::security::{ResolvedSecurity, SecurityConfig, SecurityError};
+use cloudpack_abs::security::{ResolvedSecurity, SecurityConfig, SecurityError};
 
 /// When no `bearer_token_file` is set, security is disabled (pass-through).
 #[test]
@@ -500,21 +500,21 @@ fn test_missing_token_file_returns_error() {
 **Step 2: Run failing tests to confirm the error**
 
 ```bash
-cargo test -p wundler-abs --test auth_test test_no_config 2>&1 | head -10
+cargo test -p cloudpack-abs --test auth_test test_no_config 2>&1 | head -10
 ```
 
 Expected: compilation error — `cannot find type SecurityConfig` (or similar). This is the expected failure.
 
 **Step 3: Implement `SecurityError`, `SecurityConfig`, and `ResolvedSecurity`**
 
-Replace the entire contents of `crates/wundler-abs/src/security/mod.rs` with:
+Replace the entire contents of `crates/cloudpack-abs/src/security/mod.rs` with:
 
 ```rust
 //! Security middleware for the Asset Bundling Server.
 //!
 //! This module provides optional bearer-token authentication applied as an
 //! Axum middleware layer. When the `[security]` section is absent from
-//! `wundler.toml`, the middleware is a transparent pass-through — existing
+//! `cloudpack.toml`, the middleware is a transparent pass-through — existing
 //! behaviour is unchanged.
 
 pub mod auth;
@@ -528,7 +528,7 @@ use crate::security::auth::SecretToken;
 // ---------------------------------------------------------------------------
 
 /// Configuration for the ABS security layer, parsed from `[security]` in
-/// `wundler.toml`.
+/// `cloudpack.toml`.
 ///
 /// All fields are optional; `Default` produces a no-security configuration
 /// that preserves today's unauthenticated behaviour.
@@ -536,7 +536,7 @@ use crate::security::auth::SecretToken;
 pub struct SecurityConfig {
     /// Path to a file containing the bearer token (one line, trimmed).
     ///
-    /// Storing the token in a file (rather than inline in `wundler.toml`)
+    /// Storing the token in a file (rather than inline in `cloudpack.toml`)
     /// prevents accidental commit and log leakage.
     ///
     /// If this field is absent, bearer-token authentication is disabled.
@@ -600,7 +600,7 @@ impl ResolvedSecurity {
 **Step 4: Run the new tests and verify they pass**
 
 ```bash
-cargo test -p wundler-abs --test auth_test 2>&1
+cargo test -p cloudpack-abs --test auth_test 2>&1
 ```
 
 Expected: all 9 tests in the file pass (5 SecretToken tests + 4 config tests).
@@ -608,8 +608,8 @@ Expected: all 9 tests in the file pass (5 SecretToken tests + 4 config tests).
 **Step 5: Commit**
 
 ```bash
-git add crates/wundler-abs/src/security/mod.rs \
-        crates/wundler-abs/tests/auth_test.rs
+git add crates/cloudpack-abs/src/security/mod.rs \
+        crates/cloudpack-abs/tests/auth_test.rs
 git commit -m "feat(abs/security): add SecurityConfig, ResolvedSecurity, and SecurityError"
 ```
 
@@ -620,13 +620,13 @@ git commit -m "feat(abs/security): add SecurityConfig, ResolvedSecurity, and Sec
 This is the integration seam. `build_router` gains a third parameter; the middleware is wired into the router; and two existing test helpers are updated so they compile unchanged.
 
 **Files:**
-- Modify: `crates/wundler-abs/src/server.rs`
-- Modify: `crates/wundler-abs/tests/server_smoke_test.rs`
-- Modify: `crates/wundler-abs/tests/http_integration_test.rs`
+- Modify: `crates/cloudpack-abs/src/server.rs`
+- Modify: `crates/cloudpack-abs/tests/server_smoke_test.rs`
+- Modify: `crates/cloudpack-abs/tests/http_integration_test.rs`
 
 **Step 1: Update `build_router` in `server.rs`**
 
-Open `crates/wundler-abs/src/server.rs`. Make the following changes:
+Open `crates/cloudpack-abs/src/server.rs`. Make the following changes:
 
 **a) Update imports at the top of `server.rs`**
 
@@ -669,7 +669,7 @@ pub fn build_router(app: AppState, telemetry: TelemetryLogger) -> Router {
 ///
 /// The `security` argument is applied as a [`middleware::from_fn_with_state`]
 /// layer that wraps all routes. When `security.is_enabled()` is `false`
-/// (the default when no `[security]` block is present in `wundler.toml`),
+/// (the default when no `[security]` block is present in `cloudpack.toml`),
 /// the middleware is a transparent pass-through.
 pub fn build_router(
     app: AppState,
@@ -725,7 +725,7 @@ pub async fn run(config: AbsConfig) -> Result<()> {
     let addr = format!("0.0.0.0:{}", config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     let local_addr = listener.local_addr()?;
-    tracing::info!("wundler-abs listening on {}", local_addr);
+    tracing::info!("cloudpack-abs listening on {}", local_addr);
 
     axum::serve(listener, router).await?;
 
@@ -783,7 +783,7 @@ impl Default for AbsConfig {
         Self {
             manifest_path: PathBuf::from("dist/manifest.json"),
             cdn_base_url: "https://cdn.example.com".to_string(),
-            telemetry_log: PathBuf::from("/tmp/wundler-telemetry.jsonl"),
+            telemetry_log: PathBuf::from("/tmp/cloudpack-telemetry.jsonl"),
             signing_key_pem: None,
             port: 8080,
             ttl_seconds: 300,
@@ -797,7 +797,7 @@ Note: `AbsConfig` derives `Clone` but `SecurityConfig` does not have `Clone` yet
 
 **Step 2: Fix `server_smoke_test.rs`**
 
-Open `crates/wundler-abs/tests/server_smoke_test.rs`. Update the `build_router` call:
+Open `crates/cloudpack-abs/tests/server_smoke_test.rs`. Update the `build_router` call:
 
 ```rust
 // OLD:
@@ -805,7 +805,7 @@ let _router = build_router(app, telemetry);
 
 // NEW:
 use std::sync::Arc;
-use wundler_abs::security::{ResolvedSecurity, SecurityConfig};
+use cloudpack_abs::security::{ResolvedSecurity, SecurityConfig};
 
 let security = ResolvedSecurity::from_config(&SecurityConfig::default())
     .expect("default security config should succeed");
@@ -819,11 +819,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
-use wundler_abs::security::{ResolvedSecurity, SecurityConfig};
-use wundler_abs::server::{build_router, AbsConfig};
-use wundler_abs::state::AppState;
-use wundler_abs::telemetry::TelemetryLogger;
-use wundler_graph::ChunkManifest;
+use cloudpack_abs::security::{ResolvedSecurity, SecurityConfig};
+use cloudpack_abs::server::{build_router, AbsConfig};
+use cloudpack_abs::state::AppState;
+use cloudpack_abs::telemetry::TelemetryLogger;
+use cloudpack_graph::ChunkManifest;
 
 /// Verify that `build_router` runs to completion without panicking.
 ///
@@ -867,7 +867,7 @@ fn abs_config_has_sensible_defaults() {
 
 **Step 3: Fix `http_integration_test.rs`**
 
-Open `crates/wundler-abs/tests/http_integration_test.rs`. Update the `make_server` helper:
+Open `crates/cloudpack-abs/tests/http_integration_test.rs`. Update the `make_server` helper:
 
 ```rust
 // OLD:
@@ -879,7 +879,7 @@ async fn make_server() -> (TestServer, TempDir) {
 
 // NEW — add these imports at the top of the file:
 use std::sync::Arc;
-use wundler_abs::security::{ResolvedSecurity, SecurityConfig};
+use cloudpack_abs::security::{ResolvedSecurity, SecurityConfig};
 
 // Then update make_server:
 async fn make_server() -> (TestServer, TempDir) {
@@ -912,7 +912,7 @@ async fn make_server() -> (TestServer, TempDir) {
 **Step 4: Run all existing tests — they must all pass**
 
 ```bash
-cargo test -p wundler-abs 2>&1
+cargo test -p cloudpack-abs 2>&1
 ```
 
 Expected: all previously passing tests continue to pass. Zero failures. The only new passing tests are the ones from Tasks 2 and 3.
@@ -920,10 +920,10 @@ Expected: all previously passing tests continue to pass. Zero failures. The only
 **Step 5: Commit**
 
 ```bash
-git add crates/wundler-abs/src/server.rs \
-        crates/wundler-abs/src/security/mod.rs \
-        crates/wundler-abs/tests/server_smoke_test.rs \
-        crates/wundler-abs/tests/http_integration_test.rs
+git add crates/cloudpack-abs/src/server.rs \
+        crates/cloudpack-abs/src/security/mod.rs \
+        crates/cloudpack-abs/tests/server_smoke_test.rs \
+        crates/cloudpack-abs/tests/http_integration_test.rs
 git commit -m "feat(abs/security): wire require_bearer middleware into build_router; update all callers"
 ```
 
@@ -932,11 +932,11 @@ git commit -m "feat(abs/security): wire require_bearer middleware into build_rou
 ### Task 5: HTTP integration tests — write all 9 auth scenarios
 
 **Files:**
-- Extend: `crates/wundler-abs/tests/auth_test.rs`
+- Extend: `crates/cloudpack-abs/tests/auth_test.rs`
 
 **Step 1: Write all 9 HTTP tests**
 
-Append the following to `crates/wundler-abs/tests/auth_test.rs`. These tests exercise the full HTTP stack via `axum_test::TestServer`.
+Append the following to `crates/cloudpack-abs/tests/auth_test.rs`. These tests exercise the full HTTP stack via `axum_test::TestServer`.
 
 ```rust
 // ── HTTP integration tests ────────────────────────────────────────────────────
@@ -948,10 +948,10 @@ use std::sync::Arc;
 use axum::http::{header, HeaderValue, StatusCode};
 use axum_test::TestServer;
 use tempfile::TempDir;
-use wundler_abs::server::build_router;
-use wundler_abs::state::AppState;
-use wundler_abs::telemetry::TelemetryLogger;
-use wundler_abs::types::ManifestRequest;
+use cloudpack_abs::server::build_router;
+use cloudpack_abs::state::AppState;
+use cloudpack_abs::telemetry::TelemetryLogger;
+use cloudpack_abs::types::ManifestRequest;
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
@@ -1193,20 +1193,20 @@ async fn test_401_response_carries_www_authenticate_header() {
 **Step 2: Run the tests and verify they all pass**
 
 ```bash
-cargo test -p wundler-abs --test auth_test 2>&1
+cargo test -p cloudpack-abs --test auth_test 2>&1
 ```
 
 Expected: all tests pass, including the 5 SecretToken unit tests, 4 config unit tests, and 8 HTTP integration tests.
 
 If any test fails, read the error message carefully — the most common causes are:
-- Import not found: check that `use wundler_abs::...` paths match the actual module structure
+- Import not found: check that `use cloudpack_abs::...` paths match the actual module structure
 - `add_header` not found on request builder: check `axum_test` v20 docs for the correct method name (may be `header(name, value)` instead)
 - Status code mismatch: check that `require_bearer` is correctly wired in `build_router`
 
 **Step 3: Run the full test suite one final time**
 
 ```bash
-cargo test -p wundler-abs 2>&1
+cargo test -p cloudpack-abs 2>&1
 ```
 
 Expected: all tests pass. Zero regressions.
@@ -1214,7 +1214,7 @@ Expected: all tests pass. Zero regressions.
 **Step 4: Commit**
 
 ```bash
-git add crates/wundler-abs/tests/auth_test.rs
+git add crates/cloudpack-abs/tests/auth_test.rs
 git commit -m "test(abs/security): add bearer token auth integration tests"
 ```
 
@@ -1225,7 +1225,7 @@ git commit -m "test(abs/security): add bearer token auth integration tests"
 **Step 1: Check for any compiler warnings**
 
 ```bash
-cargo clippy -p wundler-abs -- -D warnings 2>&1
+cargo clippy -p cloudpack-abs -- -D warnings 2>&1
 ```
 
 Fix any warnings before continuing. Common ones to expect:
@@ -1263,8 +1263,8 @@ git commit -m "fix(abs/security): address clippy warnings in security module"
 
 Before calling this complete, verify every item:
 
-- [ ] `cargo test -p wundler-abs` passes with zero failures
-- [ ] `cargo clippy -p wundler-abs -- -D warnings` passes with zero warnings
+- [ ] `cargo test -p cloudpack-abs` passes with zero failures
+- [ ] `cargo clippy -p cloudpack-abs -- -D warnings` passes with zero warnings
 - [ ] `format!("{:?}", SecretToken::new(b"x".to_vec()))` does **not** contain `"x"`
 - [ ] `format!("{}", SecretToken::new(b"x".to_vec()))` does **not** contain `"x"`
 - [ ] `POST /manifest` without `Authorization` header returns 401 when security is enabled
@@ -1283,6 +1283,6 @@ Before calling this complete, verify every item:
 |---|---|
 | CORS allowlist | `2026-05-15-security-p1-cors.md` (not yet written) |
 | Per-IP rate limiter (`governor`) | `2026-05-15-security-p1-rate-limit.md` (not yet written) |
-| `WUNDLER_BEARER_TOKEN` env var | Deferred — file-based is sufficient at POC scale |
+| `CLOUDPACK_BEARER_TOKEN` env var | Deferred — file-based is sufficient at POC scale |
 | Two-token grace period | Deferred — single-token for now, documented in design |
 | Phase 2 signing / SRI / CSP | Blocked on VRC SCA deterministic `build_id` |

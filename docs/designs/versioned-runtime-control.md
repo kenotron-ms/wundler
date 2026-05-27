@@ -3,13 +3,13 @@
 **Status:** Design proposal
 **Author:** systems-design
 **Phase:** Roadmap Phase 1 — foundation for Security Baseline, Observability, Performance, HA/blue-green
-**Scope:** `wundler-abs`, `wundler-pipeline`, `wundler-graph`, `wundler-cli`, `wundler-sw` (consumer contract only)
+**Scope:** `cloudpack-abs`, `cloudpack-pipeline`, `cloudpack-graph`, `cloudpack-cli`, `cloudpack-sw` (consumer contract only)
 
 ---
 
 ## TL;DR
 
-Wundler already has the **kernel** of versioning in place — `ChunkManifest.build_id`, `Arc<RwLock<ChunkManifest>>` in `AppState`, build-id-gated cache trust in `compute_delta`, and a `wundler:build-id-changed` postMessage in the Service Worker. What it does not have is a **mechanism**: deterministic build-id generation, an on-disk archive of past manifests, atomic hot reload, and an operator endpoint to point ABS at a specific build.
+Cloudpack already has the **kernel** of versioning in place — `ChunkManifest.build_id`, `Arc<RwLock<ChunkManifest>>` in `AppState`, build-id-gated cache trust in `compute_delta`, and a `cloudpack:build-id-changed` postMessage in the Service Worker. What it does not have is a **mechanism**: deterministic build-id generation, an on-disk archive of past manifests, atomic hot reload, and an operator endpoint to point ABS at a specific build.
 
 This design fills that gap. ABS becomes a **mechanism** that holds a versioned archive and serves whichever build is currently selected. Rollback policy (when to roll back, what to roll back to, who decides) stays with the caller. Blue/green is explicitly deferred — it is a policy layered on top of two ABS instances, not a feature of this subsystem.
 
@@ -35,18 +35,18 @@ This design fills that gap. ABS becomes a **mechanism** that holds a versioned a
 |---|---|
 | C1 | Rust only; no new runtimes |
 | C2 | ABS is in-process; archive is on-disk files (no DB, no external state store) |
-| C3 | `wundler.toml` is the config surface |
+| C3 | `cloudpack.toml` is the config surface |
 | C4 | Small team; operational simplicity is non-negotiable |
-| C5 | Wundler does not own the SW lifecycle; design must compose with standard SW update semantics |
+| C5 | Cloudpack does not own the SW lifecycle; design must compose with standard SW update semantics |
 | C6 | CAS hashes are already stable; `build_id` must also be deterministic for a given build output |
 | C7 | No external KMS / signing infrastructure yet (Security Baseline handles that) |
-| C8 | Existing `wundler-bench` infrastructure must not break |
+| C8 | Existing `cloudpack-bench` infrastructure must not break |
 
 ### 1.3 Actors
 
 | Actor | Interaction |
 |---|---|
-| `wundler build` CLI | Produces `ChunkManifest`, writes manifest + chunks to `out_dir/`, installs into archive |
+| `cloudpack build` CLI | Produces `ChunkManifest`, writes manifest + chunks to `out_dir/`, installs into archive |
 | Operator (human or CI/CD) | Calls `POST /select`, `GET /versions`, `POST /reload`; sets retention; rolls back |
 | ABS HTTP clients (apps) | `POST /manifest` to get delta; report `build_id` they last saw |
 | Browser Service Worker | Loads `manifest.json` from CDN, posts `POST /manifest` to ABS, receives `build_id`, postMessages clients on change |
@@ -60,7 +60,7 @@ This design fills that gap. ABS becomes a **mechanism** that holds a versioned a
 - `POST /manifest` → `ManifestResponse { build_id, fetch_urls, prefetch_urls, ttl }`
 - `GET  /health`   → `HealthResponse { status, build_id }`
 - `GET  /sw.js`    → embedded Service Worker script
-- `ChunkManifest.build_id: String` (already in `wundler-graph::types`)
+- `ChunkManifest.build_id: String` (already in `cloudpack-graph::types`)
 - `AppState.manifest: Arc<RwLock<ChunkManifest>>` (already future-proofed for hot reload)
 - SW `notifyBuildIdChanged(newBuildId)` (already wired)
 - `compute_delta` gates cache trust on `build_id` match (already correct)
@@ -72,19 +72,19 @@ This design fills that gap. ABS becomes a **mechanism** that holds a versioned a
 - `POST /reload`          → re-read the `current` pointer (operator-driven refresh)
 - `GET  /cdn-self-check`  → returns the cache-header policy ABS expects upstream proxies to honor
 - `compute_build_id(manifest)` → deterministic hash of canonical manifest bytes
-- `ManifestArchive` struct (new `wundler-abs/src/archive.rs`)
+- `ManifestArchive` struct (new `cloudpack-abs/src/archive.rs`)
 
 ### 1.5 What already exists that this builds on
 
 | Component | File | What it gives us |
 |---|---|---|
-| `ChunkManifest.build_id` | `crates/wundler-graph/src/types.rs:89` | Field exists; currently set from a timestamp/SHA placeholder in the pipeline |
-| `AppState` with `Arc<RwLock<ChunkManifest>>` | `crates/wundler-abs/src/state.rs:21` | Doc-commented "to support future hot-reload" |
-| Build-id-aware cache trust | `crates/wundler-abs/src/manifest.rs:79` | Stale build_id → all client cache claims ignored (correct rollback semantics out of the box) |
-| `HealthResponse.build_id` | `crates/wundler-abs/src/server.rs:100` | Operators can already poll `/health` to see what's loaded |
-| SW build-id postMessage | `crates/wundler-abs/assets/sw.js` `notifyBuildIdChanged()` | SW already broadcasts version changes to clients |
-| Telemetry log | `crates/wundler-abs/src/telemetry.rs` | Append-only JSONL — we can extend events to include observed `build_id` |
-| Atomic file writes via temp+rename | `crates/wundler-pipeline/src/output.rs` | Already the convention; archive will adopt it |
+| `ChunkManifest.build_id` | `crates/cloudpack-graph/src/types.rs:89` | Field exists; currently set from a timestamp/SHA placeholder in the pipeline |
+| `AppState` with `Arc<RwLock<ChunkManifest>>` | `crates/cloudpack-abs/src/state.rs:21` | Doc-commented "to support future hot-reload" |
+| Build-id-aware cache trust | `crates/cloudpack-abs/src/manifest.rs:79` | Stale build_id → all client cache claims ignored (correct rollback semantics out of the box) |
+| `HealthResponse.build_id` | `crates/cloudpack-abs/src/server.rs:100` | Operators can already poll `/health` to see what's loaded |
+| SW build-id postMessage | `crates/cloudpack-abs/assets/sw.js` `notifyBuildIdChanged()` | SW already broadcasts version changes to clients |
+| Telemetry log | `crates/cloudpack-abs/src/telemetry.rs` | Append-only JSONL — we can extend events to include observed `build_id` |
+| Atomic file writes via temp+rename | `crates/cloudpack-pipeline/src/output.rs` | Already the convention; archive will adopt it |
 
 This design adds ~3 files and modifies ~5. The kernel is already there.
 
@@ -119,18 +119,18 @@ This design adds ~3 files and modifies ~5. The kernel is already there.
 
 | Component | File | Responsibility |
 |---|---|---|
-| `compute_build_id()` | new `wundler-pipeline/src/build_id.rs` | Pure function: canonicalize manifest → SHA-256 → 16-char hex |
-| `canonical_bytes()` on `ChunkManifest` | extend `wundler-graph/src/types.rs` | Deterministic byte serialization: chunks sorted by id; modules sorted within chunk; `entry_chunks` keys sorted; BTreeMap, not HashMap |
-| Pipeline archive write | extend `wundler-pipeline/src/output.rs` | After `write_manifest`, copy to `archive_dir/<build_id>.json` and atomically swap `archive_dir/current` symlink |
-| Archive retention | extend `wundler-pipeline/src/output.rs` | Before install, prune oldest entries beyond `retention` count |
-| ABS file watcher | extend `wundler-abs/src/server.rs` | `notify` crate watches `archive_dir/current`; on change → `AppState::reload_current()` |
-| `AppState::reload_current()` | extend `wundler-abs/src/state.rs` | Read symlink target, parse manifest, validate (build_id matches filename), atomic write-lock swap |
+| `compute_build_id()` | new `cloudpack-pipeline/src/build_id.rs` | Pure function: canonicalize manifest → SHA-256 → 16-char hex |
+| `canonical_bytes()` on `ChunkManifest` | extend `cloudpack-graph/src/types.rs` | Deterministic byte serialization: chunks sorted by id; modules sorted within chunk; `entry_chunks` keys sorted; BTreeMap, not HashMap |
+| Pipeline archive write | extend `cloudpack-pipeline/src/output.rs` | After `write_manifest`, copy to `archive_dir/<build_id>.json` and atomically swap `archive_dir/current` symlink |
+| Archive retention | extend `cloudpack-pipeline/src/output.rs` | Before install, prune oldest entries beyond `retention` count |
+| ABS file watcher | extend `cloudpack-abs/src/server.rs` | `notify` crate watches `archive_dir/current`; on change → `AppState::reload_current()` |
+| `AppState::reload_current()` | extend `cloudpack-abs/src/state.rs` | Read symlink target, parse manifest, validate (build_id matches filename), atomic write-lock swap |
 | CDN policy doc | new `docs/runtime/cdn-cache-policy.md` | Static document; no enforcement |
 
 #### Data flow
 
 ```
-wundler build
+cloudpack build
    │
    ├─► ChunkManifest (in-memory)
    │     │
@@ -174,24 +174,24 @@ It fails **G4 explicitly**. The goal says "Operator can roll back to any archive
 
 | Component | File | Responsibility |
 |---|---|---|
-| `compute_build_id()` | new `wundler-pipeline/src/build_id.rs` | Same as C1 |
-| `canonical_bytes()` | extend `wundler-graph/src/types.rs` | Same as C1 |
-| `ManifestArchive` | new `wundler-abs/src/archive.rs` | Owns archive dir; CRUD; retention; index in-memory |
-| Pipeline archive write | extend `wundler-pipeline/src/output.rs` | Same install-into-archive logic; archive layout owned by ABS but pipeline knows the convention |
-| `AppState` v2 | rewrite `wundler-abs/src/state.rs` | `manifest: Arc<RwLock<Arc<ChunkManifest>>>` (double-Arc snapshot pattern); `archive: Arc<ManifestArchive>`; `reload_lock: Arc<Mutex<()>>` |
+| `compute_build_id()` | new `cloudpack-pipeline/src/build_id.rs` | Same as C1 |
+| `canonical_bytes()` | extend `cloudpack-graph/src/types.rs` | Same as C1 |
+| `ManifestArchive` | new `cloudpack-abs/src/archive.rs` | Owns archive dir; CRUD; retention; index in-memory |
+| Pipeline archive write | extend `cloudpack-pipeline/src/output.rs` | Same install-into-archive logic; archive layout owned by ABS but pipeline knows the convention |
+| `AppState` v2 | rewrite `cloudpack-abs/src/state.rs` | `manifest: Arc<RwLock<Arc<ChunkManifest>>>` (double-Arc snapshot pattern); `archive: Arc<ManifestArchive>`; `reload_lock: Arc<Mutex<()>>` |
 | `swap_to(build_id)` | extend `AppState` | Load from archive, validate, atomic swap |
-| `GET /versions` | extend `wundler-abs/src/server.rs` | Return `Vec<ArchiveEntry>` from `archive.list()` |
-| `POST /select` | extend `wundler-abs/src/server.rs` | `{ "build_id": "..." }` → `swap_to()` → return new state. **Bound to 127.0.0.1 by default.** |
-| `POST /reload` | extend `wundler-abs/src/server.rs` | Re-read `current` pointer; useful when pipeline updated it externally |
+| `GET /versions` | extend `cloudpack-abs/src/server.rs` | Return `Vec<ArchiveEntry>` from `archive.list()` |
+| `POST /select` | extend `cloudpack-abs/src/server.rs` | `{ "build_id": "..." }` → `swap_to()` → return new state. **Bound to 127.0.0.1 by default.** |
+| `POST /reload` | extend `cloudpack-abs/src/server.rs` | Re-read `current` pointer; useful when pipeline updated it externally |
 | `GET /cdn-self-check` | new in `server.rs` | Returns expected upstream cache-header policy + diagnostic info |
-| `wundler diagnose cdn` | new in `wundler-cli/src/main.rs` | Fetches live URLs, compares headers against `/cdn-self-check` expectations |
-| SW build_id reporting | extend `crates/wundler-sw/src/sw.ts` + `wundler-abs/src/types.rs::TelemetryEvent` | SW echoes `last_seen_build_id` in `POST /manifest` body; ABS records it |
-| Optional file watcher | extend `server.rs` | Opt-in via `wundler.toml`; default OFF (mechanism not policy — let the operator/CI/CD trigger reloads explicitly) |
+| `cloudpack diagnose cdn` | new in `cloudpack-cli/src/main.rs` | Fetches live URLs, compares headers against `/cdn-self-check` expectations |
+| SW build_id reporting | extend `crates/cloudpack-sw/src/sw.ts` + `cloudpack-abs/src/types.rs::TelemetryEvent` | SW echoes `last_seen_build_id` in `POST /manifest` body; ABS records it |
+| Optional file watcher | extend `server.rs` | Opt-in via `cloudpack.toml`; default OFF (mechanism not policy — let the operator/CI/CD trigger reloads explicitly) |
 
 #### New Rust shape (concrete)
 
 ```rust
-// crates/wundler-abs/src/archive.rs
+// crates/cloudpack-abs/src/archive.rs
 pub struct ManifestArchive {
     pub archive_dir: PathBuf,
     pub retention: usize,
@@ -217,7 +217,7 @@ impl ManifestArchive {
 ```
 
 ```rust
-// crates/wundler-abs/src/state.rs (rewritten)
+// crates/cloudpack-abs/src/state.rs (rewritten)
 #[derive(Clone)]
 pub struct AppState {
     // Double-Arc: handlers clone the inner Arc and release the read lock
@@ -256,7 +256,7 @@ impl AppState {
 ```
 
 ```rust
-// crates/wundler-pipeline/src/build_id.rs  (new)
+// crates/cloudpack-pipeline/src/build_id.rs  (new)
 pub fn compute_build_id(manifest: &ChunkManifest) -> String {
     let bytes = manifest.canonical_bytes();   // deterministic
     let digest = sha2::Sha256::digest(&bytes);
@@ -298,7 +298,7 @@ GET  /cdn-self-check
 #### Data flow
 
 ```
-wundler build ──► ChunkManifest ──► compute_build_id → "a1b2..."
+cloudpack build ──► ChunkManifest ──► compute_build_id → "a1b2..."
                   │
                   └─► write_manifest(out_dir/manifest.json)
                         │
@@ -339,7 +339,7 @@ Browser SW ──POST /manifest, last_seen_build_id="x"──►
 
 | Component | File | Responsibility |
 |---|---|---|
-| `ManifestLog` | new `wundler-abs/src/log.rs` | Append-only `log.jsonl` of `LogEntry { build_id, parent_build_id, timestamp_ms, ref_path }` |
+| `ManifestLog` | new `cloudpack-abs/src/log.rs` | Append-only `log.jsonl` of `LogEntry { build_id, parent_build_id, timestamp_ms, ref_path }` |
 | `LogEntry` snapshot index | in-memory | Built from log on startup; supports replay |
 | Named tags | `archive_dir/tags/<name>` symlinks | `current`, `prod`, `canary`, `blue`, `green` — multiple coexist |
 | Compaction | new `compactor.rs` | After N entries, write snapshot summary; old entries archived |
@@ -349,7 +349,7 @@ Browser SW ──POST /manifest, last_seen_build_id="x"──►
 #### Data flow
 
 ```
-wundler build ──► ChunkManifest ──► compute_build_id
+cloudpack build ──► ChunkManifest ──► compute_build_id
                                     │
                                     └─► log.append(LogEntry {
                                           build_id,
@@ -448,7 +448,7 @@ ABS does not implement any of these policies. It exposes the **smallest set of p
 **Mitigation in this design:**
 
 - `POST /select`, `POST /reload`, `GET /versions`, `GET /cdn-self-check` bind to a **separate listener on `127.0.0.1`** by default. Public listener serves only `POST /manifest`, `GET /health`, `GET /sw.js`.
-- New `wundler.toml` section:
+- New `cloudpack.toml` section:
   ```toml
   [abs.operator]
   bind = "127.0.0.1:9090"          # default
@@ -466,7 +466,7 @@ Each manifest is small (tens of KB typically), but a runaway pipeline that build
 - Default retention = 10 builds. Configurable via `[abs.archive] retention = N`.
 - `ManifestArchive::install` prunes **before** writing, so steady-state disk use is bounded.
 - ABS logs the archive directory size on startup; logs `WARN` if total > 100 MB (sanity threshold — a normal archive should be < 1 MB).
-- `wundler diagnose archive` CLI command reports size, oldest entry, count.
+- `cloudpack diagnose archive` CLI command reports size, oldest entry, count.
 
 #### R3 — CDN misconfiguration (High; silent)
 
@@ -475,7 +475,7 @@ If the CDN puts `Cache-Control: max-age=...` on `manifest.json`, clients never s
 **Mitigation:**
 
 - `GET /cdn-self-check` returns the expected upstream cache-header policy as authoritative JSON.
-- `wundler diagnose cdn` CLI fetches the live CDN URLs (configured in `wundler.toml`) and diffs their headers against `/cdn-self-check`. Exits non-zero on mismatch.
+- `cloudpack diagnose cdn` CLI fetches the live CDN URLs (configured in `cloudpack.toml`) and diffs their headers against `/cdn-self-check`. Exits non-zero on mismatch.
 - Designed to run in staging CI; gates promotion to prod.
 - Documented separately in `docs/runtime/cdn-cache-policy.md` with copy-paste configs for the common CDNs we expect to use.
 
@@ -550,7 +550,7 @@ It does not satisfy G2 or G4 on its own. It is the right *interim* step if sched
 | # | Question | Default if unanswered |
 |---|---|---|
 | Q1 | Should `compute_build_id` mix in the `git_commit` SHA, or stay purely content-derived? | Stay purely content-derived. Record `git_commit` separately in `ArchiveEntry`. Two identical content builds *are* the same build for cache purposes; the git commit is operator metadata, not identity. |
-| Q2 | Should the file watcher be on by default in dev (via `wundler dev`) and off in prod? | Yes. Two `wundler.toml` profiles: `[abs.archive.dev] watch = true`, `[abs.archive.prod] watch = false`. |
+| Q2 | Should the file watcher be on by default in dev (via `cloudpack dev`) and off in prod? | Yes. Two `cloudpack.toml` profiles: `[abs.archive.dev] watch = true`, `[abs.archive.prod] watch = false`. |
 | Q3 | Should `/select` return immediately or after the swap completes? | After. The swap is bounded (< 50ms for a typical manifest) and the operator wants confirmation, not optimism. |
 | Q4 | What should `is_current` return during a swap-in-progress? | The previous build_id. The new build_id becomes `is_current` only after `RwLock::write` completes. |
 | Q5 | Do we expose `last_seen_build_id` from clients as a Prometheus-style metric? | Yes, but that's Observability's job, not this subsystem's. We just need to make sure the data is recorded in telemetry — Observability builds the dashboards. |
@@ -561,12 +561,12 @@ It does not satisfy G2 or G4 on its own. It is the right *interim* step if sched
 
 A working implementation of C2 must demonstrate, with tests:
 
-1. **Determinism:** Two builds of the same source tree produce byte-identical `manifest.json` and identical `build_id`. (Unit test on `canonical_bytes`; integration test in `wundler-bench` against the synthetic app generator.)
+1. **Determinism:** Two builds of the same source tree produce byte-identical `manifest.json` and identical `build_id`. (Unit test on `canonical_bytes`; integration test in `cloudpack-bench` against the synthetic app generator.)
 2. **Archive bound:** After 15 sequential builds with `retention = 10`, exactly 10 manifests exist in `archive_dir`. (Pipeline integration test.)
-3. **Atomic swap:** While a long-running `POST /manifest` is in flight, a concurrent `POST /select` completes; the in-flight request returns the prior build's response; the next `POST /manifest` returns the new build's response. (Tokio-based concurrent test in `wundler-abs/tests/`.)
+3. **Atomic swap:** While a long-running `POST /manifest` is in flight, a concurrent `POST /select` completes; the in-flight request returns the prior build's response; the next `POST /manifest` returns the new build's response. (Tokio-based concurrent test in `cloudpack-abs/tests/`.)
 4. **Rollback safety:** After `POST /select` to a prior build_id, clients that previously cached chunks from a different build send a stale `build_id` and receive the full chunk set (no stale-cache poisoning). (Already tested by `manifest_delta_test.rs::stale_build_id_ignores_client_cache` — add a rollback-flavored variant.)
-5. **Loopback default:** With default `wundler.toml`, `curl -X POST http://0.0.0.0:9090/select` from another host fails to connect. (Integration test.)
-6. **CDN self-check:** `wundler diagnose cdn` exits 0 when CDN serves expected headers and non-zero with a structured diff when it doesn't. (CLI test with a mock CDN.)
+5. **Loopback default:** With default `cloudpack.toml`, `curl -X POST http://0.0.0.0:9090/select` from another host fails to connect. (Integration test.)
+6. **CDN self-check:** `cloudpack diagnose cdn` exits 0 when CDN serves expected headers and non-zero with a structured diff when it doesn't. (CLI test with a mock CDN.)
 7. **SW build_id roundtrip:** Service Worker reads `build_id` from `manifest.json` at install, sends it as `last_seen_build_id` in subsequent `POST /manifest` calls, and the telemetry log contains that field. (SW unit test + ABS telemetry test.)
 
 ---
@@ -583,7 +583,7 @@ Suggested decomposition into RED→GREEN tasks, ordered for minimum risk:
 6. `GET /versions`. *Read-only, low risk.*
 7. `POST /reload`. *Single-purpose, easy to test.*
 8. `POST /select`. *Includes loopback-bind default.*
-9. `GET /cdn-self-check` + `wundler diagnose cdn` CLI.
+9. `GET /cdn-self-check` + `cloudpack diagnose cdn` CLI.
 10. SW `last_seen_build_id` in `POST /manifest` body + telemetry capture.
 11. Optional: file watcher behind `[abs.archive] watch = true`. Default off.
 12. Documentation: `docs/runtime/cdn-cache-policy.md`, `docs/runtime/operator-runbook.md`.

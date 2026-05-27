@@ -1,16 +1,16 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/wundler-core",
-    "crates/wundler-cli",
-    "crates/wundler-graph",
-    "crates/wundler-transform",
-    "crates/wundler-pipeline",
-    "crates/wundler-abs",
-    "crates/wundler-pgo",
-    "crates/wundler-bench",
-    "crates/wundler-dev",
-    "crates/wundler-html",
+    "crates/cloudpack-core",
+    "crates/cloudpack-cli",
+    "crates/cloudpack-graph",
+    "crates/cloudpack-transform",
+    "crates/cloudpack-pipeline",
+    "crates/cloudpack-abs",
+    "crates/cloudpack-pgo",
+    "crates/cloudpack-bench",
+    "crates/cloudpack-dev",
+    "crates/cloudpack-html",
 ]
 
 [workspace.package]

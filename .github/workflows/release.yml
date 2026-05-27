@@ -18,15 +18,15 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            archive: wundler-linux-x86_64.tar.gz
+            archive: cloudpack-linux-x86_64.tar.gz
 
           - os: macos-latest
             target: aarch64-apple-darwin
-            archive: wundler-macos-arm64.tar.gz
+            archive: cloudpack-macos-arm64.tar.gz
 
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            archive: wundler-windows-x86_64.zip
+            archive: cloudpack-windows-x86_64.zip
 
     steps:
       - uses: actions/checkout@v4
@@ -52,21 +52,21 @@ jobs:
             ${{ runner.os }}-${{ matrix.target }}-cargo-
 
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }} -p wundler-cli
+        run: cargo build --release --locked --target ${{ matrix.target }} -p cloudpack-cli
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
         run: |
-          cp target/${{ matrix.target }}/release/wundler wundler
-          tar czf ${{ matrix.archive }} wundler
+          cp target/${{ matrix.target }}/release/cloudpack cloudpack
+          tar czf ${{ matrix.archive }} cloudpack
           sha256sum ${{ matrix.archive }} > ${{ matrix.archive }}.sha256
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Copy-Item "target/${{ matrix.target }}/release/wundler.exe" "wundler.exe"
-          Compress-Archive -Path wundler.exe -DestinationPath ${{ matrix.archive }}
+          Copy-Item "target/${{ matrix.target }}/release/cloudpack.exe" "cloudpack.exe"
+          Compress-Archive -Path cloudpack.exe -DestinationPath ${{ matrix.archive }}
           $hash = (Get-FileHash ${{ matrix.archive }} -Algorithm SHA256).Hash.ToLower()
           "$hash  ${{ matrix.archive }}" | Out-File -Encoding utf8 "${{ matrix.archive }}.sha256"
 
@@ -110,18 +110,18 @@ jobs:
 
             | Platform | Archive |
             |---|---|
-            | Linux x86_64 (static) | `wundler-linux-x86_64.tar.gz` |
-            | macOS ARM (Apple Silicon) | `wundler-macos-arm64.tar.gz` |
-            | macOS Intel | `wundler-macos-x86_64.tar.gz` |
-            | Windows x86_64 | `wundler-windows-x86_64.zip` |
+            | Linux x86_64 (static) | `cloudpack-linux-x86_64.tar.gz` |
+            | macOS ARM (Apple Silicon) | `cloudpack-macos-arm64.tar.gz` |
+            | macOS Intel | `cloudpack-macos-x86_64.tar.gz` |
+            | Windows x86_64 | `cloudpack-windows-x86_64.zip` |
 
-            Each archive contains a single `wundler` binary. SHA-256 checksums in the `.sha256` sidecar files.
+            Each archive contains a single `cloudpack` binary. SHA-256 checksums in the `.sha256` sidecar files.
 
             ### Quick install (Linux/macOS)
             ```sh
-            curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ github.ref_type == 'tag' && github.ref_name || 'latest' }}/wundler-linux-x86_64.tar.gz | tar xz
+            curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ github.ref_type == 'tag' && github.ref_name || 'latest' }}/cloudpack-linux-x86_64.tar.gz | tar xz
             # or on macOS ARM:
-            curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ github.ref_type == 'tag' && github.ref_name || 'latest' }}/wundler-macos-arm64.tar.gz | tar xz
+            curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ github.ref_type == 'tag' && github.ref_name || 'latest' }}/cloudpack-macos-arm64.tar.gz | tar xz
             ```
           files: |
             artifacts/**/*

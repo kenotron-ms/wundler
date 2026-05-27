@@ -4,7 +4,7 @@
 
 **Goal:** Add a strict CORS allowlist to the Asset Bundling Server (ABS) so cross-origin browser requests are accepted only from explicitly listed origins (no wildcard, ever).
 
-**Architecture:** Extend the existing `SecurityConfig` / `ResolvedSecurity` pair with an `allowed_origins` field that is parsed from `wundler.toml` into pre-validated `HeaderValue`s at startup. A new `security::cors` module returns a `tower_http::cors::CorsLayer` that is wired as the **outermost** layer in `build_router` so browsers receive CORS headers even on 401 responses. Empty list = no `Access-Control-Allow-Origin` header → browsers block by default. No credentials, ever.
+**Architecture:** Extend the existing `SecurityConfig` / `ResolvedSecurity` pair with an `allowed_origins` field that is parsed from `cloudpack.toml` into pre-validated `HeaderValue`s at startup. A new `security::cors` module returns a `tower_http::cors::CorsLayer` that is wired as the **outermost** layer in `build_router` so browsers receive CORS headers even on 401 responses. Empty list = no `Access-Control-Allow-Origin` header → browsers block by default. No credentials, ever.
 
 **Tech Stack:** Rust, Axum, `tower-http` (already vendored with `features = ["cors", "trace"]`), `axum_test = "20"` for integration tests, `serde` for TOML deserialization.
 
@@ -13,12 +13,12 @@
 ## File Structure
 
 **Modify:**
-- `crates/wundler-abs/src/security/mod.rs` — add `allowed_origins: Vec<String>` to `SecurityConfig`; add `allowed_origins: Vec<HeaderValue>` to `ResolvedSecurity`; extend `SecurityError`; parse origins in `from_config`.
-- `crates/wundler-abs/src/server.rs` — wire `build_cors(&security)` as the outermost layer in `build_router`.
+- `crates/cloudpack-abs/src/security/mod.rs` — add `allowed_origins: Vec<String>` to `SecurityConfig`; add `allowed_origins: Vec<HeaderValue>` to `ResolvedSecurity`; extend `SecurityError`; parse origins in `from_config`.
+- `crates/cloudpack-abs/src/server.rs` — wire `build_cors(&security)` as the outermost layer in `build_router`.
 
 **Create:**
-- `crates/wundler-abs/src/security/cors.rs` — `build_cors(sec: &ResolvedSecurity) -> CorsLayer`.
-- `crates/wundler-abs/tests/cors_test.rs` — HTTP integration tests covering allowed/blocked/preflight/empty-list behaviour.
+- `crates/cloudpack-abs/src/security/cors.rs` — `build_cors(sec: &ResolvedSecurity) -> CorsLayer`.
+- `crates/cloudpack-abs/tests/cors_test.rs` — HTTP integration tests covering allowed/blocked/preflight/empty-list behaviour.
 
 **Boundary — DO NOT TOUCH:**
 - Rate limiter (P1.3) — separate plan.
@@ -30,14 +30,14 @@
 ## Task 1: Extend `SecurityConfig` and `ResolvedSecurity` with `allowed_origins`
 
 **Files:**
-- Modify: `crates/wundler-abs/src/security/mod.rs`
+- Modify: `crates/cloudpack-abs/src/security/mod.rs`
 - Test (inline `#[cfg(test)]` module at the bottom of the same file)
 
 This task does **not** touch the router. It only extends the config types and the `from_config` resolver, plus unit tests for origin parsing. All existing call sites still compile because the new field has `#[serde(default)]` and `ResolvedSecurity` already has at least one public field constructor we keep working.
 
 - [ ] **Step 1.1: Write the failing test for "empty origins → empty Vec"**
 
-Append this block to the **bottom** of `crates/wundler-abs/src/security/mod.rs`:
+Append this block to the **bottom** of `crates/cloudpack-abs/src/security/mod.rs`:
 
 ```rust
 #[cfg(test)]
@@ -102,17 +102,17 @@ mod tests {
 
 Run:
 ```bash
-~/.cargo/bin/cargo test -p wundler-abs --lib security::tests 2>&1 | head -40
+~/.cargo/bin/cargo test -p cloudpack-abs --lib security::tests 2>&1 | head -40
 ```
 Expected: compile error referencing `SecurityConfig` missing field `allowed_origins`, `ResolvedSecurity` missing field `allowed_origins`, and unknown variant `SecurityError::InvalidOrigin`.
 
 - [ ] **Step 1.3: Add `allowed_origins` to `SecurityConfig`**
 
-In `crates/wundler-abs/src/security/mod.rs`, replace the entire `SecurityConfig` struct definition with:
+In `crates/cloudpack-abs/src/security/mod.rs`, replace the entire `SecurityConfig` struct definition with:
 
 ```rust
 /// Configuration for the ABS security layer, parsed from `[security]` in
-/// `wundler.toml`.
+/// `cloudpack.toml`.
 ///
 /// All fields are optional; `Default` produces a no-security configuration
 /// that preserves today's unauthenticated behaviour.
@@ -120,7 +120,7 @@ In `crates/wundler-abs/src/security/mod.rs`, replace the entire `SecurityConfig`
 pub struct SecurityConfig {
     /// Path to a file containing the bearer token (one line, trimmed).
     ///
-    /// Storing the token in a file (rather than inline in `wundler.toml`)
+    /// Storing the token in a file (rather than inline in `cloudpack.toml`)
     /// prevents accidental commit and log leakage.
     ///
     /// If this field is absent, bearer-token authentication is disabled.
@@ -141,7 +141,7 @@ pub struct SecurityConfig {
 
 - [ ] **Step 1.4: Add the `InvalidOrigin` variant to `SecurityError`**
 
-Replace the existing `SecurityError` enum in `crates/wundler-abs/src/security/mod.rs` with:
+Replace the existing `SecurityError` enum in `crates/cloudpack-abs/src/security/mod.rs` with:
 
 ```rust
 /// Errors that can occur while resolving a [`SecurityConfig`].
@@ -160,7 +160,7 @@ pub enum SecurityError {
 
 - [ ] **Step 1.5: Extend `ResolvedSecurity` and `from_config`**
 
-Replace the entire `ResolvedSecurity` block (struct + `impl`) in `crates/wundler-abs/src/security/mod.rs` with:
+Replace the entire `ResolvedSecurity` block (struct + `impl`) in `crates/cloudpack-abs/src/security/mod.rs` with:
 
 ```rust
 /// The runtime-ready form of [`SecurityConfig`].
@@ -232,7 +232,7 @@ impl ResolvedSecurity {
 
 Run:
 ```bash
-~/.cargo/bin/cargo test -p wundler-abs --lib security::tests 2>&1 | tail -20
+~/.cargo/bin/cargo test -p cloudpack-abs --lib security::tests 2>&1 | tail -20
 ```
 Expected: `test result: ok. 4 passed; 0 failed`.
 
@@ -240,15 +240,15 @@ Expected: `test result: ok. 4 passed; 0 failed`.
 
 Run:
 ```bash
-~/.cargo/bin/cargo build -p wundler-abs 2>&1 | tail -10
-~/.cargo/bin/cargo clippy -p wundler-abs --all-targets -- -D warnings 2>&1 | tail -10
+~/.cargo/bin/cargo build -p cloudpack-abs 2>&1 | tail -10
+~/.cargo/bin/cargo clippy -p cloudpack-abs --all-targets -- -D warnings 2>&1 | tail -10
 ```
 Expected: both finish with no warnings, no errors. (Existing call sites that construct `ResolvedSecurity` via `from_config` are unaffected; no call site builds the struct literally.)
 
 - [ ] **Step 1.8: Commit**
 
 ```bash
-git add crates/wundler-abs/src/security/mod.rs
+git add crates/cloudpack-abs/src/security/mod.rs
 git commit -m "feat(abs/security): add allowed_origins to SecurityConfig and ResolvedSecurity
 
 Parses and validates CORS allowlist origins at startup. Wildcard ('*')
@@ -263,14 +263,14 @@ Part of P1.2 — CORS allowlist (security-baseline.md)."
 ## Task 2: Create `security/cors.rs` with `build_cors()`
 
 **Files:**
-- Create: `crates/wundler-abs/src/security/cors.rs`
-- Modify: `crates/wundler-abs/src/security/mod.rs` (add `pub mod cors;`)
+- Create: `crates/cloudpack-abs/src/security/cors.rs`
+- Modify: `crates/cloudpack-abs/src/security/mod.rs` (add `pub mod cors;`)
 
 This task introduces the CORS layer builder and its unit tests. The router is **not** touched yet — that's Task 3.
 
 - [ ] **Step 2.1: Write the failing test file**
 
-Create `crates/wundler-abs/src/security/cors.rs` with the following content. The tests are written first; the `build_cors` function is a one-line stub that intentionally fails the assertion.
+Create `crates/cloudpack-abs/src/security/cors.rs` with the following content. The tests are written first; the `build_cors` function is a one-line stub that intentionally fails the assertion.
 
 ```rust
 //! CORS allowlist layer for the Asset Bundling Server.
@@ -359,7 +359,7 @@ mod tests {
 
 - [ ] **Step 2.2: Register the new module**
 
-Replace the `pub mod auth;` line near the top of `crates/wundler-abs/src/security/mod.rs` with:
+Replace the `pub mod auth;` line near the top of `crates/cloudpack-abs/src/security/mod.rs` with:
 
 ```rust
 pub mod auth;
@@ -370,7 +370,7 @@ pub mod cors;
 
 Run:
 ```bash
-~/.cargo/bin/cargo test -p wundler-abs --lib security::cors 2>&1 | tail -15
+~/.cargo/bin/cargo test -p cloudpack-abs --lib security::cors 2>&1 | tail -15
 ```
 Expected: `test result: ok. 3 passed; 0 failed`.
 
@@ -378,14 +378,14 @@ Expected: `test result: ok. 3 passed; 0 failed`.
 
 Run:
 ```bash
-~/.cargo/bin/cargo clippy -p wundler-abs --all-targets -- -D warnings 2>&1 | tail -10
+~/.cargo/bin/cargo clippy -p cloudpack-abs --all-targets -- -D warnings 2>&1 | tail -10
 ```
 Expected: clean — no warnings.
 
 - [ ] **Step 2.5: Commit**
 
 ```bash
-git add crates/wundler-abs/src/security/mod.rs crates/wundler-abs/src/security/cors.rs
+git add crates/cloudpack-abs/src/security/mod.rs crates/cloudpack-abs/src/security/cors.rs
 git commit -m "feat(abs/security): add build_cors() CORS layer builder
 
 Empty allowlist produces a no-op CorsLayer (browser blocks).
@@ -401,14 +401,14 @@ Part of P1.2 — CORS allowlist."
 ## Task 3: Wire `build_cors` into `build_router` (outermost layer) + integration tests
 
 **Files:**
-- Modify: `crates/wundler-abs/src/server.rs` (the `build_router` function only)
-- Create: `crates/wundler-abs/tests/cors_test.rs`
+- Modify: `crates/cloudpack-abs/src/server.rs` (the `build_router` function only)
+- Create: `crates/cloudpack-abs/tests/cors_test.rs`
 
 The CORS layer must be **outer** — added with `.layer(build_cors(...))` **after** the bearer-token layer in the builder chain — so browsers receive `Access-Control-Allow-Origin` even when the response is a `401` from the auth layer. Tower's layer-application order is "last `.layer()` wraps first", so the *last* `.layer()` call in the chain ends up *outermost* at runtime.
 
 - [ ] **Step 3.1: Write the failing integration test file**
 
-Create `crates/wundler-abs/tests/cors_test.rs` with:
+Create `crates/cloudpack-abs/tests/cors_test.rs` with:
 
 ```rust
 //! HTTP integration tests for the CORS allowlist (P1.2).
@@ -420,11 +420,11 @@ use std::sync::Arc;
 
 use axum_test::TestServer;
 use serde_json::json;
-use wundler_abs::security::{ResolvedSecurity, SecurityConfig};
-use wundler_abs::server::build_router;
-use wundler_abs::state::AppState;
-use wundler_abs::telemetry::TelemetryLogger;
-use wundler_graph::ChunkManifest;
+use cloudpack_abs::security::{ResolvedSecurity, SecurityConfig};
+use cloudpack_abs::server::build_router;
+use cloudpack_abs::state::AppState;
+use cloudpack_abs::telemetry::TelemetryLogger;
+use cloudpack_graph::ChunkManifest;
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -641,7 +641,7 @@ Run:
 ```
 If the output is empty, add tempfile to dev-deps:
 ```bash
-~/.cargo/bin/cargo add -p wundler-abs --dev tempfile
+~/.cargo/bin/cargo add -p cloudpack-abs --dev tempfile
 ```
 Otherwise skip the add. (Most workspaces already pull in tempfile.)
 
@@ -649,13 +649,13 @@ Otherwise skip the add. (Most workspaces already pull in tempfile.)
 
 Run:
 ```bash
-~/.cargo/bin/cargo test -p wundler-abs --test cors_test 2>&1 | tail -40
+~/.cargo/bin/cargo test -p cloudpack-abs --test cors_test 2>&1 | tail -40
 ```
 Expected: tests compile but `allowlisted_origin_is_reflected_in_response`, `preflight_options_for_allowlisted_origin_returns_cors_headers`, and `cors_layer_is_outer_so_401_responses_still_carry_cors_header` **FAIL** because `build_router` does not yet apply the CORS layer. The `empty_allowlist_*` and `non_allowlisted_*` tests should pass already (they assert absence of the header).
 
 - [ ] **Step 3.4: Wire `build_cors` into `build_router`**
 
-In `crates/wundler-abs/src/server.rs`, update the imports near the top:
+In `crates/cloudpack-abs/src/server.rs`, update the imports near the top:
 
 Replace:
 ```rust
@@ -684,7 +684,7 @@ Then replace the entire `build_router` function with:
 ///
 /// The `security` parameter controls both bearer-token authentication and
 /// the CORS allowlist. When neither is configured (the default when no
-/// `[security]` section is present in `wundler.toml`) both middlewares are
+/// `[security]` section is present in `cloudpack.toml`) both middlewares are
 /// transparent pass-throughs and existing behaviour is unchanged.
 pub fn build_router(
     app: AppState,
@@ -714,7 +714,7 @@ pub fn build_router(
 
 Run:
 ```bash
-~/.cargo/bin/cargo test -p wundler-abs --test cors_test 2>&1 | tail -20
+~/.cargo/bin/cargo test -p cloudpack-abs --test cors_test 2>&1 | tail -20
 ```
 Expected: `test result: ok. 5 passed; 0 failed`.
 
@@ -722,14 +722,14 @@ Expected: `test result: ok. 5 passed; 0 failed`.
 
 Run:
 ```bash
-~/.cargo/bin/cargo test -p wundler-abs 2>&1 | tail -30
+~/.cargo/bin/cargo test -p cloudpack-abs 2>&1 | tail -30
 ```
 Expected: every existing test (auth_test, http_integration_test, unit tests, cors_test) passes — `0 failed` across all binaries.
 
 If `tests/auth_test.rs` or `tests/http_integration_test.rs` constructs `ResolvedSecurity` via a struct literal (rather than `from_config`), they will fail to compile because of the new `allowed_origins` field. **Fix by switching to `from_config`**, or by adding `allowed_origins: vec![]` to the literal:
 
 ```bash
-grep -n 'ResolvedSecurity {' crates/wundler-abs/tests/ crates/wundler-abs/src/ 2>/dev/null
+grep -n 'ResolvedSecurity {' crates/cloudpack-abs/tests/ crates/cloudpack-abs/src/ 2>/dev/null
 ```
 For each match that is a struct literal, add `, allowed_origins: vec![]` before the closing brace. Re-run the test suite until it is green.
 
@@ -737,18 +737,18 @@ For each match that is a struct literal, add `, allowed_origins: vec![]` before 
 
 Run:
 ```bash
-~/.cargo/bin/cargo clippy -p wundler-abs --all-targets -- -D warnings 2>&1 | tail -15
+~/.cargo/bin/cargo clippy -p cloudpack-abs --all-targets -- -D warnings 2>&1 | tail -15
 ```
 Expected: clean — finishes with no warnings emitted at the deny level.
 
 - [ ] **Step 3.8: Commit**
 
 ```bash
-git add crates/wundler-abs/src/server.rs crates/wundler-abs/tests/cors_test.rs
+git add crates/cloudpack-abs/src/server.rs crates/cloudpack-abs/tests/cors_test.rs
 # Include any test-file edits made in Step 3.6:
-git add -u crates/wundler-abs/tests/
+git add -u crates/cloudpack-abs/tests/
 # If `cargo add --dev tempfile` modified Cargo.toml / Cargo.lock:
-git add crates/wundler-abs/Cargo.toml Cargo.lock 2>/dev/null || true
+git add crates/cloudpack-abs/Cargo.toml Cargo.lock 2>/dev/null || true
 
 git commit -m "feat(abs/security): wire CORS allowlist as outermost router layer
 
@@ -781,8 +781,8 @@ Closes P1.2 — CORS allowlist (security-baseline.md)."
    - CORS as outermost layer — Task 3, Step 3.4, with explicit 401-carries-CORS test in Step 3.1.
 
 2. **Acceptance criteria mapping**
-   - `cargo test -p wundler-abs` passes — Task 3, Step 3.6.
-   - `cargo clippy -p wundler-abs -- -D warnings` passes — Task 3, Step 3.7.
+   - `cargo test -p cloudpack-abs` passes — Task 3, Step 3.6.
+   - `cargo clippy -p cloudpack-abs -- -D warnings` passes — Task 3, Step 3.7.
    - Non-allowlisted origin → no ACAO — `non_allowlisted_origin_gets_no_cors_header`.
    - Allowlisted origin → ACAO reflected — `allowlisted_origin_is_reflected_in_response`.
    - Default config → no ACAO, no breaking change — `empty_allowlist_emits_no_cors_header_on_simple_request` + Step 3.6 ensures all pre-existing tests still pass.

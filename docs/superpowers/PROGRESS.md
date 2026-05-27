@@ -1,4 +1,4 @@
-# Wundler — Implementation Progress
+# Cloudpack — Implementation Progress
 
 > **How to use:** At the start of any session, read this file to know where we left off.
 > After completing each task: check the box in the plan file.
@@ -70,7 +70,7 @@
 - **Design:** `docs/designs/security-baseline.md` §Phase 2
 - **Status:** ✅ **COMPLETE** — 5 / 5 tasks
 - **Branch:** `feat/phase3-roadmap`
-- **What shipped:** `AppState.signature` slot, `GET /manifest/full.json` with `X-Wundler-Signature`, `POST /csp-report` ingester, `security/csp.rs` builder, `wundler-html` crate (`hex_to_sri_b64` + `render_script_tags`), ManifestSigner wired into `POST /reload`, cross-language contract test (Rust half)
+- **What shipped:** `AppState.signature` slot, `GET /manifest/full.json` with `X-Cloudpack-Signature`, `POST /csp-report` ingester, `security/csp.rs` builder, `cloudpack-html` crate (`hex_to_sri_b64` + `render_script_tags`), ManifestSigner wired into `POST /reload`, cross-language contract test (Rust half)
 
 #### Observability P2 — chunk error reporting + Prometheus /metrics
 - **Plan:** `docs/superpowers/plans/2026-05-17-observability-p2-chunk-errors.md`
@@ -84,7 +84,7 @@
 - **Design:** `docs/designs/performance.md` §P1
 - **Status:** ✅ **COMPLETE** — 3 / 3 tasks
 - **Branch:** `feat/phase3-roadmap`
-- **What shipped:** `wundler-dev` crate with `DepPrebundler` (blake3 fingerprint, atomic cache-miss via tempdir+rename, GC), `[dev]` TOML section, wired into `run_dev` before watcher start
+- **What shipped:** `cloudpack-dev` crate with `DepPrebundler` (blake3 fingerprint, atomic cache-miss via tempdir+rename, GC), `[dev]` TOML section, wired into `run_dev` before watcher start
 
 #### Scale Benchmark Foundation — synthetic corpus profiler (MVP steps 1–7)
 - **Plan:** `docs/superpowers/plans/2026-05-17-scale-benchmark-foundation.md`
@@ -114,7 +114,7 @@
 
 **Synthetic scale (400-byte inert TS files):**
 ```
-wundler-bench analysis-bench --modules N --repeat 3
+cloudpack-bench analysis-bench --modules N --repeat 3
 
 N=100     cold=4ms   warm=1ms   speedup=4x
 N=1000    cold=40ms  warm=18ms  speedup=2x
@@ -146,7 +146,7 @@ generate-corpus profiles/office-bohemia/ts-full.v1.json → 19,343 files in 0.2s
 verify-corpus: 7 checks, passed=true
 CI scale (ts-ci.v1.json, 1,934 files): 7 checks, passed=true
 ```
-Profiles committed to `crates/wundler-bench/profiles/office-bohemia/`.
+Profiles committed to `crates/cloudpack-bench/profiles/office-bohemia/`.
 
 **P3 threshold decision:**
 11.5s cold / 5.7s warm at office-bohemia scale is slow enough to hurt developer experience.
@@ -154,17 +154,17 @@ Profiles committed to `crates/wundler-bench/profiles/office-bohemia/`.
 
 ### Decision required: Performance P1 Phase 2
 
-**Current state:** `bundle_into()` in `wundler-dev/src/prebundle/mod.rs` writes only
+**Current state:** `bundle_into()` in `cloudpack-dev/src/prebundle/mod.rs` writes only
 `{"fingerprint": "hex"}`. The cache infrastructure is built but the cache is empty.
-`wundler dev` logs "dep pre-bundle complete" but node_modules is still parsed fresh.
+`cloudpack dev` logs "dep pre-bundle complete" but node_modules is still parsed fresh.
 
 **Three options — human call required:**
 
 | Option | What it means | Cost |
 |---|---|---|
-| **A: Complete as designed** | Implement actual bundling in `bundle_into()` — run esbuild/rollup against node_modules, write output chunks to cache dir. P2 (HMR) becomes possible once P1 has real output. | 2–4 weeks; adds a bundler dependency to `wundler-dev` |
+| **A: Complete as designed** | Implement actual bundling in `bundle_into()` — run esbuild/rollup against node_modules, write output chunks to cache dir. P2 (HMR) becomes possible once P1 has real output. | 2–4 weeks; adds a bundler dependency to `cloudpack-dev` |
 | **B: Defer** | Leave SCA as-is; do not plan P2 (HMR) until P1 is real. No action now. | No cost now; P2 blocked indefinitely |
-| **C: Reframe / close** | The analysis baseline shows analysis of node_modules-scale corpora is fast. The CAS warm cache already provides 2x speedup. The problem P1 was solving may not exist at wundler's target scale. Close P1 as SCA-only; do not implement Phase 2. P2 (HMR) replanned without P1 dependency. | Honest accounting of effort spent; HMR replanned |
+| **C: Reframe / close** | The analysis baseline shows analysis of node_modules-scale corpora is fast. The CAS warm cache already provides 2x speedup. The problem P1 was solving may not exist at cloudpack's target scale. Close P1 as SCA-only; do not implement Phase 2. P2 (HMR) replanned without P1 dependency. | Honest accounting of effort spent; HMR replanned |
 
 Option C is worth considering: if a 50k-module project analyzes in ~2s cold on real hardware,
 and the warm CAS path cuts that to ~1s, pre-bundling saves perhaps 0.5s on restarts.
@@ -174,8 +174,8 @@ That is not nothing, but it may not justify owning an embedded bundler.
 
 | Gap | Location | What's missing |
 |---|---|---|
-| Security P2 — SW ed25519 verification (JS half) | `assets/sw.js` line 127, comment added | SW fetches CDN manifest, never sees `X-Wundler-Signature`. Full verification path documented in code. |
-| Performance P1 — actual pre-bundling | `wundler-dev/src/prebundle/mod.rs` `bundle_into()` | Writes `index.json` only. Decision above required before planning any further P1/P2 work. |
+| Security P2 — SW ed25519 verification (JS half) | `assets/sw.js` line 127, comment added | SW fetches CDN manifest, never sees `X-Cloudpack-Signature`. Full verification path documented in code. |
+| Performance P1 — actual pre-bundling | `cloudpack-dev/src/prebundle/mod.rs` `bundle_into()` | Writes `index.json` only. Decision above required before planning any further P1/P2 work. |
 
 ---
 
@@ -226,14 +226,14 @@ Phase 4 (Performance + Web Vitals)
 - CLI `generate-corpus`/`verify-corpus` subcommands; committed `tiny.v1.json` + `large-web-app-small.v1.json`; V5 CV gate `--repeat N --check-cv <T>` on `analysis-bench`
 
 **Performance P1 — Dependency Pre-bundling (3 tasks):**
-- New `wundler-dev` crate with `DepPrebundler`, `PrebundleResult`, `compute_fingerprint` (blake3)
+- New `cloudpack-dev` crate with `DepPrebundler`, `PrebundleResult`, `compute_fingerprint` (blake3)
 - `ensure_fresh`: cache-hit fast path + atomic cache-miss via tempdir + `std::fs::rename`; `gc()` TTL-based eviction
 - `[dev]` TOML section with `dep_cache_ttl_days`; wired into `run_dev` before watcher start; >1 GB cache warning
 
 **Security P2 — ed25519 Manifest Signing (5 tasks):**
 - `AppState.signature: Arc<RwLock<Option<Signature>>>` with `snapshot_signature()` / `set_signature()` / reset on `swap_to`
-- `wundler-html` crate: `hex_to_sri_b64()` + `render_script_tags()` with `integrity="sha256-..."` tags
-- `GET /manifest/full.json`: public endpoint, `X-Wundler-Build-Id` + `X-Wundler-Signature` (base64), `Cache-Control: immutable`, exempt from bearer auth
+- `cloudpack-html` crate: `hex_to_sri_b64()` + `render_script_tags()` with `integrity="sha256-..."` tags
+- `GET /manifest/full.json`: public endpoint, `X-Cloudpack-Build-Id` + `X-Cloudpack-Signature` (base64), `Cache-Control: immutable`, exempt from bearer auth
 - `security/csp.rs`: `build_csp_report_only()` + `POST /csp-report` sink (8 KiB cap, JSONL log, 413 on oversize)
 - ManifestSigner wired into `POST /reload`; `run()` loads key from `signing_key_pem`; cross-language contract test (Rust half)
 
@@ -261,7 +261,7 @@ Phase 4 (Performance + Web Vitals)
 - `BuildStatsArtifact` schema (schema_version=1) with per-chunk breakdown, timing, entry-point records, budget result, previous-build delta
 - Atomic `write_build_stats` + `read_previous_stats` in `output.rs`
 - Per-phase `Instant` timing wired into `BuildPipeline::build()`
-- `budget.rs` with `check()`, `BudgetViolation::actionable_message()`, `build_budget_result()`; opt-in via `[budget]` in `wundler.toml`
+- `budget.rs` with `check()`, `BudgetViolation::actionable_message()`, `build_budget_result()`; opt-in via `[budget]` in `cloudpack.toml`
 - Real delta computation: `SizeDelta`, set-diff chunk added/removed
 
 **Security P1.2 CORS (3 tasks):**
@@ -296,25 +296,25 @@ Phase 4 (Performance + Web Vitals)
 **Observability SCA (5 tasks) — commit `0c42c9d`:**
 - Added `serde::Serialize` to `BuildStats`
 - Write `build-stats.json` to `out_dir` after every successful build (non-fatal)
-- 4 tests in `crates/wundler-pipeline/tests/build_stats_json_test.rs`
+- 4 tests in `crates/cloudpack-pipeline/tests/build_stats_json_test.rs`
 - Fixed pre-existing Clippy lints: `derivable-impls` on `EngineChoice`, `doc-overindented-list-items` in `output.rs`, `for-kv-map` in `pipeline.rs`, `needless-splitn` in `rolldown_adapter.rs`
 
 **VRC SCA (8 tasks) — commits `9ab1ec4` through `08e654f`:**
-- New `crates/wundler-pipeline/src/build_id.rs` with `canonical_bytes()` + `compute_build_id()` (SHA-256, 16-char hex)
+- New `crates/cloudpack-pipeline/src/build_id.rs` with `canonical_bytes()` + `compute_build_id()` (SHA-256, 16-char hex)
 - `BuildPipeline::build()` now overwrites graph-layer `build_id` with content-based ID
 - `AppState::reload_manifest()` for atomic manifest hot-swap
 - `POST /reload` endpoint with file read, JSON parse, loopback enforcement via custom `MaybeConnectAddr` extractor (Axum 0.8 compatibility)
 - 10 new tests across 3 test files
 
 **Security P1.1 (6 tasks) — commits `c1174c5` through `f8f85f9`:**
-- `crates/wundler-abs/src/security/` module: `SecretToken` (constant-time verify, Debug/Display redacted), `SecurityConfig`, `SecurityError`, `ResolvedSecurity`
+- `crates/cloudpack-abs/src/security/` module: `SecretToken` (constant-time verify, Debug/Display redacted), `SecurityConfig`, `SecurityError`, `ResolvedSecurity`
 - `require_bearer` Axum middleware with exempt paths (`/health`, `/sw.js`)
 - `build_router` updated to `build_router(app, telemetry, Arc<ResolvedSecurity>)` with middleware wired
 - `AbsConfig` gains optional `security` field (zero breaking change for existing configs)
 - 17 new tests in `auth_test.rs`
 
 **Also fixed:**
-- Pre-existing `wundler-cli` compile error: `write_report` signature mismatch and missing `AbsConfig.security` field — commit `7142e05`
+- Pre-existing `cloudpack-cli` compile error: `write_report` signature mismatch and missing `AbsConfig.security` field — commit `7142e05`
 
 **Branch:** `feat/phase1-roadmap` — all work is on this branch, ready for PR
 
@@ -328,13 +328,13 @@ Phase 4 (Performance + Web Vitals)
 ### 2026-05-15 — Session d98b7357
 
 **Completed:**
-- [x] `feat(bench)`: repo_scale profiler tool — `wundler-bench repo-scale` subcommand, 44 tests, commit `3e9ec01`
+- [x] `feat(bench)`: repo_scale profiler tool — `cloudpack-bench repo-scale` subcommand, 44 tests, commit `3e9ec01`
 - [x] `docs(designs)`: 5 production roadmap design documents, commit `f700f32`
 - [x] 3 implementation plans written (not yet committed)
 
 **Decisions made:**
 - `build_id` = deterministic SHA-256 of canonical manifest bytes (not git hash, not UUID)
-- Security token loaded from file (not inline in wundler.toml)
+- Security token loaded from file (not inline in cloudpack.toml)
 - `POST /reload` loopback-only until Security Baseline P1 lands
 - Profile naming: `large-web-app.v1.json` (no internal codenames in public repo)
 - 5x scale aspirational target (Teams-class) added as G8 in scale-benchmark-foundation.md

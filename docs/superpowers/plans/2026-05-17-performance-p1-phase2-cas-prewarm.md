@@ -2,14 +2,14 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the `DepPrebundler::bundle_into` stub with a real CAS pre-warm step that walks `node_modules/` directories under the project root and populates the global summary cache (`~/.wundler/cache/summaries/`) so the next `wundler build` / `wundler dev` analysis pass hits warm cache entries for every `.ts`/`.tsx`/`.js`/`.jsx`/`.mjs`/`.cjs` file.
+**Goal:** Replace the `DepPrebundler::bundle_into` stub with a real CAS pre-warm step that walks `node_modules/` directories under the project root and populates the global summary cache (`~/.cloudpack/cache/summaries/`) so the next `cloudpack build` / `cloudpack dev` analysis pass hits warm cache entries for every `.ts`/`.tsx`/`.js`/`.jsx`/`.mjs`/`.cjs` file.
 
-**Architecture:** `DepPrebundler` already gates pre-bundling on a `package.json` + lockfile fingerprint and writes `<cache_root>/<fp>/index.json` as the "we did the work" marker. We thread `project_root` into `bundle_into`, add a `discover_node_modules` helper that returns the top-level + one-level-deep (monorepo) `node_modules/` directories, and call `wundler_core::summarizer::summarize_directory_with_stats` against each one using the globally-shared `LocalCache`. The per-run stats (total files, new entries written, cache hits) flow back through `PrebundleResult` to the CLI, which logs them on the `info!` path. Pre-warm failures are non-fatal — the CLI already logs `dep pre-bundle failed (continuing)` and that behaviour stays unchanged.
+**Architecture:** `DepPrebundler` already gates pre-bundling on a `package.json` + lockfile fingerprint and writes `<cache_root>/<fp>/index.json` as the "we did the work" marker. We thread `project_root` into `bundle_into`, add a `discover_node_modules` helper that returns the top-level + one-level-deep (monorepo) `node_modules/` directories, and call `cloudpack_core::summarizer::summarize_directory_with_stats` against each one using the globally-shared `LocalCache`. The per-run stats (total files, new entries written, cache hits) flow back through `PrebundleResult` to the CLI, which logs them on the `info!` path. Pre-warm failures are non-fatal — the CLI already logs `dep pre-bundle failed (continuing)` and that behaviour stays unchanged.
 
-**Tech Stack:** Rust 2021, `anyhow`, `serde`, `serde_json`, `tempfile`, `tracing`, `wundler-core` (in-workspace).
+**Tech Stack:** Rust 2021, `anyhow`, `serde`, `serde_json`, `tempfile`, `tracing`, `cloudpack-core` (in-workspace).
 
 **Scope Boundary:**
-- **In scope:** wire `wundler-core` into `wundler-dev`; add `new_entries` / `cached_entries` to `PrebundleResult`; thread `project_root` into `bundle_into`; implement `discover_node_modules(project_root)` (depth 0 + 1, deduped); call `summarize_directory_with_stats` on each result; write extended `index.json`; surface stats in the CLI `info!` log.
+- **In scope:** wire `cloudpack-core` into `cloudpack-dev`; add `new_entries` / `cached_entries` to `PrebundleResult`; thread `project_root` into `bundle_into`; implement `discover_node_modules(project_root)` (depth 0 + 1, deduped); call `summarize_directory_with_stats` on each result; write extended `index.json`; surface stats in the CLI `info!` log.
 - **Out of scope:** `PackageLevelCache` integration (stays as opt-in layer); deeper monorepo traversal (e.g. `packages/foo/packages/bar/node_modules`); `.d.ts` filtering (`JS_EXTENSIONS` in `summarizer/mod.rs:27` already excludes it); progress reporting; per-package parallelism (`summarize_directory_with_stats` already uses Rayon internally).
 
 ---
@@ -17,33 +17,33 @@
 ## File Structure
 
 **Files modified**
-- `crates/wundler-dev/Cargo.toml` — add `wundler-core` path dependency.
-- `crates/wundler-dev/src/prebundle/mod.rs` — extend `PrebundleResult`, thread `project_root` into `bundle_into`, add `discover_node_modules`, replace stub body with real pre-warm logic, extend `index.json` payload, add a `cas_root` field to `DepPrebundler` so tests can inject a tempdir CAS.
-- `crates/wundler-dev/tests/prebundle.rs` — extend `cache_miss_creates_dir_with_index_json` to assert new `index.json` fields and update constructor calls; add CAS pre-warm integration test.
-- `crates/wundler-cli/src/main.rs` — pass a CAS root into `DepPrebundler::new`; update logging in `run_dev` to surface `new_entries` / `cached_entries`.
+- `crates/cloudpack-dev/Cargo.toml` — add `cloudpack-core` path dependency.
+- `crates/cloudpack-dev/src/prebundle/mod.rs` — extend `PrebundleResult`, thread `project_root` into `bundle_into`, add `discover_node_modules`, replace stub body with real pre-warm logic, extend `index.json` payload, add a `cas_root` field to `DepPrebundler` so tests can inject a tempdir CAS.
+- `crates/cloudpack-dev/tests/prebundle.rs` — extend `cache_miss_creates_dir_with_index_json` to assert new `index.json` fields and update constructor calls; add CAS pre-warm integration test.
+- `crates/cloudpack-cli/src/main.rs` — pass a CAS root into `DepPrebundler::new`; update logging in `run_dev` to surface `new_entries` / `cached_entries`.
 
 **Files created**
 - _None._ Everything lives in the existing `prebundle/mod.rs` module so changes that move together stay together.
 
 ---
 
-## Task 1: Wire `wundler-core` in, extend `PrebundleResult`, thread `project_root`
+## Task 1: Wire `cloudpack-core` in, extend `PrebundleResult`, thread `project_root`
 
 **Files:**
-- Modify: `crates/wundler-dev/Cargo.toml`
-- Modify: `crates/wundler-dev/src/prebundle/mod.rs` (lines 15-20 struct, 22-26 `DepPrebundler` fields, 53-77 `ensure_fresh`/constructor, 79-106 `bundle_into`)
-- Modify: `crates/wundler-cli/src/main.rs` (lines 403-406 — `DepPrebundler::new` call site, will need a CAS root argument)
-- Test: `crates/wundler-dev/tests/prebundle.rs` (lines 19-37 existing `cache_miss_creates_dir_with_index_json` — needs updated assertions for new fields)
+- Modify: `crates/cloudpack-dev/Cargo.toml`
+- Modify: `crates/cloudpack-dev/src/prebundle/mod.rs` (lines 15-20 struct, 22-26 `DepPrebundler` fields, 53-77 `ensure_fresh`/constructor, 79-106 `bundle_into`)
+- Modify: `crates/cloudpack-cli/src/main.rs` (lines 403-406 — `DepPrebundler::new` call site, will need a CAS root argument)
+- Test: `crates/cloudpack-dev/tests/prebundle.rs` (lines 19-37 existing `cache_miss_creates_dir_with_index_json` — needs updated assertions for new fields)
 
 This task is plumbing only. It introduces the new public surface area so Task 2 and Task 3 can land in small, focused commits. After this task the project still compiles, all existing tests still pass, but `bundle_into` is still the stub — it just has the new signature.
 
-- [ ] **Step 1: Add `wundler-core` to `wundler-dev` deps**
+- [ ] **Step 1: Add `cloudpack-core` to `cloudpack-dev` deps**
 
-Edit `crates/wundler-dev/Cargo.toml`. The full file after editing:
+Edit `crates/cloudpack-dev/Cargo.toml`. The full file after editing:
 
 ```toml
 [package]
-name = "wundler-dev"
+name = "cloudpack-dev"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -56,23 +56,23 @@ serde_json = { workspace = true }
 tempfile = "3"
 tracing = "0.1"
 walkdir = "2"
-wundler-core = { path = "../wundler-core" }
+cloudpack-core = { path = "../cloudpack-core" }
 
 [dev-dependencies]
 tempfile = "3"
 ```
 
-- [ ] **Step 2: Run `cargo check -p wundler-dev` to confirm the dep resolves**
+- [ ] **Step 2: Run `cargo check -p cloudpack-dev` to confirm the dep resolves**
 
 Run:
 ```bash
-cargo check -p wundler-dev
+cargo check -p cloudpack-dev
 ```
-Expected: builds cleanly, no errors. `wundler-core` shows up in the dep tree.
+Expected: builds cleanly, no errors. `cloudpack-core` shows up in the dep tree.
 
 - [ ] **Step 3: Update the failing `cache_miss_creates_dir_with_index_json` test for the new `index.json` shape**
 
-Edit `crates/wundler-dev/tests/prebundle.rs`. Replace the entire `cache_miss_creates_dir_with_index_json` test (currently lines 19-37) with:
+Edit `crates/cloudpack-dev/tests/prebundle.rs`. Replace the entire `cache_miss_creates_dir_with_index_json` test (currently lines 19-37) with:
 
 ```rust
 #[test]
@@ -164,13 +164,13 @@ fn concurrent_ensure_fresh_does_not_error() {
 
 Run:
 ```bash
-cargo test -p wundler-dev --test prebundle 2>&1 | head -40
+cargo test -p cloudpack-dev --test prebundle 2>&1 | head -40
 ```
 Expected: compilation fails with errors like `no field 'new_entries' on type 'PrebundleResult'` and `this function takes 2 arguments but 3 arguments were supplied`. This is the RED state.
 
 - [ ] **Step 5: Extend `PrebundleResult` and thread `project_root`/`cas_root`**
 
-Edit `crates/wundler-dev/src/prebundle/mod.rs`.
+Edit `crates/cloudpack-dev/src/prebundle/mod.rs`.
 
 Replace the struct at lines 15-20:
 
@@ -301,12 +301,12 @@ Replace `bundle_into` (currently lines 79-106). For now it remains a stub but wi
 
 - [ ] **Step 6: Update the CLI call site so the workspace builds**
 
-Edit `crates/wundler-cli/src/main.rs`. Replace the `DepPrebundler::new(...)` call currently at lines 403-406:
+Edit `crates/cloudpack-cli/src/main.rs`. Replace the `DepPrebundler::new(...)` call currently at lines 403-406:
 
 ```rust
-    let prebundler = wundler_dev::DepPrebundler::new(
-        cfg.root.join(".wundler").join("cache").join("deps"),
-        cfg.root.join(".wundler").join("cache").join("deps"),
+    let prebundler = cloudpack_dev::DepPrebundler::new(
+        cfg.root.join(".cloudpack").join("cache").join("deps"),
+        cfg.root.join(".cloudpack").join("cache").join("deps"),
         ttl_days,
     );
 ```
@@ -317,18 +317,18 @@ We pass the deps cache dir twice here as a temporary placeholder so the workspac
 
 Run:
 ```bash
-cargo test -p wundler-dev
+cargo test -p cloudpack-dev
 cargo build --workspace
 ```
-Expected: all `wundler-dev` tests pass (including the new assertions on `new_entries`/`cached_entries`/`total_modules`), `cargo build --workspace` succeeds.
+Expected: all `cloudpack-dev` tests pass (including the new assertions on `new_entries`/`cached_entries`/`total_modules`), `cargo build --workspace` succeeds.
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add crates/wundler-dev/Cargo.toml \
-        crates/wundler-dev/src/prebundle/mod.rs \
-        crates/wundler-dev/tests/prebundle.rs \
-        crates/wundler-cli/src/main.rs
+git add crates/cloudpack-dev/Cargo.toml \
+        crates/cloudpack-dev/src/prebundle/mod.rs \
+        crates/cloudpack-dev/tests/prebundle.rs \
+        crates/cloudpack-cli/src/main.rs
 git commit -m "feat(dev): plumb project_root + CAS root through DepPrebundler
 
 PrebundleResult now carries new_entries/cached_entries stats and
@@ -342,7 +342,7 @@ in the next commit."
 ## Task 2: `discover_node_modules` helper
 
 **Files:**
-- Modify: `crates/wundler-dev/src/prebundle/mod.rs` (add a private function above `impl DepPrebundler`, expand the existing `#[cfg(test)] mod tests` block at the bottom)
+- Modify: `crates/cloudpack-dev/src/prebundle/mod.rs` (add a private function above `impl DepPrebundler`, expand the existing `#[cfg(test)] mod tests` block at the bottom)
 
 This task introduces the discovery function that Task 3 will call. It does NOT yet wire it up — the function lives free-standing with its own unit tests.
 
@@ -350,11 +350,11 @@ The function rule:
 - Always include `<project_root>/node_modules` if it is a directory.
 - For each direct child `<project_root>/<child>` that is a directory (and not itself named `node_modules`), include `<child>/node_modules` if that is a directory.
 - Dedupe by canonicalized path (cheap defensive measure — symlinked workspaces).
-- Skip silently on I/O errors during enumeration (we should never make `wundler dev` fail because a sibling directory was unreadable).
+- Skip silently on I/O errors during enumeration (we should never make `cloudpack dev` fail because a sibling directory was unreadable).
 
 - [ ] **Step 1: Write the failing unit tests**
 
-Append to the `#[cfg(test)] mod tests { ... }` block at the bottom of `crates/wundler-dev/src/prebundle/mod.rs` (the block starts at line 160). Add the imports and tests below — keep the existing tests in the module untouched.
+Append to the `#[cfg(test)] mod tests { ... }` block at the bottom of `crates/cloudpack-dev/src/prebundle/mod.rs` (the block starts at line 160). Add the imports and tests below — keep the existing tests in the module untouched.
 
 ```rust
     use std::collections::HashSet;
@@ -473,13 +473,13 @@ Append to the `#[cfg(test)] mod tests { ... }` block at the bottom of `crates/wu
 
 Run:
 ```bash
-cargo test -p wundler-dev --lib prebundle::tests::discover_node_modules 2>&1 | head -30
+cargo test -p cloudpack-dev --lib prebundle::tests::discover_node_modules 2>&1 | head -30
 ```
 Expected: compile errors `cannot find function 'discover_node_modules' in this scope`.
 
 - [ ] **Step 3: Implement `discover_node_modules`**
 
-Add this function to `crates/wundler-dev/src/prebundle/mod.rs`, just above `impl DepPrebundler` (i.e. after `compute_fingerprint` ends around line 51, before line 53):
+Add this function to `crates/cloudpack-dev/src/prebundle/mod.rs`, just above `impl DepPrebundler` (i.e. after `compute_fingerprint` ends around line 51, before line 53):
 
 ```rust
 /// Return the `node_modules` directories worth pre-warming for `project_root`.
@@ -493,7 +493,7 @@ Add this function to `crates/wundler-dev/src/prebundle/mod.rs`, just above `impl
 /// of scope (see scope boundary in the plan).
 ///
 /// Returned paths are deduplicated by canonical path. I/O errors during
-/// enumeration are swallowed (they should never fail a `wundler dev` run);
+/// enumeration are swallowed (they should never fail a `cloudpack dev` run);
 /// at worst we pre-warm fewer directories than ideal.
 pub(crate) fn discover_node_modules(project_root: &Path) -> Vec<PathBuf> {
     use std::collections::HashSet;
@@ -538,22 +538,22 @@ pub(crate) fn discover_node_modules(project_root: &Path) -> Vec<PathBuf> {
 
 Run:
 ```bash
-cargo test -p wundler-dev --lib prebundle::tests::discover_node_modules
+cargo test -p cloudpack-dev --lib prebundle::tests::discover_node_modules
 ```
 Expected: all 7 `discover_node_modules_*` tests pass.
 
-- [ ] **Step 5: Run the whole `wundler-dev` test surface to confirm no regression**
+- [ ] **Step 5: Run the whole `cloudpack-dev` test surface to confirm no regression**
 
 Run:
 ```bash
-cargo test -p wundler-dev
+cargo test -p cloudpack-dev
 ```
 Expected: every test passes (existing prebundle tests + new discovery tests).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/wundler-dev/src/prebundle/mod.rs
+git add crates/cloudpack-dev/src/prebundle/mod.rs
 git commit -m "feat(dev): add discover_node_modules — depth 0 + 1 for monorepos
 
 Discovers <project_root>/node_modules and <project_root>/<child>/node_modules.
@@ -568,12 +568,12 @@ Not yet wired into bundle_into."
 ## Task 3: Real `bundle_into` — call `summarize_directory_with_stats` on each `node_modules`
 
 **Files:**
-- Modify: `crates/wundler-dev/src/prebundle/mod.rs` — replace the stub body of `bundle_into` with the real pre-warm logic; tighten imports.
-- Test: `crates/wundler-dev/tests/prebundle.rs` — add an end-to-end test that creates a fake `node_modules` with a `.ts` file and verifies (a) the returned `PrebundleResult.new_entries == 1` and (b) the global CAS now contains exactly one summary entry.
+- Modify: `crates/cloudpack-dev/src/prebundle/mod.rs` — replace the stub body of `bundle_into` with the real pre-warm logic; tighten imports.
+- Test: `crates/cloudpack-dev/tests/prebundle.rs` — add an end-to-end test that creates a fake `node_modules` with a `.ts` file and verifies (a) the returned `PrebundleResult.new_entries == 1` and (b) the global CAS now contains exactly one summary entry.
 
 - [ ] **Step 1: Write the failing integration test**
 
-Append to `crates/wundler-dev/tests/prebundle.rs`:
+Append to `crates/cloudpack-dev/tests/prebundle.rs`:
 
 ```rust
 #[test]
@@ -690,14 +690,14 @@ fn ensure_fresh_records_hits_on_warm_cas() {
 
 Run:
 ```bash
-cargo test -p wundler-dev --test prebundle ensure_fresh_prewarms 2>&1 | head -30
-cargo test -p wundler-dev --test prebundle ensure_fresh_records_hits 2>&1 | head -30
+cargo test -p cloudpack-dev --test prebundle ensure_fresh_prewarms 2>&1 | head -30
+cargo test -p cloudpack-dev --test prebundle ensure_fresh_records_hits 2>&1 | head -30
 ```
 Expected: tests compile but fail with `assertion `left == right` failed: should have summarized one .ts file` (because `bundle_into` still writes zeros).
 
 - [ ] **Step 3: Replace the `bundle_into` stub body with the real pre-warm**
 
-Edit `crates/wundler-dev/src/prebundle/mod.rs`. Replace the entire `bundle_into` method (the one introduced in Task 1) with:
+Edit `crates/cloudpack-dev/src/prebundle/mod.rs`. Replace the entire `bundle_into` method (the one introduced in Task 1) with:
 
 ```rust
     fn bundle_into(
@@ -706,8 +706,8 @@ Edit `crates/wundler-dev/src/prebundle/mod.rs`. Replace the entire `bundle_into`
         final_dir: &Path,
         project_root: &Path,
     ) -> Result<(u64, u64)> {
-        use wundler_core::cache::local::LocalCache;
-        use wundler_core::summarizer::summarize_directory_with_stats;
+        use cloudpack_core::cache::local::LocalCache;
+        use cloudpack_core::summarizer::summarize_directory_with_stats;
 
         let tmp = tempfile::Builder::new()
             .prefix(&format!(".tmp-{fingerprint}-"))
@@ -781,27 +781,27 @@ Edit `crates/wundler-dev/src/prebundle/mod.rs`. Replace the entire `bundle_into`
 
 Run:
 ```bash
-cargo test -p wundler-dev --test prebundle
+cargo test -p cloudpack-dev --test prebundle
 ```
 Expected: all prebundle integration tests pass, including the three new pre-warm tests.
 
-- [ ] **Step 5: Run the whole `wundler-dev` test surface**
+- [ ] **Step 5: Run the whole `cloudpack-dev` test surface**
 
 Run:
 ```bash
-cargo test -p wundler-dev
+cargo test -p cloudpack-dev
 ```
 Expected: every test passes (unit tests + integration tests).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/wundler-dev/src/prebundle/mod.rs crates/wundler-dev/tests/prebundle.rs
+git add crates/cloudpack-dev/src/prebundle/mod.rs crates/cloudpack-dev/tests/prebundle.rs
 git commit -m "feat(dev): real CAS pre-warm for node_modules in bundle_into
 
 Walks every node_modules discovered by discover_node_modules and calls
 summarize_directory_with_stats against the shared LocalCache, populating
-~/.wundler/cache/summaries so the next analysis pass hits warm.
+~/.cloudpack/cache/summaries so the next analysis pass hits warm.
 
 Pre-warm failures are non-fatal — logged at warn, never propagated.
 Per-root stats are aggregated and returned via PrebundleResult."
@@ -812,26 +812,26 @@ Per-root stats are aggregated and returned via PrebundleResult."
 ## Task 4: Wire the global CAS into the CLI, surface stats in `run_dev` logging, final workspace check
 
 **Files:**
-- Modify: `crates/wundler-cli/src/main.rs` (lines ~403-412 — `DepPrebundler::new` construction and `match prebundler.ensure_fresh(...)` log block in `run_dev`)
+- Modify: `crates/cloudpack-cli/src/main.rs` (lines ~403-412 — `DepPrebundler::new` construction and `match prebundler.ensure_fresh(...)` log block in `run_dev`)
 
 - [ ] **Step 1: Update `DepPrebundler::new` call site to use the global CAS root**
 
-Edit `crates/wundler-cli/src/main.rs`. Replace the temporary 3-arg construction added in Task 1 (lines 403-406) with one that resolves the shared CAS root via `LocalCache::with_default_root`. The CAS root must be the *exact* directory `LocalCache::with_default_root()` uses (`~/.wundler/cache/summaries/`), otherwise downstream analysis runs would open a different cache and see zero hits.
+Edit `crates/cloudpack-cli/src/main.rs`. Replace the temporary 3-arg construction added in Task 1 (lines 403-406) with one that resolves the shared CAS root via `LocalCache::with_default_root`. The CAS root must be the *exact* directory `LocalCache::with_default_root()` uses (`~/.cloudpack/cache/summaries/`), otherwise downstream analysis runs would open a different cache and see zero hits.
 
 ```rust
     // Resolve the shared summary CAS root the same way LocalCache::with_default_root does.
     // We can't easily borrow that path back out of a LocalCache, so we recompute it here.
-    // Keep this in sync with wundler_core::cache::local::LocalCache::with_default_root.
+    // Keep this in sync with cloudpack_core::cache::local::LocalCache::with_default_root.
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| ".".to_string());
     let cas_root = std::path::PathBuf::from(home)
-        .join(".wundler")
+        .join(".cloudpack")
         .join("cache")
         .join("summaries");
 
-    let prebundler = wundler_dev::DepPrebundler::new(
-        cfg.root.join(".wundler").join("cache").join("deps"),
+    let prebundler = cloudpack_dev::DepPrebundler::new(
+        cfg.root.join(".cloudpack").join("cache").join("deps"),
         cas_root,
         ttl_days,
     );
@@ -839,7 +839,7 @@ Edit `crates/wundler-cli/src/main.rs`. Replace the temporary 3-arg construction 
 
 - [ ] **Step 2: Update the `match prebundler.ensure_fresh(...)` log block to surface stats**
 
-Edit `crates/wundler-cli/src/main.rs`. Replace the existing match block (lines 408-412):
+Edit `crates/cloudpack-cli/src/main.rs`. Replace the existing match block (lines 408-412):
 
 ```rust
     match prebundler.ensure_fresh(&cfg.root) {
@@ -872,7 +872,7 @@ Run:
 ```bash
 cargo test --workspace
 ```
-Expected: all tests pass. `wundler-dev`'s prebundle integration tests in particular should show:
+Expected: all tests pass. `cloudpack-dev`'s prebundle integration tests in particular should show:
 - `cache_miss_creates_dir_with_index_json` ... ok
 - `cache_hit_returns_instantly_without_touching_index` ... ok
 - `fingerprint_changes_invalidate_cache` ... ok
@@ -893,32 +893,32 @@ Run:
 ```bash
 cargo clippy --workspace --all-targets -- -D warnings
 ```
-Expected: no warnings. If `clippy` complains about the duplicated home-directory logic in `main.rs` (e.g. `clippy::or_fun_call`), that mirrors the exact pattern already in `LocalCache::with_default_root` (crates/wundler-core/src/cache/local.rs:32-41) — keep it as-is for parity. If clippy raises an unrelated, real warning, fix it; do not blanket-allow.
+Expected: no warnings. If `clippy` complains about the duplicated home-directory logic in `main.rs` (e.g. `clippy::or_fun_call`), that mirrors the exact pattern already in `LocalCache::with_default_root` (crates/cloudpack-core/src/cache/local.rs:32-41) — keep it as-is for parity. If clippy raises an unrelated, real warning, fix it; do not blanket-allow.
 
 - [ ] **Step 6: Manual smoke test (optional but recommended)**
 
 Run:
 ```bash
-mkdir -p /tmp/wundler-smoke/node_modules/acme
-cat > /tmp/wundler-smoke/package.json <<'JSON'
+mkdir -p /tmp/cloudpack-smoke/node_modules/acme
+cat > /tmp/cloudpack-smoke/package.json <<'JSON'
 {"name":"smoke","version":"0.0.1"}
 JSON
-cat > /tmp/wundler-smoke/node_modules/acme/index.ts <<'TS'
+cat > /tmp/cloudpack-smoke/node_modules/acme/index.ts <<'TS'
 export const x: number = 1;
 TS
 
 # Run dev briefly so the pre-warm path executes. SIGINT after the log appears.
-RUST_LOG=info cargo run -p wundler-cli -- dev /tmp/wundler-smoke 2>&1 | head -20
+RUST_LOG=info cargo run -p cloudpack-cli -- dev /tmp/cloudpack-smoke 2>&1 | head -20
 ```
-Expected: the log line `dep pre-bundle complete: <hex> — CAS pre-warm: 1 new, 0 cached` (or `0 new, 1 cached` if you ran it twice and `~/.wundler/cache/summaries/` was already warm). Kill with Ctrl-C.
+Expected: the log line `dep pre-bundle complete: <hex> — CAS pre-warm: 1 new, 0 cached` (or `0 new, 1 cached` if you ran it twice and `~/.cloudpack/cache/summaries/` was already warm). Kill with Ctrl-C.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add crates/wundler-cli/src/main.rs
+git add crates/cloudpack-cli/src/main.rs
 git commit -m "feat(cli): wire shared CAS into DepPrebundler, log pre-warm stats
 
-run_dev now constructs DepPrebundler with the same ~/.wundler/cache/summaries
+run_dev now constructs DepPrebundler with the same ~/.cloudpack/cache/summaries
 root that LocalCache::with_default_root() opens, so the analysis step that
 follows actually benefits from the pre-warmed entries. info! log now reports
 new vs cached entry counts."
@@ -929,7 +929,7 @@ new vs cached entry counts."
 ## Self-Review
 
 **1. Spec coverage**
-- ✅ Add `wundler-core` dep to `wundler-dev/Cargo.toml` — Task 1, Step 1.
+- ✅ Add `cloudpack-core` dep to `cloudpack-dev/Cargo.toml` — Task 1, Step 1.
 - ✅ Thread `project_root: &Path` through `bundle_into(fingerprint, final_dir, project_root)` — Task 1, Step 5.
 - ✅ `discover_node_modules(project_root) -> Vec<PathBuf>` at depth 0 + 1, deduped, no `node_modules` recursion — Task 2, Step 3, plus tests in Step 1.
 - ✅ Call `summarize_directory_with_stats` on each discovered `node_modules` — Task 3, Step 3.
@@ -948,6 +948,6 @@ new vs cached entry counts."
 - `DepPrebundler::new(cache_root: PathBuf, cas_root: PathBuf, ttl_days: u32)` — same three-arg signature in Task 1 (definition), Task 1 step 3 (test updates), and Task 4 step 1 (CLI call site).
 - `bundle_into(&self, fingerprint: &str, final_dir: &Path, project_root: &Path) -> Result<(u64, u64)>` — consistent across Task 1 (stub) and Task 3 (real impl).
 - `discover_node_modules(project_root: &Path) -> Vec<PathBuf>` is `pub(crate)`, called inside the same module by `bundle_into` in Task 3 — visibility matches.
-- `summarize_directory_with_stats` returns `SummarizeResult { nodes, stats: SummarizeStats { total, cache_hits, cache_misses } }` (verified at `crates/wundler-core/src/summarizer/mod.rs:35-50`); Task 3 uses `result.stats.total`, `result.stats.cache_hits`, `result.stats.cache_misses` — matches.
-- `LocalCache::new(root: PathBuf) -> Result<Self>` (verified at `crates/wundler-core/src/cache/local.rs:22`); Task 3 calls it with `self.cas_root.clone()` — matches.
+- `summarize_directory_with_stats` returns `SummarizeResult { nodes, stats: SummarizeStats { total, cache_hits, cache_misses } }` (verified at `crates/cloudpack-core/src/summarizer/mod.rs:35-50`); Task 3 uses `result.stats.total`, `result.stats.cache_hits`, `result.stats.cache_misses` — matches.
+- `LocalCache::new(root: PathBuf) -> Result<Self>` (verified at `crates/cloudpack-core/src/cache/local.rs:22`); Task 3 calls it with `self.cas_root.clone()` — matches.
 - `index.json` JSON field names (`fingerprint`, `new_entries`, `cached_entries`, `total_modules`) are identical between Task 1 stub and Task 3 real implementation; existing test at `tests/prebundle.rs:36` is updated in Task 1 step 3 to match.

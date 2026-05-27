@@ -19,11 +19,11 @@
 
 | | Goal | Priority | Gate |
 |---|---|---|---|
-| G1 | `wundler dev` cold start does not re-bundle `node_modules` when `package.json` is unchanged | P1 | none — ships standalone |
+| G1 | `cloudpack dev` cold start does not re-bundle `node_modules` when `package.json` is unchanged | P1 | none — ships standalone |
 | G2 | A single-module edit in dev mode updates the browser without losing component state | P2 | P1 stable |
 | G3 | A single-file change triggers a graph re-analysis whose cost is proportional to the affected subgraph, not the whole graph | P3 | observability data + V5 |
 | G4 | PGO ingestion of multi-GB telemetry completes in time proportional to (cores × file size / sequential rate) | P4 | observability data |
-| G5 | `wundler build --analyze` produces a navigable view of chunks, dead modules, and size hotspots | P5 | build-stats.json (observability) |
+| G5 | `cloudpack build --analyze` produces a navigable view of chunks, dead modules, and size hotspots | P5 | build-stats.json (observability) |
 | G6 | VS Code surfaces existing CLI diagnostics inline (no second model) | P6 | CLI diagnostics stable |
 | G7 | Rspack adapter exists when, and only when, a named user requires it | P7 | deferred |
 
@@ -39,35 +39,35 @@
 
 | Actor | Calls into | Reads / writes |
 |---|---|---|
-| Developer | `wundler dev`, `wundler build --analyze`, VS Code | source files, `wundler.toml`, build-stats.json |
+| Developer | `cloudpack dev`, `cloudpack build --analyze`, VS Code | source files, `cloudpack.toml`, build-stats.json |
 | Browser (dev) | SW + ABS | manifest.json, chunks, HMR updates |
-| File watcher | `wundler dev` event bus | filesystem events (FSEvents/inotify) |
+| File watcher | `cloudpack dev` event bus | filesystem events (FSEvents/inotify) |
 | PGO ingestor | SQLite store | JSONL telemetry log, `pgo.sqlite` |
-| CI | `wundler bench`, build budget gate | build-stats.json |
+| CI | `cloudpack bench`, build budget gate | build-stats.json |
 
 ### Interfaces (the boundaries this design lives at)
 
 | Boundary | Today | After this design |
 |---|---|---|
 | File change → graph re-analysis | `notify` event → `GraphAnalyzer::analyze` (full) | `notify` event → `IncrementalAnalyzer::on_change(paths)` → either full recompute or scoped recompute, always producing the same `AnalysisResult` |
-| Dep specifier → bundled chunk | resolve + re-bundle every `wundler dev` start | `DepPrebundler::ensure_fresh()` returns cached or re-bundles iff `package.json + lockfile` hash changed |
+| Dep specifier → bundled chunk | resolve + re-bundle every `cloudpack dev` start | `DepPrebundler::ensure_fresh()` returns cached or re-bundles iff `package.json + lockfile` hash changed |
 | Module update → browser | manifest write → SW reload → `location.reload()` | manifest write → SW posts `module-update` → page applies via react-refresh, falls back to reload on rejection |
 | Telemetry JSONL → SQLite | `ingest_log` sequential `for line in reader.lines()` | bounded parallel parse → single writer thread with batched transactions (WAL) |
 | build-stats.json → analyzer UI | (does not exist) | static HTML bundle reads `build-stats.json` via the same ABS route the dev server uses for the manifest |
-| CLI diagnostics → VS Code | (does not exist) | LSP-style JSON-RPC over stdio; diagnostics emitted by `wundler check` are consumed verbatim |
+| CLI diagnostics → VS Code | (does not exist) | LSP-style JSON-RPC over stdio; diagnostics emitted by `cloudpack check` are consumed verbatim |
 
 ### Wasteful paths (what runs today that doesn't need to)
 
 | Path | Location | Cost growth | Cure |
 |---|---|---|---|
-| Full `GraphAnalyzer::analyze` on every file change | `crates/wundler-graph/src/analyzer.rs:89` | O(N + E) per keystroke-saved | P3 incremental |
-| Full BFS over all entries every analysis | `crates/wundler-graph/src/reachability.rs:29,86` | O(N + E) | P3 scoped BFS from invalidated frontier |
-| `tarjan_sccs` re-run every analysis | `crates/wundler-graph/src/graph.rs` (called from `reachability.rs:98`) | O(N + E) | P3 cache SCCs; recompute only when graph topology changes |
-| `assign_chunks` 3-phase re-run on every analysis | `crates/wundler-graph/src/chunks.rs` | O(N · entries) | P3 invalidate per-entry chunk membership, recompute affected chunks |
-| `compute_dead_exports` over the entire node set | `crates/wundler-graph/src/dce.rs` | O(N · exports) | P3 limit to alive set of affected subgraph |
-| `for line in reader.lines()` + per-line SQLite transaction | `crates/wundler-pgo/src/ingestor.rs:60` + `store.rs:88` | O(L) sequential, lock per line | P4 parallel parse + batched single-writer commit |
-| Full re-scan of `node_modules` on every `wundler dev` start | implicit in `run_dev` (`wundler-cli/src/main.rs:396`) | O(M) deps × parse | P1 hash + cache |
-| `location.reload()` on every manifest swap | `crates/wundler-sw/src/sw.ts` | full document lifecycle, loses state | P2 selective `module-update` postMessage |
+| Full `GraphAnalyzer::analyze` on every file change | `crates/cloudpack-graph/src/analyzer.rs:89` | O(N + E) per keystroke-saved | P3 incremental |
+| Full BFS over all entries every analysis | `crates/cloudpack-graph/src/reachability.rs:29,86` | O(N + E) | P3 scoped BFS from invalidated frontier |
+| `tarjan_sccs` re-run every analysis | `crates/cloudpack-graph/src/graph.rs` (called from `reachability.rs:98`) | O(N + E) | P3 cache SCCs; recompute only when graph topology changes |
+| `assign_chunks` 3-phase re-run on every analysis | `crates/cloudpack-graph/src/chunks.rs` | O(N · entries) | P3 invalidate per-entry chunk membership, recompute affected chunks |
+| `compute_dead_exports` over the entire node set | `crates/cloudpack-graph/src/dce.rs` | O(N · exports) | P3 limit to alive set of affected subgraph |
+| `for line in reader.lines()` + per-line SQLite transaction | `crates/cloudpack-pgo/src/ingestor.rs:60` + `store.rs:88` | O(L) sequential, lock per line | P4 parallel parse + batched single-writer commit |
+| Full re-scan of `node_modules` on every `cloudpack dev` start | implicit in `run_dev` (`cloudpack-cli/src/main.rs:396`) | O(M) deps × parse | P1 hash + cache |
+| `location.reload()` on every manifest swap | `crates/cloudpack-sw/src/sw.ts` | full document lifecycle, loses state | P2 selective `module-update` postMessage |
 
 ### Feedback loops
 
@@ -117,16 +117,16 @@ The key insight: **the four layers can be made incremental independently and wit
 
 ### Priority 1 — Dependency pre-bundling
 
-**Goal:** `wundler dev` cold start does not parse / re-bundle `node_modules` when `package.json + lockfile` hash has not changed.
+**Goal:** `cloudpack dev` cold start does not parse / re-bundle `node_modules` when `package.json + lockfile` hash has not changed.
 
-**Where it lives:** New module `crates/wundler-dev/src/prebundle/`, called from `wundler-cli/src/main.rs::run_dev` (currently a stub) **before** the file watcher starts.
+**Where it lives:** New module `crates/cloudpack-dev/src/prebundle/`, called from `cloudpack-cli/src/main.rs::run_dev` (currently a stub) **before** the file watcher starts.
 
 #### Candidates
 
 | | C1 — current | **C2 — fingerprint cache (RECOMMENDED)** | C3 — fine-grained per-package cache |
 |---|---|---|---|
 | Trigger | always rebundle | rebundle iff `H(package.json ‖ lockfile)` differs | per-package metadata + content hash, rebundle only the changed packages |
-| State on disk | none | `.wundler/cache/deps/{fingerprint}/` — one dir per fingerprint, contains pre-bundled chunks + `index.json` | `.wundler/cache/deps/{package}@{version}/{content-hash}/` — many small caches |
+| State on disk | none | `.cloudpack/cache/deps/{fingerprint}/` — one dir per fingerprint, contains pre-bundled chunks + `index.json` | `.cloudpack/cache/deps/{package}@{version}/{content-hash}/` — many small caches |
 | Cold start (cached) | full re-bundle | filesystem read + hash check (~50ms) | filesystem walk + per-package hash check (~200ms) |
 | Cold start (cache miss) | full re-bundle | full re-bundle, write to new fingerprint dir | only changed packages rebundled |
 | GC policy | n/a | LRU prune on dirs older than `[dev.dep_cache_ttl_days]` (default 14) | LRU; harder because content hashes shared across versions |
@@ -140,21 +140,21 @@ The key insight: **the four layers can be made incremental independently and wit
 |---|---|
 | Simplicity | +1 (one hash, one cache dir, atomic swap) |
 | Performance | +2 (skips re-bundle entirely on cached path) |
-| Operability | +1 (`.wundler/cache/deps/` is human-inspectable) |
+| Operability | +1 (`.cloudpack/cache/deps/` is human-inspectable) |
 | Cost | ~0 (disk only; bounded by TTL) |
 | Reliability | +1 (cache miss falls back to current behavior — no regression possible) |
 | Security | 0 (cache contents are derived deterministically from `node_modules`; untrusted input was already there) |
 | Evolution | +1 (clear upgrade path to C3 if measurement demands) |
-| Blast radius | local to one developer's `.wundler` |
+| Blast radius | local to one developer's `.cloudpack` |
 
 **Recommendation: C2.** It is the simplest design that meets the goal and offers no regression path. C3 is the right answer only if a measurement proves dep changes are frequent enough that per-package invalidation matters more than the cold-start ~50ms cache check.
 
 #### Concrete shape — C2
 
 ```rust
-// crates/wundler-dev/src/prebundle/mod.rs
+// crates/cloudpack-dev/src/prebundle/mod.rs
 pub struct DepPrebundler {
-    cache_root: PathBuf,      // <project>/.wundler/cache/deps
+    cache_root: PathBuf,      // <project>/.cloudpack/cache/deps
     ttl_days: u32,
 }
 
@@ -195,17 +195,17 @@ fn compute_fingerprint(root: &Path) -> Result<String> {
 
 #### Simplest Credible Alternative (P1)
 
-A 30-line variant of C2 that hashes only `package.json` (skip the lockfile), uses a single `.wundler/cache/deps/{hash}/` directory, no GC. The lack of lockfile hashing means a `npm install` of a different version of the same range slips through. The lack of GC means disk grows monotonically. Acceptable for a POC.
+A 30-line variant of C2 that hashes only `package.json` (skip the lockfile), uses a single `.cloudpack/cache/deps/{hash}/` directory, no GC. The lack of lockfile hashing means a `npm install` of a different version of the same range slips through. The lack of GC means disk grows monotonically. Acceptable for a POC.
 
 ---
 
 ### Priority 2 — True HMR
 
-**Goal:** A single-module edit in `wundler dev` updates the browser in place; component state is preserved across the update.
+**Goal:** A single-module edit in `cloudpack dev` updates the browser in place; component state is preserved across the update.
 
 **Where it lives:**
-- Rust: new module `crates/wundler-dev/src/hmr/`, plus ABS route `POST /reload` (already designed in VRC).
-- TypeScript: HMR client glue in `crates/wundler-sw/src/hmr.ts`; react-refresh runtime injected by the transform pipeline.
+- Rust: new module `crates/cloudpack-dev/src/hmr/`, plus ABS route `POST /reload` (already designed in VRC).
+- TypeScript: HMR client glue in `crates/cloudpack-sw/src/hmr.ts`; react-refresh runtime injected by the transform pipeline.
 
 #### Candidates
 
@@ -258,7 +258,7 @@ on file change F:
 #### Concrete shape — C2
 
 ```rust
-// crates/wundler-dev/src/hmr/mod.rs
+// crates/cloudpack-dev/src/hmr/mod.rs
 pub struct HmrCoordinator {
     abs_tx: tokio::sync::broadcast::Sender<BuildEvent>,
 }
@@ -293,11 +293,11 @@ Keep `location.reload()`, but make it a *targeted* reload: SW receives `{ build_
 
 | | C1 — current | **C2 — scoped recompute (RECOMMENDED, EVIDENCE-GATED)** | C3 — C2 + persistent cache across restarts |
 |---|---|---|---|
-| On file change | full `GraphAnalyzer::analyze` | invalidate affected node + its SCC; scoped reachability from frontier; scoped DCE; reuse all unaffected chunks | C2 + serialize `GraphCache` to `.wundler/cache/graph/{build_id}.bin` |
+| On file change | full `GraphAnalyzer::analyze` | invalidate affected node + its SCC; scoped reachability from frontier; scoped DCE; reuse all unaffected chunks | C2 + serialize `GraphCache` to `.cloudpack/cache/graph/{build_id}.bin` |
 | First-build cost | O(N+E) | O(N+E) (same) | O(N+E) (same) |
 | Edit-build cost | O(N+E) | O(K+E_K) where K = invalidated set | O(K+E_K) |
 | Cold dev-server restart | O(N+E) | O(N+E) | O(N+E) for first edit only; deserialize cost ≈ 5% of analyze |
-| Code added | 0 | ~600 LoC across `wundler-graph/` | C2 + ~250 LoC serde + version-pinned cache |
+| Code added | 0 | ~600 LoC across `cloudpack-graph/` | C2 + ~250 LoC serde + version-pinned cache |
 | Failure mode | slow but obvious | FM-2: divergence from full recompute | FM-2 + cache corruption on bincode version skew |
 | YAGNI | — | gated on measurement | gated harder — need to also prove restart latency matters |
 
@@ -305,7 +305,7 @@ Keep `location.reload()`, but make it a *targeted* reload: SW receives `{ build_
 
 #### Architecture — C2
 
-A new struct `IncrementalAnalyzer` in `crates/wundler-graph/src/incremental.rs` holds four caches mirroring the four layers in the ANALYZE section:
+A new struct `IncrementalAnalyzer` in `crates/cloudpack-graph/src/incremental.rs` holds four caches mirroring the four layers in the ANALYZE section:
 
 ```rust
 pub struct IncrementalAnalyzer {
@@ -421,7 +421,7 @@ The simplest non-trivial improvement: cache `tarjan_sccs` output across analyses
 #### Architecture — C2
 
 ```rust
-// crates/wundler-pgo/src/ingestor.rs (replacement)
+// crates/cloudpack-pgo/src/ingestor.rs (replacement)
 pub fn ingest_log(store: &PgoStore, log_path: &Path) -> Result<IngestStats> {
     let mmap = unsafe { memmap2::Mmap::map(&std::fs::File::open(log_path)?)? };
     let (tx, rx) = crossbeam_channel::bounded::<SessionRecord>(BATCH_SIZE * 4);
@@ -482,11 +482,11 @@ Keep the sequential parser, but: (a) enable WAL mode in `store.rs::init` (5 line
 
 ### Priority 5 — Bundle analysis viewer
 
-**Goal:** `wundler build --analyze` opens a treemap of modules, chunks, and dead code.
+**Goal:** `cloudpack build --analyze` opens a treemap of modules, chunks, and dead code.
 
 **Where it lives:**
 - Input: `build-stats.json` (from observability.md, P1).
-- Renderer: a static HTML/JS bundle in `crates/wundler-cli/assets/analyzer/` served by an ephemeral one-shot HTTP server on `127.0.0.1:0`. Same shape as `cargo flamegraph` / `webpack-bundle-analyzer`.
+- Renderer: a static HTML/JS bundle in `crates/cloudpack-cli/assets/analyzer/` served by an ephemeral one-shot HTTP server on `127.0.0.1:0`. Same shape as `cargo flamegraph` / `webpack-bundle-analyzer`.
 
 **Why one design, not three:** the data already exists and the rendering is a solved problem. Reuse `d3-treemap` or `react-window-treemap`; do not invent a visualization layer.
 
@@ -506,18 +506,18 @@ The viewer is a read-only projection of build-stats.json. If a developer reports
 
 #### Simplest Credible Alternative (P5)
 
-`wundler build --analyze` prints a markdown table to stdout: top-N chunks by size, top-N modules by size, count of dead modules. ~50 LoC. Surfaces the same insights without any frontend infrastructure. The treemap is a refinement.
+`cloudpack build --analyze` prints a markdown table to stdout: top-N chunks by size, top-N modules by size, count of dead modules. ~50 LoC. Surfaces the same insights without any frontend infrastructure. The treemap is a refinement.
 
 ---
 
 ### Priority 6 — VS Code extension
 
-**Goal:** Surface existing `wundler` diagnostics inline in the editor.
+**Goal:** Surface existing `cloudpack` diagnostics inline in the editor.
 
-**Where it lives:** A new repo / npm package `wundler-vscode`, talking to a `wundler lsp` subcommand over stdio.
+**Where it lives:** A new repo / npm package `cloudpack-vscode`, talking to a `cloudpack lsp` subcommand over stdio.
 
 **Gate (mandatory):** CLI diagnostics must be **stable and structured** first. "Stable" means:
-- JSON-RPC schema versioned and committed in `crates/wundler-cli/src/diagnostics/schema.json`
+- JSON-RPC schema versioned and committed in `crates/cloudpack-cli/src/diagnostics/schema.json`
 - Each diagnostic has: `code` (e.g. `WUN-001`), `severity`, `range`, `source`, `message`
 - Schema follows LSP `Diagnostic` shape verbatim so VS Code consumes it with `vscode.languages.createDiagnosticCollection`
 
@@ -526,12 +526,12 @@ The viewer is a read-only projection of build-stats.json. If a developer reports
 - Surface diagnostics the CLI does not also surface
 - Re-implement reachability or DCE analysis in TypeScript
 
-The extension is a transport, not a logic component. If a diagnostic appears in VS Code, the same diagnostic must appear when running `wundler check` on the command line.
+The extension is a transport, not a logic component. If a diagnostic appears in VS Code, the same diagnostic must appear when running `cloudpack check` on the command line.
 
 #### Architecture
 
 ```
-VS Code ─── LSP/JSON-RPC ───▶ `wundler lsp` (stdio child process)
+VS Code ─── LSP/JSON-RPC ───▶ `cloudpack lsp` (stdio child process)
                                     │
                                     ▼
                                IncrementalAnalyzer + DCE
@@ -540,11 +540,11 @@ VS Code ─── LSP/JSON-RPC ───▶ `wundler lsp` (stdio child process)
                               diagnostics → push to VS Code
 ```
 
-**Notice:** `wundler lsp` reuses `IncrementalAnalyzer` (P3). The editor experience benefits from P3 directly — keystroke → diagnostic update — and P3 thereby acquires a second consumer beyond the dev server. This is a strong argument that P3 and P6 should be designed together even if implemented separately.
+**Notice:** `cloudpack lsp` reuses `IncrementalAnalyzer` (P3). The editor experience benefits from P3 directly — keystroke → diagnostic update — and P3 thereby acquires a second consumer beyond the dev server. This is a strong argument that P3 and P6 should be designed together even if implemented separately.
 
 #### Simplest Credible Alternative (P6)
 
-A "problems matcher" registered in `tasks.json` that parses `wundler check`'s stdout (one diagnostic per line in a regex-friendly format). No LSP server, no incremental analysis, no extension. Surfaces diagnostics in the Problems panel. ~50 lines of JSON. **Recommended starting point** — full LSP only when this proves inadequate.
+A "problems matcher" registered in `tasks.json` that parses `cloudpack check`'s stdout (one diagnostic per line in a regex-friendly format). No LSP server, no incremental analysis, no extension. Surfaces diagnostics in the Problems panel. ~50 lines of JSON. **Recommended starting point** — full LSP only when this proves inadequate.
 
 ---
 
@@ -556,7 +556,7 @@ A "problems matcher" registered in `tasks.json` that parses `wundler check`'s st
 
 If a named user emerges, the design must answer:
 1. What can Rspack do that `RolldownAdapter` cannot?
-2. Does the requirement justify a second adapter, or does it justify extending the abstraction at the adapter layer (`crates/wundler-pipeline/src/adapter.rs`)?
+2. Does the requirement justify a second adapter, or does it justify extending the abstraction at the adapter layer (`crates/cloudpack-pipeline/src/adapter.rs`)?
 3. What is the maintenance cost projection (security patches, version pinning, transform-rule drift)?
 
 Until those questions have concrete answers tied to a real user, no work happens. The `RolldownAdapter` already validates that the adapter abstraction is sufficient; a second adapter is only valuable as a proof.
@@ -575,7 +575,7 @@ These are the thresholds at which evidence-gated work is permitted to begin. The
 |---|---|---|
 | 1. Real-corpus analyze p95 | `analyze_duration_seconds{phase="analyze"}` p95 > **5 s** on a corpus ≥ 5k modules | observability P3 (Prometheus) |
 | 2. Dev-loop edit frequency | At least one team reports ≥ 50 edits/hour on the gated corpus | manual via observability dashboard |
-| 3. V5 graph-similarity | Scale Benchmark Foundation V5 passes on at least one preset (uniform.v1 OR a real corpus) | `wundler bench validate-scale` exit code |
+| 3. V5 graph-similarity | Scale Benchmark Foundation V5 passes on at least one preset (uniform.v1 OR a real corpus) | `cloudpack bench validate-scale` exit code |
 | 4. Bailout instrumentation | `incremental_bailout_total` Prometheus counter exists (Phase 1 instrumentation) | observability extension |
 
 Why these numbers: under 5s, the optimization is invisible to a human; over 5s, it dominates the edit loop. 50 edits/hour is the rate at which the total daily cost crosses ~5 minutes. V5 protects against optimizing for the wrong workload.
@@ -586,9 +586,9 @@ Why these numbers: under 5s, the optimization is invisible to a human; over 5s, 
 
 | Condition | Threshold | Metric source |
 |---|---|---|
-| 1. Real ingestion duration | A telemetry log ≥ **1 GB** has been ingested AND wall time > **30 s** | `wundler pgo ingest` self-report |
+| 1. Real ingestion duration | A telemetry log ≥ **1 GB** has been ingested AND wall time > **30 s** | `cloudpack pgo ingest` self-report |
 | 2. Simplest-credible-alt landed first | WAL mode + batched-commit alternative is in `main`, and a follow-up measurement still exceeds the 30s threshold | git log + measurement |
-| 3. Idempotence test in CI | A "re-ingest same file produces identical row count" test passes | `cargo test -p wundler-pgo` |
+| 3. Idempotence test in CI | A "re-ingest same file produces identical row count" test passes | `cargo test -p cloudpack-pgo` |
 
 The simplest-credible-alt clause is deliberate: most of the win is in batching, not parallelism. We measure, then decide.
 
@@ -598,9 +598,9 @@ The simplest-credible-alt clause is deliberate: most of the win is in batching, 
 
 | Condition | Threshold | Metric source |
 |---|---|---|
-| 1. Diagnostic schema versioned | `crates/wundler-cli/src/diagnostics/schema.json` exists; `version` field ≥ 1.0.0 | repo artifact |
+| 1. Diagnostic schema versioned | `crates/cloudpack-cli/src/diagnostics/schema.json` exists; `version` field ≥ 1.0.0 | repo artifact |
 | 2. Diagnostic schema stable | No breaking schema changes for ≥ 30 days | git log |
-| 3. CLI diagnostics count | `wundler check` emits ≥ 5 distinct diagnostic codes against the dogfood corpus | manual |
+| 3. CLI diagnostics count | `cloudpack check` emits ≥ 5 distinct diagnostic codes against the dogfood corpus | manual |
 
 ---
 
@@ -633,7 +633,7 @@ Bailout is acceptable. Bailout that doesn't get counted is not.
 
 ### Can chunking be made incremental?
 
-The chunking algorithm (`crates/wundler-graph/src/chunks.rs`) is a 3-phase pipeline:
+The chunking algorithm (`crates/cloudpack-graph/src/chunks.rs`) is a 3-phase pipeline:
 
 1. **Phase 1 — Collect candidates** (one BFS per entry, dynamic imports captured)
 2. **Phase 2 — Count appearances** (membership counting across candidates)
@@ -673,9 +673,9 @@ Where `canonical_bytes()` is the deterministic serialization defined by VRC. Thi
 | R-1 (FM-1) | HMR misses an invalidation boundary; browser shows stale state silently | Medium | High (user trust) | Conservative `is_refresh_boundary` (default: not a boundary unless proven); fall back to reload on any doubt; instrumented mismatch counter |
 | R-2 (FM-2) | Incremental graph produces different `ChunkManifest` than full recompute | Medium | High (layout instability, user trust) | V6 property test in CI (mandatory before merge); explicit bailout path with counter; `--no-incremental` escape hatch |
 | R-3 (FM-3) | Parallel PGO ingestion duplicates events on crash-restart | Low | Medium | `INSERT OR IGNORE` invariant preserved by C2; idempotence test in CI; WAL mode tested under simulated crash |
-| R-4 (FM-4) | Dep pre-bundle cache grows unbounded | Medium | Low | LRU GC on every cache miss; `wundler dev` warns when cache > 1 GB |
+| R-4 (FM-4) | Dep pre-bundle cache grows unbounded | Medium | Low | LRU GC on every cache miss; `cloudpack dev` warns when cache > 1 GB |
 | R-5 (FM-5) | Bundle viewer becomes second source of truth | Medium | Medium | Viewer is strictly read-only over `build-stats.json`; no recomputation; if mismatch reported, fix is always in the viewer |
-| R-6 (FM-6) | VS Code extension invents a second diagnostic model | Medium | High (architectural drift, COE explicit prohibition) | Schema-first contract; CI test that `wundler lsp` and `wundler check` produce equivalent diagnostics on a corpus |
+| R-6 (FM-6) | VS Code extension invents a second diagnostic model | Medium | High (architectural drift, COE explicit prohibition) | Schema-first contract; CI test that `cloudpack lsp` and `cloudpack check` produce equivalent diagnostics on a corpus |
 | R-7 (FM-7) | P3 lands without gate evidence | Medium | High (correctness regressions, false perf claims) | Gate conditions are encoded as PR-blocking checks; "P3 work" PRs require a link to a passing V5 + observability report |
 | R-8 | P2 reload-on-any-doubt is so aggressive it's no better than today | Medium | Low | Track `hmr_update_total` vs `hmr_reload_total` ratio; if ratio < 50% updates after 30 days of dogfood, revisit boundary detection |
 | R-9 | LSP from VS Code becomes the primary consumer of P3, accidentally forcing P3 to ship before its gate | Low | High | P6 SCA is the markdown-matcher alternative; full LSP gates on P3 gates |
@@ -734,7 +734,7 @@ Where `canonical_bytes()` is the deterministic serialization defined by VRC. Thi
 
 - **P1** (dep pre-bundling) — standalone. Ships any time.
 - **P5 SCA** (markdown table) — depends only on observability P1 (build-stats.json), which is already designed.
-- **P6 SCA** (problems matcher) — depends only on `wundler check` having stable output, which already exists.
+- **P6 SCA** (problems matcher) — depends only on `cloudpack check` having stable output, which already exists.
 
 ### What is gated
 
@@ -759,7 +759,7 @@ Where `canonical_bytes()` is the deterministic serialization defined by VRC. Thi
 | P3 | Cache `tarjan_sccs` output across analyses only | ~100 | only ~30% of full win; no reachability or chunk deltas |
 | P4 | WAL mode + batched commits, no parallel parser | ~20 | parallelism win unrealized — but typically 10–100× is here anyway |
 | P5 | Markdown table on stdout | ~50 | no interactive view; no treemap |
-| P6 | `tasks.json` problems matcher | ~50 lines JSON | no incremental updates; runs `wundler check` on save |
+| P6 | `tasks.json` problems matcher | ~50 lines JSON | no incremental updates; runs `cloudpack check` on save |
 | P7 | (none — defer) | 0 | n/a |
 
 **Strong claim, written down so we can argue with it:** these SCAs together cover ≥ 70% of the user-visible win of the full design, at ≤ 15% of the code. They are the right starting point for every tier. The full designs are admissible only with measurement showing the SCA is insufficient.
@@ -770,12 +770,12 @@ Where `canonical_bytes()` is the deterministic serialization defined by VRC. Thi
 
 | Priority | Done means |
 |---|---|
-| P1 | `wundler dev` cold start with cached deps completes in time ≤ T_baseline; with cache miss completes in time = T_baseline. Cache fingerprint changes correctly under `npm install`, `pnpm install`, `yarn`, `bun install`. |
+| P1 | `cloudpack dev` cold start with cached deps completes in time ≤ T_baseline; with cache miss completes in time = T_baseline. Cache fingerprint changes correctly under `npm install`, `pnpm install`, `yarn`, `bun install`. |
 | P2 | A React component edit updates in the browser without losing local state on at least one dogfood app. Mismatch / boundary-miss counter exists and is ≤ 1% of updates over 30 days. |
 | P3 | V6 property test passes for K ∈ {1, 10, 100, 1000} on uniform.v1 AND on at least one real corpus. Bailout counter exists. Analyze p95 on the gated corpus drops below the gate threshold. |
 | P4 | Idempotence test passes (re-ingest produces identical row count). Crash-during-ingest test passes (kill -9 during ingest; restart; final row count is exactly the same as a clean run). Ingest wall time on the gated corpus drops below 30s. |
-| P5 | `wundler build --analyze` opens a treemap whose totals equal `build-stats.json::total_bytes` byte-for-byte. |
-| P6 | `wundler lsp` emits diagnostics whose `code`, `severity`, and `range` match `wundler check` output verbatim on a 50-diagnostic corpus. |
+| P5 | `cloudpack build --analyze` opens a treemap whose totals equal `build-stats.json::total_bytes` byte-for-byte. |
+| P6 | `cloudpack lsp` emits diagnostics whose `code`, `severity`, and `range` match `cloudpack check` output verbatim on a 50-diagnostic corpus. |
 | P7 | (n/a — deferred) |
 
 ---

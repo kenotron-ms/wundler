@@ -1,16 +1,16 @@
-# Wundler Level 0 Build Pipeline — Implementation Plan
+# Cloudpack Level 0 Build Pipeline — Implementation Plan
 
 **Plan:** 3 of 5
 **Date:** 2026-05-13
-**Owner:** Wundler core
+**Owner:** Cloudpack core
 **Status:** Ready to execute
-**Depends on:** Plan 1 (Summarizer, `wundler-core`), Plan 2 (Graph Analyzer, `wundler-graph`)
+**Depends on:** Plan 1 (Summarizer, `cloudpack-core`), Plan 2 (Graph Analyzer, `cloudpack-graph`)
 
 ---
 
 ## Goal
 
-Wire the Summarizer → Graph Analyzer → Transform Engine pipeline, write content-hashed chunk files to disk, produce a `manifest.json` describing the bundle graph view, and expose `wundler build` and `wundler dev` CLI commands.
+Wire the Summarizer → Graph Analyzer → Transform Engine pipeline, write content-hashed chunk files to disk, produce a `manifest.json` describing the bundle graph view, and expose `cloudpack build` and `cloudpack dev` CLI commands.
 
 This is the **Level 0 deployment**: replaces the existing build pipeline of a project (Vite, Webpack, Rspack, Rolldown) without introducing the Adaptive Bundle Service. The output is a static directory of immutable, content-hashed chunks plus a manifest. A service worker, CDN, or vanilla static file server can serve the result.
 
@@ -24,8 +24,8 @@ This is the **Level 0 deployment**: replaces the existing build pipeline of a pr
 | `BuildPipeline` orchestrator (summarize → analyze → transform → emit) | Rspack adapter (deferred — interface only) |
 | Output writer (chunks + `manifest.json`) | Persistent daemon / watch caching beyond in-process |
 | Dev server with on-demand SWC transform + SSE-based HMR | Module federation, multi-app graphs |
-| `wundler build` and `wundler dev` CLI commands | Production HTTP serving (a CDN is assumed) |
-| `wundler.toml` config schema | Source map merging across transform passes |
+| `cloudpack build` and `cloudpack dev` CLI commands | Production HTTP serving (a CDN is assumed) |
+| `cloudpack.toml` config schema | Source map merging across transform passes |
 
 ## Architecture Recap
 
@@ -50,18 +50,18 @@ This is the **Level 0 deployment**: replaces the existing build pipeline of a pr
                                                                 └────────────────────┘
 ```
 
-`wundler dev` bypasses the pipeline entirely: it serves source modules as native ESM, transforming on demand via SWC, with file-watcher driven SSE for HMR.
+`cloudpack dev` bypasses the pipeline entirely: it serves source modules as native ESM, transforming on demand via SWC, with file-watcher driven SSE for HMR.
 
 ## Pre-Flight Verification
 
 Before starting, confirm prerequisite state from Plans 1 and 2:
 
 ```bash
-cd /Users/ken/workspace/ms/wundler
-cargo build -p wundler-core
-cargo build -p wundler-graph
-cargo test -p wundler-core --lib
-cargo test -p wundler-graph --lib
+cd /Users/ken/workspace/ms/cloudpack
+cargo build -p cloudpack-core
+cargo build -p cloudpack-graph
+cargo test -p cloudpack-core --lib
+cargo test -p cloudpack-graph --lib
 ```
 
 All four commands must succeed. If any fail, the prerequisite plan is not complete and Plan 3 cannot start.
@@ -69,13 +69,13 @@ All four commands must succeed. If any fail, the prerequisite plan is not comple
 Verify required types exist:
 
 ```bash
-grep -rn "pub struct BundleGraphNode" crates/wundler-core/src
-grep -rn "pub struct ModuleSummary" crates/wundler-core/src
-grep -rn "pub struct ChunkManifest" crates/wundler-graph/src
-grep -rn "pub struct Chunk" crates/wundler-graph/src
-grep -rn "pub struct AnalysisResult" crates/wundler-graph/src
-grep -rn "pub fn summarize_directory" crates/wundler-core/src
-grep -rn "pub fn analyze" crates/wundler-graph/src
+grep -rn "pub struct BundleGraphNode" crates/cloudpack-core/src
+grep -rn "pub struct ModuleSummary" crates/cloudpack-core/src
+grep -rn "pub struct ChunkManifest" crates/cloudpack-graph/src
+grep -rn "pub struct Chunk" crates/cloudpack-graph/src
+grep -rn "pub struct AnalysisResult" crates/cloudpack-graph/src
+grep -rn "pub fn summarize_directory" crates/cloudpack-core/src
+grep -rn "pub fn analyze" crates/cloudpack-graph/src
 ```
 
 Each `grep` must return at least one match. If a type or function is missing, stop and resolve before continuing.
@@ -84,74 +84,74 @@ Each `grep` must return at least one match. If a type or function is missing, st
 
 ```
 crates/
-├── wundler-core/         (Plan 1, exists)
-├── wundler-graph/        (Plan 2, exists)
-├── wundler-transform/    (NEW — this plan)
-├── wundler-pipeline/     (NEW — this plan)
-└── wundler-cli/          (exists, extended in this plan)
+├── cloudpack-core/         (Plan 1, exists)
+├── cloudpack-graph/        (Plan 2, exists)
+├── cloudpack-transform/    (NEW — this plan)
+├── cloudpack-pipeline/     (NEW — this plan)
+└── cloudpack-cli/          (exists, extended in this plan)
 ```
 
 ## Task Index
 
-1. Workspace registration for `wundler-transform` and `wundler-pipeline`
+1. Workspace registration for `cloudpack-transform` and `cloudpack-pipeline`
 2. `TransformEngine` trait + `ChunkOutput` + `TransformDecisions` + `TransformError`
 3. `SwcTransformAdapter` — dead export stripping for a single module
 4. `SwcTransformAdapter` — chunk concatenation (N modules → one JS output)
 5. `SwcTransformAdapter` — source map generation
 6. `RolldownAdapter` scaffold — subprocess invocation + JSON handoff + fallback
-7. `BuildConfig` + `EngineChoice` deserialization from `wundler.toml`
-8. `BuildPipeline::build()` step 1 — summarize via `wundler-core`
-9. `BuildPipeline::build()` step 2 — analyze via `wundler-graph`
+7. `BuildConfig` + `EngineChoice` deserialization from `cloudpack.toml`
+8. `BuildPipeline::build()` step 1 — summarize via `cloudpack-core`
+9. `BuildPipeline::build()` step 2 — analyze via `cloudpack-graph`
 10. `BuildPipeline::build()` step 3 — parallel transform via rayon
 11. Output writer — chunk files + `manifest.json` + `index.html` stub
 12. Dev server — Axum static + on-demand SWC transformation
 13. Dev server — file watcher + SSE-based HMR
-14. CLI — `wundler build` and `wundler dev` with progress bars
+14. CLI — `cloudpack build` and `cloudpack dev` with progress bars
 15. Integration test — end-to-end 5-module TypeScript project build
 
 Each task is TDD-shaped: failing test first, run-and-confirm-failure, minimal implementation, run-and-confirm-pass, commit.
 
 ---
 
-## Task 1 — Register `wundler-transform` and `wundler-pipeline` in the workspace
+## Task 1 — Register `cloudpack-transform` and `cloudpack-pipeline` in the workspace
 
 **Files:**
 - Modify: `Cargo.toml`
-- Create: `crates/wundler-transform/Cargo.toml`
-- Create: `crates/wundler-transform/src/lib.rs`
-- Create: `crates/wundler-pipeline/Cargo.toml`
-- Create: `crates/wundler-pipeline/src/lib.rs`
-- Test: `crates/wundler-transform/tests/smoke.rs`
-- Test: `crates/wundler-pipeline/tests/smoke.rs`
+- Create: `crates/cloudpack-transform/Cargo.toml`
+- Create: `crates/cloudpack-transform/src/lib.rs`
+- Create: `crates/cloudpack-pipeline/Cargo.toml`
+- Create: `crates/cloudpack-pipeline/src/lib.rs`
+- Test: `crates/cloudpack-transform/tests/smoke.rs`
+- Test: `crates/cloudpack-pipeline/tests/smoke.rs`
 
 ### Step 1: Write the failing test
 
-`crates/wundler-transform/tests/smoke.rs`:
+`crates/cloudpack-transform/tests/smoke.rs`:
 
 ```rust
 #[test]
 fn crate_loads() {
     // Sanity: the crate's hello() function exists and returns the expected string.
-    assert_eq!(wundler_transform::hello(), "wundler-transform");
+    assert_eq!(cloudpack_transform::hello(), "cloudpack-transform");
 }
 ```
 
-`crates/wundler-pipeline/tests/smoke.rs`:
+`crates/cloudpack-pipeline/tests/smoke.rs`:
 
 ```rust
 #[test]
 fn crate_loads() {
-    assert_eq!(wundler_pipeline::hello(), "wundler-pipeline");
+    assert_eq!(cloudpack_pipeline::hello(), "cloudpack-pipeline");
 }
 ```
 
 ### Step 2: Run test, verify it FAILS
 
 ```bash
-cargo test -p wundler-transform --test smoke
+cargo test -p cloudpack-transform --test smoke
 ```
 
-Expected failure: `error: package ID specification 'wundler-transform' did not match any packages` (because the crate does not yet exist).
+Expected failure: `error: package ID specification 'cloudpack-transform' did not match any packages` (because the crate does not yet exist).
 
 ### Step 3: Write minimal implementation
 
@@ -161,11 +161,11 @@ Modify `Cargo.toml` (workspace root). The `[workspace]` `members` array must con
 [workspace]
 resolver = "2"
 members = [
-    "crates/wundler-core",
-    "crates/wundler-cli",
-    "crates/wundler-graph",
-    "crates/wundler-transform",
-    "crates/wundler-pipeline",
+    "crates/cloudpack-core",
+    "crates/cloudpack-cli",
+    "crates/cloudpack-graph",
+    "crates/cloudpack-transform",
+    "crates/cloudpack-pipeline",
 ]
 
 [workspace.package]
@@ -181,18 +181,18 @@ serde_json = "1"
 rayon = "1"
 ```
 
-Create `crates/wundler-transform/Cargo.toml`:
+Create `crates/cloudpack-transform/Cargo.toml`:
 
 ```toml
 [package]
-name = "wundler-transform"
+name = "cloudpack-transform"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-wundler-core = { path = "../wundler-core" }
-wundler-graph = { path = "../wundler-graph" }
+cloudpack-core = { path = "../cloudpack-core" }
+cloudpack-graph = { path = "../cloudpack-graph" }
 swc_core = { version = "6", features = [
     "ecma_parser",
     "ecma_ast",
@@ -211,30 +211,30 @@ sha2 = "0.10"
 hex = "0.4"
 ```
 
-Create `crates/wundler-transform/src/lib.rs`:
+Create `crates/cloudpack-transform/src/lib.rs`:
 
 ```rust
-//! Wundler Transform Engine — converts a chunk of summarized modules into
+//! Cloudpack Transform Engine — converts a chunk of summarized modules into
 //! emittable JavaScript output. Engine-agnostic via the `TransformEngine` trait.
 
 pub fn hello() -> &'static str {
-    "wundler-transform"
+    "cloudpack-transform"
 }
 ```
 
-Create `crates/wundler-pipeline/Cargo.toml`:
+Create `crates/cloudpack-pipeline/Cargo.toml`:
 
 ```toml
 [package]
-name = "wundler-pipeline"
+name = "cloudpack-pipeline"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-wundler-core = { path = "../wundler-core" }
-wundler-graph = { path = "../wundler-graph" }
-wundler-transform = { path = "../wundler-transform" }
+cloudpack-core = { path = "../cloudpack-core" }
+cloudpack-graph = { path = "../cloudpack-graph" }
+cloudpack-transform = { path = "../cloudpack-transform" }
 tokio = { version = "1", features = ["full"] }
 axum = "0.8"
 tower-http = { version = "0.6", features = ["fs", "cors"] }
@@ -250,21 +250,21 @@ sha2 = "0.10"
 hex = "0.4"
 ```
 
-Create `crates/wundler-pipeline/src/lib.rs`:
+Create `crates/cloudpack-pipeline/src/lib.rs`:
 
 ```rust
-//! Wundler Build Pipeline — orchestrates summarize → analyze → transform → emit.
+//! Cloudpack Build Pipeline — orchestrates summarize → analyze → transform → emit.
 
 pub fn hello() -> &'static str {
-    "wundler-pipeline"
+    "cloudpack-pipeline"
 }
 ```
 
 ### Step 4: Run test, verify PASSES
 
 ```bash
-cargo test -p wundler-transform --test smoke
-cargo test -p wundler-pipeline --test smoke
+cargo test -p cloudpack-transform --test smoke
+cargo test -p cloudpack-pipeline --test smoke
 ```
 
 Expected: each `cargo test` reports `test result: ok. 1 passed; 0 failed`.
@@ -272,8 +272,8 @@ Expected: each `cargo test` reports `test result: ok. 1 passed; 0 failed`.
 ### Step 5: Commit
 
 ```bash
-git add Cargo.toml crates/wundler-transform crates/wundler-pipeline
-git commit -m "wundler-transform, wundler-pipeline: register crates in workspace"
+git add Cargo.toml crates/cloudpack-transform crates/cloudpack-pipeline
+git commit -m "cloudpack-transform, cloudpack-pipeline: register crates in workspace"
 ```
 
 ---
@@ -281,19 +281,19 @@ git commit -m "wundler-transform, wundler-pipeline: register crates in workspace
 ## Task 2 — Define `TransformEngine` trait + DTOs
 
 **Files:**
-- Create: `crates/wundler-transform/src/engine.rs`
-- Modify: `crates/wundler-transform/src/lib.rs`
-- Test: `crates/wundler-transform/tests/engine_trait.rs`
+- Create: `crates/cloudpack-transform/src/engine.rs`
+- Modify: `crates/cloudpack-transform/src/lib.rs`
+- Test: `crates/cloudpack-transform/tests/engine_trait.rs`
 
 ### Step 1: Write the failing test
 
-`crates/wundler-transform/tests/engine_trait.rs`:
+`crates/cloudpack-transform/tests/engine_trait.rs`:
 
 ```rust
 use std::collections::{HashMap, HashSet};
-use wundler_core::types::{BundleGraphNode, ContentHash, ModuleSummary};
-use wundler_graph::types::{Chunk, LoadCondition};
-use wundler_transform::engine::{ChunkOutput, TransformDecisions, TransformEngine, TransformError};
+use cloudpack_core::types::{BundleGraphNode, ContentHash, ModuleSummary};
+use cloudpack_graph::types::{Chunk, LoadCondition};
+use cloudpack_transform::engine::{ChunkOutput, TransformDecisions, TransformEngine, TransformError};
 
 struct StubEngine;
 
@@ -361,23 +361,23 @@ fn transform_error_displays_with_chunk_id() {
 ### Step 2: Run test, verify it FAILS
 
 ```bash
-cargo test -p wundler-transform --test engine_trait
+cargo test -p cloudpack-transform --test engine_trait
 ```
 
-Expected failure: `error[E0432]: unresolved import wundler_transform::engine` — the `engine` module does not exist.
+Expected failure: `error[E0432]: unresolved import cloudpack_transform::engine` — the `engine` module does not exist.
 
 ### Step 3: Write minimal implementation
 
-Create `crates/wundler-transform/src/engine.rs`:
+Create `crates/cloudpack-transform/src/engine.rs`:
 
 ```rust
-//! TransformEngine trait — the seam between Wundler's analysis and code generation.
+//! TransformEngine trait — the seam between Cloudpack's analysis and code generation.
 //!
 //! Adapters: SwcTransformAdapter (default, in-process), RolldownAdapter (subprocess).
 
 use std::collections::{HashMap, HashSet};
-use wundler_core::types::{BundleGraphNode, ContentHash};
-use wundler_graph::types::{Chunk, ChunkId};
+use cloudpack_core::types::{BundleGraphNode, ContentHash};
+use cloudpack_graph::types::{Chunk, ChunkId};
 
 /// Output of transforming one chunk.
 #[derive(Debug, Clone)]
@@ -420,10 +420,10 @@ pub trait TransformEngine: Send + Sync {
 }
 ```
 
-Modify `crates/wundler-transform/src/lib.rs` to export `engine`:
+Modify `crates/cloudpack-transform/src/lib.rs` to export `engine`:
 
 ```rust
-//! Wundler Transform Engine — converts a chunk of summarized modules into
+//! Cloudpack Transform Engine — converts a chunk of summarized modules into
 //! emittable JavaScript output. Engine-agnostic via the `TransformEngine` trait.
 
 pub mod engine;
@@ -431,14 +431,14 @@ pub mod engine;
 pub use engine::{ChunkOutput, TransformDecisions, TransformEngine, TransformError};
 
 pub fn hello() -> &'static str {
-    "wundler-transform"
+    "cloudpack-transform"
 }
 ```
 
 ### Step 4: Run test, verify PASSES
 
 ```bash
-cargo test -p wundler-transform --test engine_trait
+cargo test -p cloudpack-transform --test engine_trait
 ```
 
 Expected output: `test result: ok. 3 passed; 0 failed`.
@@ -446,8 +446,8 @@ Expected output: `test result: ok. 3 passed; 0 failed`.
 ### Step 5: Commit
 
 ```bash
-git add crates/wundler-transform
-git commit -m "wundler-transform: define TransformEngine trait, ChunkOutput, TransformDecisions, TransformError"
+git add crates/cloudpack-transform
+git commit -m "cloudpack-transform: define TransformEngine trait, ChunkOutput, TransformDecisions, TransformError"
 ```
 
 ---
@@ -455,18 +455,18 @@ git commit -m "wundler-transform: define TransformEngine trait, ChunkOutput, Tra
 ## Task 3 — `SwcTransformAdapter`: dead export stripping for a single module
 
 **Files:**
-- Create: `crates/wundler-transform/src/swc_adapter.rs`
-- Create: `crates/wundler-transform/src/swc_util.rs`
-- Modify: `crates/wundler-transform/src/lib.rs`
-- Test: `crates/wundler-transform/tests/swc_dead_exports.rs`
+- Create: `crates/cloudpack-transform/src/swc_adapter.rs`
+- Create: `crates/cloudpack-transform/src/swc_util.rs`
+- Modify: `crates/cloudpack-transform/src/lib.rs`
+- Test: `crates/cloudpack-transform/tests/swc_dead_exports.rs`
 
 ### Step 1: Write the failing test
 
-`crates/wundler-transform/tests/swc_dead_exports.rs`:
+`crates/cloudpack-transform/tests/swc_dead_exports.rs`:
 
 ```rust
 use std::collections::HashSet;
-use wundler_transform::swc_adapter::strip_dead_exports;
+use cloudpack_transform::swc_adapter::strip_dead_exports;
 
 #[test]
 fn strip_named_function_export() {
@@ -539,14 +539,14 @@ fn parse_error_returns_err() {
 ### Step 2: Run test, verify it FAILS
 
 ```bash
-cargo test -p wundler-transform --test swc_dead_exports
+cargo test -p cloudpack-transform --test swc_dead_exports
 ```
 
-Expected failure: `error[E0432]: unresolved import wundler_transform::swc_adapter` — module doesn't exist yet.
+Expected failure: `error[E0432]: unresolved import cloudpack_transform::swc_adapter` — module doesn't exist yet.
 
 ### Step 3: Write minimal implementation
 
-Create `crates/wundler-transform/src/swc_util.rs`:
+Create `crates/cloudpack-transform/src/swc_util.rs`:
 
 ```rust
 //! Shared SWC parsing and codegen helpers.
@@ -607,7 +607,7 @@ pub fn emit_module(cm: Arc<SourceMap>, module: &Module) -> Result<String> {
 }
 ```
 
-Create `crates/wundler-transform/src/swc_adapter.rs`:
+Create `crates/cloudpack-transform/src/swc_adapter.rs`:
 
 ```rust
 //! SWC-based in-process transform adapter.
@@ -726,10 +726,10 @@ fn keep_stmt(_stmt: &Stmt) -> bool {
 }
 ```
 
-Modify `crates/wundler-transform/src/lib.rs`:
+Modify `crates/cloudpack-transform/src/lib.rs`:
 
 ```rust
-//! Wundler Transform Engine — converts a chunk of summarized modules into
+//! Cloudpack Transform Engine — converts a chunk of summarized modules into
 //! emittable JavaScript output. Engine-agnostic via the `TransformEngine` trait.
 
 pub mod engine;
@@ -739,14 +739,14 @@ pub mod swc_util;
 pub use engine::{ChunkOutput, TransformDecisions, TransformEngine, TransformError};
 
 pub fn hello() -> &'static str {
-    "wundler-transform"
+    "cloudpack-transform"
 }
 ```
 
 ### Step 4: Run test, verify PASSES
 
 ```bash
-cargo test -p wundler-transform --test swc_dead_exports
+cargo test -p cloudpack-transform --test swc_dead_exports
 ```
 
 Expected output: `test result: ok. 6 passed; 0 failed`.
@@ -754,8 +754,8 @@ Expected output: `test result: ok. 6 passed; 0 failed`.
 ### Step 5: Commit
 
 ```bash
-git add crates/wundler-transform
-git commit -m "wundler-transform: SwcTransformAdapter — dead export stripping (named, default, re-export)"
+git add crates/cloudpack-transform
+git commit -m "cloudpack-transform: SwcTransformAdapter — dead export stripping (named, default, re-export)"
 ```
 
 ---
@@ -763,22 +763,22 @@ git commit -m "wundler-transform: SwcTransformAdapter — dead export stripping 
 ## Task 4 — `SwcTransformAdapter`: chunk concatenation with scope isolation
 
 **Files:**
-- Modify: `crates/wundler-transform/src/swc_adapter.rs`
-- Test: `crates/wundler-transform/tests/swc_chunk_concat.rs`
+- Modify: `crates/cloudpack-transform/src/swc_adapter.rs`
+- Test: `crates/cloudpack-transform/tests/swc_chunk_concat.rs`
 
 ### Step 1: Write the failing test
 
-`crates/wundler-transform/tests/swc_chunk_concat.rs`:
+`crates/cloudpack-transform/tests/swc_chunk_concat.rs`:
 
 ```rust
 use std::collections::{HashMap, HashSet};
-use wundler_core::types::{
+use cloudpack_core::types::{
     AmbientRef, BundleGraphNode, CallEdge, ContentHash, Export, ExportKind, Import,
     ImportKind, ModuleSummary, SideEffectMarker,
 };
-use wundler_graph::types::{Chunk, LoadCondition};
-use wundler_transform::engine::{TransformDecisions, TransformEngine};
-use wundler_transform::swc_adapter::SwcTransformAdapter;
+use cloudpack_graph::types::{Chunk, LoadCondition};
+use cloudpack_transform::engine::{TransformDecisions, TransformEngine};
+use cloudpack_transform::swc_adapter::SwcTransformAdapter;
 
 fn node(id: &str, src: &str) -> BundleGraphNode {
     BundleGraphNode {
@@ -910,20 +910,20 @@ fn output_hash_is_deterministic() {
 ### Step 2: Run test, verify it FAILS
 
 ```bash
-cargo test -p wundler-transform --test swc_chunk_concat
+cargo test -p cloudpack-transform --test swc_chunk_concat
 ```
 
 Expected failure: `error[E0432]: unresolved import` or `cannot find struct SwcTransformAdapter` — the struct does not exist yet.
 
 ### Step 3: Write minimal implementation
 
-Append to `crates/wundler-transform/src/swc_adapter.rs`:
+Append to `crates/cloudpack-transform/src/swc_adapter.rs`:
 
 ```rust
 use crate::engine::{ChunkOutput, TransformDecisions, TransformEngine, TransformError};
 use sha2::{Digest, Sha256};
-use wundler_core::types::{BundleGraphNode, ContentHash};
-use wundler_graph::types::Chunk;
+use cloudpack_core::types::{BundleGraphNode, ContentHash};
+use cloudpack_graph::types::Chunk;
 
 /// In-process SWC-based transform adapter. Default engine.
 pub struct SwcTransformAdapter;
@@ -999,7 +999,7 @@ impl TransformEngine for SwcTransformAdapter {
 ### Step 4: Run test, verify PASSES
 
 ```bash
-cargo test -p wundler-transform --test swc_chunk_concat
+cargo test -p cloudpack-transform --test swc_chunk_concat
 ```
 
 Expected output: `test result: ok. 5 passed; 0 failed`.
@@ -1007,8 +1007,8 @@ Expected output: `test result: ok. 5 passed; 0 failed`.
 ### Step 5: Commit
 
 ```bash
-git add crates/wundler-transform
-git commit -m "wundler-transform: SwcTransformAdapter — chunk concatenation with IIFE scope isolation"
+git add crates/cloudpack-transform
+git commit -m "cloudpack-transform: SwcTransformAdapter — chunk concatenation with IIFE scope isolation"
 ```
 
 ---
@@ -1016,20 +1016,20 @@ git commit -m "wundler-transform: SwcTransformAdapter — chunk concatenation wi
 ## Task 5 — `SwcTransformAdapter`: source map generation
 
 **Files:**
-- Modify: `crates/wundler-transform/src/swc_util.rs`
-- Modify: `crates/wundler-transform/src/swc_adapter.rs`
-- Test: `crates/wundler-transform/tests/swc_source_maps.rs`
+- Modify: `crates/cloudpack-transform/src/swc_util.rs`
+- Modify: `crates/cloudpack-transform/src/swc_adapter.rs`
+- Test: `crates/cloudpack-transform/tests/swc_source_maps.rs`
 
 ### Step 1: Write the failing test
 
-`crates/wundler-transform/tests/swc_source_maps.rs`:
+`crates/cloudpack-transform/tests/swc_source_maps.rs`:
 
 ```rust
 use serde_json::Value;
-use wundler_core::types::{BundleGraphNode, ContentHash, ModuleSummary, SideEffectMarker};
-use wundler_graph::types::{Chunk, LoadCondition};
-use wundler_transform::engine::{TransformDecisions, TransformEngine};
-use wundler_transform::swc_adapter::{SwcTransformAdapter, SwcAdapterConfig};
+use cloudpack_core::types::{BundleGraphNode, ContentHash, ModuleSummary, SideEffectMarker};
+use cloudpack_graph::types::{Chunk, LoadCondition};
+use cloudpack_transform::engine::{TransformDecisions, TransformEngine};
+use cloudpack_transform::swc_adapter::{SwcTransformAdapter, SwcAdapterConfig};
 
 fn node(id: &str, src: &str) -> BundleGraphNode {
     BundleGraphNode {
@@ -1117,14 +1117,14 @@ fn source_map_includes_all_modules_in_chunk() {
 ### Step 2: Run test, verify it FAILS
 
 ```bash
-cargo test -p wundler-transform --test swc_source_maps
+cargo test -p cloudpack-transform --test swc_source_maps
 ```
 
-Expected failure: `cannot find type SwcAdapterConfig in crate wundler_transform::swc_adapter`.
+Expected failure: `cannot find type SwcAdapterConfig in crate cloudpack_transform::swc_adapter`.
 
 ### Step 3: Write minimal implementation
 
-Modify `crates/wundler-transform/src/swc_adapter.rs` — replace the `SwcTransformAdapter` definition and `impl TransformEngine`:
+Modify `crates/cloudpack-transform/src/swc_adapter.rs` — replace the `SwcTransformAdapter` definition and `impl TransformEngine`:
 
 ```rust
 /// Configuration for the SWC adapter.
@@ -1253,7 +1253,7 @@ fn build_source_map(sources: &[String], segments: &[String]) -> String {
         "sourcesContent": Vec::<&str>::new(),
         "names": Vec::<&str>::new(),
         "mappings": "",
-        "x_wundler_segments": segments,
+        "x_cloudpack_segments": segments,
     });
     map.to_string()
 }
@@ -1262,7 +1262,7 @@ fn build_source_map(sources: &[String], segments: &[String]) -> String {
 ### Step 4: Run test, verify PASSES
 
 ```bash
-cargo test -p wundler-transform --test swc_source_maps
+cargo test -p cloudpack-transform --test swc_source_maps
 ```
 
 Expected output: `test result: ok. 3 passed; 0 failed`.
@@ -1270,7 +1270,7 @@ Expected output: `test result: ok. 3 passed; 0 failed`.
 Also re-run prior tests to confirm no regression:
 
 ```bash
-cargo test -p wundler-transform
+cargo test -p cloudpack-transform
 ```
 
 All transform tests (engine_trait, swc_dead_exports, swc_chunk_concat, swc_source_maps, smoke) must pass.
@@ -1278,8 +1278,8 @@ All transform tests (engine_trait, swc_dead_exports, swc_chunk_concat, swc_sourc
 ### Step 5: Commit
 
 ```bash
-git add crates/wundler-transform
-git commit -m "wundler-transform: SwcTransformAdapter — source map emission (v3 JSON, line-coarse)"
+git add crates/cloudpack-transform
+git commit -m "cloudpack-transform: SwcTransformAdapter — source map emission (v3 JSON, line-coarse)"
 ```
 
 ---
@@ -1287,20 +1287,20 @@ git commit -m "wundler-transform: SwcTransformAdapter — source map emission (v
 ## Task 6 — `RolldownAdapter`: subprocess scaffold + fallback
 
 **Files:**
-- Create: `crates/wundler-transform/src/rolldown_adapter.rs`
-- Modify: `crates/wundler-transform/src/lib.rs`
-- Test: `crates/wundler-transform/tests/rolldown_fallback.rs`
+- Create: `crates/cloudpack-transform/src/rolldown_adapter.rs`
+- Modify: `crates/cloudpack-transform/src/lib.rs`
+- Test: `crates/cloudpack-transform/tests/rolldown_fallback.rs`
 
 ### Step 1: Write the failing test
 
-`crates/wundler-transform/tests/rolldown_fallback.rs`:
+`crates/cloudpack-transform/tests/rolldown_fallback.rs`:
 
 ```rust
 use std::path::PathBuf;
-use wundler_core::types::{BundleGraphNode, ContentHash, ModuleSummary, SideEffectMarker};
-use wundler_graph::types::{Chunk, LoadCondition};
-use wundler_transform::engine::{TransformDecisions, TransformEngine};
-use wundler_transform::rolldown_adapter::{RolldownAdapter, RolldownAdapterConfig};
+use cloudpack_core::types::{BundleGraphNode, ContentHash, ModuleSummary, SideEffectMarker};
+use cloudpack_graph::types::{Chunk, LoadCondition};
+use cloudpack_transform::engine::{TransformDecisions, TransformEngine};
+use cloudpack_transform::rolldown_adapter::{RolldownAdapter, RolldownAdapterConfig};
 
 fn node(id: &str, src: &str) -> BundleGraphNode {
     BundleGraphNode {
@@ -1374,14 +1374,14 @@ fn config_default_path_is_node() {
 ### Step 2: Run test, verify it FAILS
 
 ```bash
-cargo test -p wundler-transform --test rolldown_fallback
+cargo test -p cloudpack-transform --test rolldown_fallback
 ```
 
-Expected failure: `unresolved import wundler_transform::rolldown_adapter`.
+Expected failure: `unresolved import cloudpack_transform::rolldown_adapter`.
 
 ### Step 3: Write minimal implementation
 
-Create `crates/wundler-transform/src/rolldown_adapter.rs`:
+Create `crates/cloudpack-transform/src/rolldown_adapter.rs`:
 
 ```rust
 //! Rolldown subprocess adapter. Invokes Node.js with an inline Rolldown driver
@@ -1396,8 +1396,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 use tempfile::NamedTempFile;
-use wundler_core::types::{BundleGraphNode, ContentHash};
-use wundler_graph::types::Chunk;
+use cloudpack_core::types::{BundleGraphNode, ContentHash};
+use cloudpack_graph::types::Chunk;
 
 /// Configuration for `RolldownAdapter`.
 #[derive(Debug, Clone)]
@@ -1477,7 +1477,7 @@ const input = JSON.parse(fs.readFileSync(process.argv[2], 'utf-8'));
     const bundle = await rolldown.rolldown({
       input: input.modules.map(m => m.path),
       plugins: [{
-        name: 'wundler-virtual',
+        name: 'cloudpack-virtual',
         resolveId(id) { return virtualModules[id] ? id : null; },
         load(id) { return virtualModules[id] ?? null; },
       }],
@@ -1573,7 +1573,7 @@ impl RolldownAdapter {
 }
 ```
 
-Modify `crates/wundler-transform/src/lib.rs`:
+Modify `crates/cloudpack-transform/src/lib.rs`:
 
 ```rust
 pub mod engine;
@@ -1586,14 +1586,14 @@ pub use rolldown_adapter::{RolldownAdapter, RolldownAdapterConfig};
 pub use swc_adapter::{SwcAdapterConfig, SwcTransformAdapter};
 
 pub fn hello() -> &'static str {
-    "wundler-transform"
+    "cloudpack-transform"
 }
 ```
 
 ### Step 4: Run test, verify PASSES
 
 ```bash
-cargo test -p wundler-transform --test rolldown_fallback
+cargo test -p cloudpack-transform --test rolldown_fallback
 ```
 
 Expected output: `test result: ok. 3 passed; 0 failed`.
@@ -1601,32 +1601,32 @@ Expected output: `test result: ok. 3 passed; 0 failed`.
 ### Step 5: Commit
 
 ```bash
-git add crates/wundler-transform
-git commit -m "wundler-transform: RolldownAdapter — Node subprocess + SWC fallback"
+git add crates/cloudpack-transform
+git commit -m "cloudpack-transform: RolldownAdapter — Node subprocess + SWC fallback"
 ```
 
 ---
 
-## Task 7 — `BuildConfig` + `EngineChoice` from `wundler.toml`
+## Task 7 — `BuildConfig` + `EngineChoice` from `cloudpack.toml`
 
 **Files:**
-- Create: `crates/wundler-pipeline/src/config.rs`
-- Modify: `crates/wundler-pipeline/src/lib.rs`
-- Test: `crates/wundler-pipeline/tests/config_load.rs`
+- Create: `crates/cloudpack-pipeline/src/config.rs`
+- Modify: `crates/cloudpack-pipeline/src/lib.rs`
+- Test: `crates/cloudpack-pipeline/tests/config_load.rs`
 
 ### Step 1: Write the failing test
 
-`crates/wundler-pipeline/tests/config_load.rs`:
+`crates/cloudpack-pipeline/tests/config_load.rs`:
 
 ```rust
 use std::path::PathBuf;
 use tempfile::tempdir;
-use wundler_pipeline::config::{BuildConfig, EngineChoice};
+use cloudpack_pipeline::config::{BuildConfig, EngineChoice};
 
 #[test]
 fn load_minimal_config() {
     let dir = tempdir().unwrap();
-    let cfg_path = dir.path().join("wundler.toml");
+    let cfg_path = dir.path().join("cloudpack.toml");
     std::fs::write(
         &cfg_path,
         r#"
@@ -1654,7 +1654,7 @@ engine = "swc"
 #[test]
 fn defaults_applied_when_omitted() {
     let dir = tempdir().unwrap();
-    let cfg_path = dir.path().join("wundler.toml");
+    let cfg_path = dir.path().join("cloudpack.toml");
     std::fs::write(
         &cfg_path,
         r#"
@@ -1677,7 +1677,7 @@ out_dir = "dist"
 #[test]
 fn engine_choice_rolldown() {
     let dir = tempdir().unwrap();
-    let cfg_path = dir.path().join("wundler.toml");
+    let cfg_path = dir.path().join("cloudpack.toml");
     std::fs::write(
         &cfg_path,
         r#"
@@ -1698,7 +1698,7 @@ engine = "rolldown"
 #[test]
 fn engine_choice_rspack() {
     let dir = tempdir().unwrap();
-    let cfg_path = dir.path().join("wundler.toml");
+    let cfg_path = dir.path().join("cloudpack.toml");
     std::fs::write(
         &cfg_path,
         r#"
@@ -1718,14 +1718,14 @@ engine = "rspack"
 
 #[test]
 fn missing_file_returns_error() {
-    let result = BuildConfig::load(std::path::Path::new("/nonexistent/wundler.toml"));
+    let result = BuildConfig::load(std::path::Path::new("/nonexistent/cloudpack.toml"));
     assert!(result.is_err());
 }
 
 #[test]
 fn unknown_engine_is_error() {
     let dir = tempdir().unwrap();
-    let cfg_path = dir.path().join("wundler.toml");
+    let cfg_path = dir.path().join("cloudpack.toml");
     std::fs::write(
         &cfg_path,
         r#"
@@ -1747,17 +1747,17 @@ engine = "webpack-classic"
 ### Step 2: Run test, verify it FAILS
 
 ```bash
-cargo test -p wundler-pipeline --test config_load
+cargo test -p cloudpack-pipeline --test config_load
 ```
 
-Expected failure: `unresolved import wundler_pipeline::config`.
+Expected failure: `unresolved import cloudpack_pipeline::config`.
 
 ### Step 3: Write minimal implementation
 
-Create `crates/wundler-pipeline/src/config.rs`:
+Create `crates/cloudpack-pipeline/src/config.rs`:
 
 ```rust
-//! `wundler.toml` schema and loader.
+//! `cloudpack.toml` schema and loader.
 
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
@@ -1831,22 +1831,22 @@ impl BuildConfig {
 }
 ```
 
-Modify `crates/wundler-pipeline/src/lib.rs`:
+Modify `crates/cloudpack-pipeline/src/lib.rs`:
 
 ```rust
-//! Wundler Build Pipeline — orchestrates summarize → analyze → transform → emit.
+//! Cloudpack Build Pipeline — orchestrates summarize → analyze → transform → emit.
 
 pub mod config;
 
 pub fn hello() -> &'static str {
-    "wundler-pipeline"
+    "cloudpack-pipeline"
 }
 ```
 
 ### Step 4: Run test, verify PASSES
 
 ```bash
-cargo test -p wundler-pipeline --test config_load
+cargo test -p cloudpack-pipeline --test config_load
 ```
 
 Expected output: `test result: ok. 6 passed; 0 failed`.
@@ -1854,8 +1854,8 @@ Expected output: `test result: ok. 6 passed; 0 failed`.
 ### Step 5: Commit
 
 ```bash
-git add crates/wundler-pipeline
-git commit -m "wundler-pipeline: BuildConfig + EngineChoice deserialization from wundler.toml"
+git add crates/cloudpack-pipeline
+git commit -m "cloudpack-pipeline: BuildConfig + EngineChoice deserialization from cloudpack.toml"
 ```
 
 ---
@@ -1863,19 +1863,19 @@ git commit -m "wundler-pipeline: BuildConfig + EngineChoice deserialization from
 ## Task 8 — `BuildPipeline::build()` step 1: summarize
 
 **Files:**
-- Create: `crates/wundler-pipeline/src/pipeline.rs`
-- Modify: `crates/wundler-pipeline/src/lib.rs`
-- Test: `crates/wundler-pipeline/tests/pipeline_summarize.rs`
+- Create: `crates/cloudpack-pipeline/src/pipeline.rs`
+- Modify: `crates/cloudpack-pipeline/src/lib.rs`
+- Test: `crates/cloudpack-pipeline/tests/pipeline_summarize.rs`
 
 ### Step 1: Write the failing test
 
-`crates/wundler-pipeline/tests/pipeline_summarize.rs`:
+`crates/cloudpack-pipeline/tests/pipeline_summarize.rs`:
 
 ```rust
 use std::collections::HashMap;
 use tempfile::tempdir;
-use wundler_pipeline::config::{BuildConfig, EngineChoice};
-use wundler_pipeline::pipeline::BuildPipeline;
+use cloudpack_pipeline::config::{BuildConfig, EngineChoice};
+use cloudpack_pipeline::pipeline::BuildPipeline;
 
 fn make_project(root: &std::path::Path) {
     std::fs::create_dir_all(root.join("src")).unwrap();
@@ -1933,14 +1933,14 @@ fn pipeline_summarize_empty_root_returns_empty() {
 ### Step 2: Run test, verify it FAILS
 
 ```bash
-cargo test -p wundler-pipeline --test pipeline_summarize
+cargo test -p cloudpack-pipeline --test pipeline_summarize
 ```
 
-Expected failure: `unresolved import wundler_pipeline::pipeline`.
+Expected failure: `unresolved import cloudpack_pipeline::pipeline`.
 
 ### Step 3: Write minimal implementation
 
-Create `crates/wundler-pipeline/src/pipeline.rs`:
+Create `crates/cloudpack-pipeline/src/pipeline.rs`:
 
 ```rust
 //! `BuildPipeline` — orchestrates summarize → analyze → transform → emit.
@@ -1948,11 +1948,11 @@ Create `crates/wundler-pipeline/src/pipeline.rs`:
 use crate::config::{BuildConfig, EngineChoice};
 use anyhow::{Context, Result};
 use std::sync::Arc;
-use wundler_core::summarizer::ModuleSummarizer;
-use wundler_core::types::BundleGraphNode;
-use wundler_transform::engine::TransformEngine;
-use wundler_transform::rolldown_adapter::{RolldownAdapter, RolldownAdapterConfig};
-use wundler_transform::swc_adapter::{SwcAdapterConfig, SwcTransformAdapter};
+use cloudpack_core::summarizer::ModuleSummarizer;
+use cloudpack_core::types::BundleGraphNode;
+use cloudpack_transform::engine::TransformEngine;
+use cloudpack_transform::rolldown_adapter::{RolldownAdapter, RolldownAdapterConfig};
+use cloudpack_transform::swc_adapter::{SwcAdapterConfig, SwcTransformAdapter};
 
 pub struct BuildPipeline {
     pub config: BuildConfig,
@@ -1989,10 +1989,10 @@ impl BuildPipeline {
 }
 ```
 
-Modify `crates/wundler-pipeline/src/lib.rs`:
+Modify `crates/cloudpack-pipeline/src/lib.rs`:
 
 ```rust
-//! Wundler Build Pipeline — orchestrates summarize → analyze → transform → emit.
+//! Cloudpack Build Pipeline — orchestrates summarize → analyze → transform → emit.
 
 pub mod config;
 pub mod pipeline;
@@ -2001,7 +2001,7 @@ pub use config::{BuildConfig, EngineChoice};
 pub use pipeline::BuildPipeline;
 
 pub fn hello() -> &'static str {
-    "wundler-pipeline"
+    "cloudpack-pipeline"
 }
 ```
 
@@ -2010,7 +2010,7 @@ pub fn hello() -> &'static str {
 ### Step 4: Run test, verify PASSES
 
 ```bash
-cargo test -p wundler-pipeline --test pipeline_summarize
+cargo test -p cloudpack-pipeline --test pipeline_summarize
 ```
 
 Expected output: `test result: ok. 2 passed; 0 failed`.
@@ -2018,8 +2018,8 @@ Expected output: `test result: ok. 2 passed; 0 failed`.
 ### Step 5: Commit
 
 ```bash
-git add crates/wundler-pipeline
-git commit -m "wundler-pipeline: BuildPipeline::run_summarize — walk root via wundler-core"
+git add crates/cloudpack-pipeline
+git commit -m "cloudpack-pipeline: BuildPipeline::run_summarize — walk root via cloudpack-core"
 ```
 
 ---
@@ -2027,18 +2027,18 @@ git commit -m "wundler-pipeline: BuildPipeline::run_summarize — walk root via 
 ## Task 9 — `BuildPipeline` step 2: analyze
 
 **Files:**
-- Modify: `crates/wundler-pipeline/src/pipeline.rs`
-- Test: `crates/wundler-pipeline/tests/pipeline_analyze.rs`
+- Modify: `crates/cloudpack-pipeline/src/pipeline.rs`
+- Test: `crates/cloudpack-pipeline/tests/pipeline_analyze.rs`
 
 ### Step 1: Write the failing test
 
-`crates/wundler-pipeline/tests/pipeline_analyze.rs`:
+`crates/cloudpack-pipeline/tests/pipeline_analyze.rs`:
 
 ```rust
 use std::collections::HashMap;
 use tempfile::tempdir;
-use wundler_pipeline::config::{BuildConfig, EngineChoice};
-use wundler_pipeline::pipeline::BuildPipeline;
+use cloudpack_pipeline::config::{BuildConfig, EngineChoice};
+use cloudpack_pipeline::pipeline::BuildPipeline;
 
 fn make_project(root: &std::path::Path) {
     std::fs::create_dir_all(root.join("src")).unwrap();
@@ -2109,19 +2109,19 @@ fn analyze_manifest_indexes_alive_modules() {
 ### Step 2: Run test, verify it FAILS
 
 ```bash
-cargo test -p wundler-pipeline --test pipeline_analyze
+cargo test -p cloudpack-pipeline --test pipeline_analyze
 ```
 
 Expected failure: `method run_analyze not found for struct BuildPipeline`.
 
 ### Step 3: Write minimal implementation
 
-Append to `crates/wundler-pipeline/src/pipeline.rs`:
+Append to `crates/cloudpack-pipeline/src/pipeline.rs`:
 
 ```rust
 use std::path::PathBuf;
-use wundler_graph::analyzer::GraphAnalyzer;
-use wundler_graph::types::AnalysisResult;
+use cloudpack_graph::analyzer::GraphAnalyzer;
+use cloudpack_graph::types::AnalysisResult;
 
 impl BuildPipeline {
     /// Step 2 of build(): run the graph analyzer to produce a `ChunkManifest`
@@ -2144,7 +2144,7 @@ impl BuildPipeline {
 ### Step 4: Run test, verify PASSES
 
 ```bash
-cargo test -p wundler-pipeline --test pipeline_analyze
+cargo test -p cloudpack-pipeline --test pipeline_analyze
 ```
 
 Expected output: `test result: ok. 2 passed; 0 failed`.
@@ -2152,8 +2152,8 @@ Expected output: `test result: ok. 2 passed; 0 failed`.
 ### Step 5: Commit
 
 ```bash
-git add crates/wundler-pipeline
-git commit -m "wundler-pipeline: BuildPipeline::run_analyze — invoke wundler-graph analyzer"
+git add crates/cloudpack-pipeline
+git commit -m "cloudpack-pipeline: BuildPipeline::run_analyze — invoke cloudpack-graph analyzer"
 ```
 
 ---
@@ -2161,18 +2161,18 @@ git commit -m "wundler-pipeline: BuildPipeline::run_analyze — invoke wundler-g
 ## Task 10 — `BuildPipeline` step 3: parallel transform
 
 **Files:**
-- Modify: `crates/wundler-pipeline/src/pipeline.rs`
-- Test: `crates/wundler-pipeline/tests/pipeline_transform.rs`
+- Modify: `crates/cloudpack-pipeline/src/pipeline.rs`
+- Test: `crates/cloudpack-pipeline/tests/pipeline_transform.rs`
 
 ### Step 1: Write the failing test
 
-`crates/wundler-pipeline/tests/pipeline_transform.rs`:
+`crates/cloudpack-pipeline/tests/pipeline_transform.rs`:
 
 ```rust
 use std::collections::HashMap;
 use tempfile::tempdir;
-use wundler_pipeline::config::{BuildConfig, EngineChoice};
-use wundler_pipeline::pipeline::BuildPipeline;
+use cloudpack_pipeline::config::{BuildConfig, EngineChoice};
+use cloudpack_pipeline::pipeline::BuildPipeline;
 
 fn make_project(root: &std::path::Path) {
     std::fs::create_dir_all(root.join("src")).unwrap();
@@ -2247,20 +2247,20 @@ fn run_transform_is_parallel_safe() {
 ### Step 2: Run test, verify it FAILS
 
 ```bash
-cargo test -p wundler-pipeline --test pipeline_transform
+cargo test -p cloudpack-pipeline --test pipeline_transform
 ```
 
 Expected failure: `method run_transform not found for struct BuildPipeline`.
 
 ### Step 3: Write minimal implementation
 
-Append to `crates/wundler-pipeline/src/pipeline.rs`:
+Append to `crates/cloudpack-pipeline/src/pipeline.rs`:
 
 ```rust
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
-use wundler_core::types::ContentHash;
-use wundler_transform::engine::{ChunkOutput, TransformDecisions};
+use cloudpack_core::types::ContentHash;
+use cloudpack_transform::engine::{ChunkOutput, TransformDecisions};
 
 impl BuildPipeline {
     /// Step 3 of build(): run the configured `TransformEngine` over every chunk
@@ -2319,7 +2319,7 @@ impl BuildPipeline {
 ### Step 4: Run test, verify PASSES
 
 ```bash
-cargo test -p wundler-pipeline --test pipeline_transform
+cargo test -p cloudpack-pipeline --test pipeline_transform
 ```
 
 Expected output: `test result: ok. 2 passed; 0 failed`.
@@ -2327,8 +2327,8 @@ Expected output: `test result: ok. 2 passed; 0 failed`.
 ### Step 5: Commit
 
 ```bash
-git add crates/wundler-pipeline
-git commit -m "wundler-pipeline: BuildPipeline::run_transform — parallel chunk transform via rayon"
+git add crates/cloudpack-pipeline
+git commit -m "cloudpack-pipeline: BuildPipeline::run_transform — parallel chunk transform via rayon"
 ```
 
 ---
@@ -2336,23 +2336,23 @@ git commit -m "wundler-pipeline: BuildPipeline::run_transform — parallel chunk
 ## Task 11 — Output writer: chunks + `manifest.json` + index.html
 
 **Files:**
-- Create: `crates/wundler-pipeline/src/output.rs`
-- Modify: `crates/wundler-pipeline/src/pipeline.rs`
-- Modify: `crates/wundler-pipeline/src/lib.rs`
-- Test: `crates/wundler-pipeline/tests/output_writer.rs`
-- Test: `crates/wundler-pipeline/tests/pipeline_build.rs`
+- Create: `crates/cloudpack-pipeline/src/output.rs`
+- Modify: `crates/cloudpack-pipeline/src/pipeline.rs`
+- Modify: `crates/cloudpack-pipeline/src/lib.rs`
+- Test: `crates/cloudpack-pipeline/tests/output_writer.rs`
+- Test: `crates/cloudpack-pipeline/tests/pipeline_build.rs`
 
 ### Step 1: Write the failing test
 
-`crates/wundler-pipeline/tests/output_writer.rs`:
+`crates/cloudpack-pipeline/tests/output_writer.rs`:
 
 ```rust
 use std::collections::HashMap;
 use tempfile::tempdir;
-use wundler_core::types::ContentHash;
-use wundler_graph::types::{Chunk, ChunkManifest, LoadCondition};
-use wundler_pipeline::output::{write_chunk, write_index_html, write_manifest};
-use wundler_transform::engine::ChunkOutput;
+use cloudpack_core::types::ContentHash;
+use cloudpack_graph::types::{Chunk, ChunkManifest, LoadCondition};
+use cloudpack_pipeline::output::{write_chunk, write_index_html, write_manifest};
+use cloudpack_transform::engine::ChunkOutput;
 
 #[test]
 fn write_chunk_creates_content_hashed_file() {
@@ -2443,13 +2443,13 @@ fn write_index_html_references_initial_chunks() {
 }
 ```
 
-`crates/wundler-pipeline/tests/pipeline_build.rs`:
+`crates/cloudpack-pipeline/tests/pipeline_build.rs`:
 
 ```rust
 use std::collections::HashMap;
 use tempfile::tempdir;
-use wundler_pipeline::config::{BuildConfig, EngineChoice};
-use wundler_pipeline::pipeline::BuildPipeline;
+use cloudpack_pipeline::config::{BuildConfig, EngineChoice};
+use cloudpack_pipeline::pipeline::BuildPipeline;
 
 fn make_project(root: &std::path::Path) {
     std::fs::create_dir_all(root.join("src")).unwrap();
@@ -2520,15 +2520,15 @@ fn build_stats_reflect_alive_dead_counts() {
 ### Step 2: Run test, verify it FAILS
 
 ```bash
-cargo test -p wundler-pipeline --test output_writer
-cargo test -p wundler-pipeline --test pipeline_build
+cargo test -p cloudpack-pipeline --test output_writer
+cargo test -p cloudpack-pipeline --test pipeline_build
 ```
 
-Expected failure: `unresolved import wundler_pipeline::output` and `method build not found for struct BuildPipeline`.
+Expected failure: `unresolved import cloudpack_pipeline::output` and `method build not found for struct BuildPipeline`.
 
 ### Step 3: Write minimal implementation
 
-Create `crates/wundler-pipeline/src/output.rs`:
+Create `crates/cloudpack-pipeline/src/output.rs`:
 
 ```rust
 //! Output writers: chunk files, manifest.json, and an index.html stub.
@@ -2536,8 +2536,8 @@ Create `crates/wundler-pipeline/src/output.rs`:
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
-use wundler_graph::types::ChunkManifest;
-use wundler_transform::engine::ChunkOutput;
+use cloudpack_graph::types::ChunkManifest;
+use cloudpack_transform::engine::ChunkOutput;
 
 /// Write a single chunk + optional source map to `{out_dir}/chunks/{hash}.js`.
 pub fn write_chunk(out_dir: &Path, output: &ChunkOutput) -> Result<PathBuf> {
@@ -2590,7 +2590,7 @@ pub fn write_index_html(out_dir: &Path, manifest: &ChunkManifest, entry: &str) -
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Wundler — {entry}</title>
+  <title>Cloudpack — {entry}</title>
 </head>
 <body>
 {scripts}
@@ -2608,13 +2608,13 @@ pub fn write_index_html(out_dir: &Path, manifest: &ChunkManifest, entry: &str) -
 
 > `ContentHash::to_hex()` is assumed to exist on Plan 1's hash type. If not, substitute `hex::encode(&output.hash.as_bytes())` (or whatever accessor the type provides).
 
-Append to `crates/wundler-pipeline/src/pipeline.rs`:
+Append to `crates/cloudpack-pipeline/src/pipeline.rs`:
 
 ```rust
 use crate::output::{write_chunk, write_index_html, write_manifest};
 use std::path::PathBuf;
 use std::time::Instant;
-use wundler_graph::types::ChunkManifest;
+use cloudpack_graph::types::ChunkManifest;
 
 #[derive(Debug, Clone)]
 pub struct BuildOutput {
@@ -2672,10 +2672,10 @@ impl BuildPipeline {
 }
 ```
 
-Modify `crates/wundler-pipeline/src/lib.rs`:
+Modify `crates/cloudpack-pipeline/src/lib.rs`:
 
 ```rust
-//! Wundler Build Pipeline — orchestrates summarize → analyze → transform → emit.
+//! Cloudpack Build Pipeline — orchestrates summarize → analyze → transform → emit.
 
 pub mod config;
 pub mod output;
@@ -2685,15 +2685,15 @@ pub use config::{BuildConfig, EngineChoice};
 pub use pipeline::{BuildOutput, BuildPipeline, BuildStats};
 
 pub fn hello() -> &'static str {
-    "wundler-pipeline"
+    "cloudpack-pipeline"
 }
 ```
 
 ### Step 4: Run test, verify PASSES
 
 ```bash
-cargo test -p wundler-pipeline --test output_writer
-cargo test -p wundler-pipeline --test pipeline_build
+cargo test -p cloudpack-pipeline --test output_writer
+cargo test -p cloudpack-pipeline --test pipeline_build
 ```
 
 Expected output for each: `test result: ok. <n> passed; 0 failed`.
@@ -2701,8 +2701,8 @@ Expected output for each: `test result: ok. <n> passed; 0 failed`.
 ### Step 5: Commit
 
 ```bash
-git add crates/wundler-pipeline
-git commit -m "wundler-pipeline: output writer + BuildPipeline::build() end-to-end orchestration"
+git add crates/cloudpack-pipeline
+git commit -m "cloudpack-pipeline: output writer + BuildPipeline::build() end-to-end orchestration"
 ```
 
 ---
@@ -2710,18 +2710,18 @@ git commit -m "wundler-pipeline: output writer + BuildPipeline::build() end-to-e
 ## Task 12 — Dev server: Axum static + on-demand SWC transform
 
 **Files:**
-- Create: `crates/wundler-pipeline/src/dev_server.rs`
-- Modify: `crates/wundler-pipeline/src/lib.rs`
-- Test: `crates/wundler-pipeline/tests/dev_server_serve.rs`
+- Create: `crates/cloudpack-pipeline/src/dev_server.rs`
+- Modify: `crates/cloudpack-pipeline/src/lib.rs`
+- Test: `crates/cloudpack-pipeline/tests/dev_server_serve.rs`
 
 ### Step 1: Write the failing test
 
-`crates/wundler-pipeline/tests/dev_server_serve.rs`:
+`crates/cloudpack-pipeline/tests/dev_server_serve.rs`:
 
 ```rust
 use std::time::Duration;
 use tempfile::tempdir;
-use wundler_pipeline::dev_server::DevServer;
+use cloudpack_pipeline::dev_server::DevServer;
 
 #[tokio::test]
 async fn serves_typescript_as_transformed_javascript() {
@@ -2778,7 +2778,7 @@ async fn returns_404_for_missing_file() {
 }
 ```
 
-Add `reqwest` to dev-dependencies in `crates/wundler-pipeline/Cargo.toml`:
+Add `reqwest` to dev-dependencies in `crates/cloudpack-pipeline/Cargo.toml`:
 
 ```toml
 [dev-dependencies]
@@ -2789,14 +2789,14 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ### Step 2: Run test, verify it FAILS
 
 ```bash
-cargo test -p wundler-pipeline --test dev_server_serve
+cargo test -p cloudpack-pipeline --test dev_server_serve
 ```
 
-Expected failure: `unresolved import wundler_pipeline::dev_server`.
+Expected failure: `unresolved import cloudpack_pipeline::dev_server`.
 
 ### Step 3: Write minimal implementation
 
-Create `crates/wundler-pipeline/src/dev_server.rs`:
+Create `crates/cloudpack-pipeline/src/dev_server.rs`:
 
 ```rust
 //! Development server. Serves source modules as native ESM, transforming
@@ -2901,9 +2901,9 @@ async fn serve_module(
 fn transform_on_demand(name: &str, source: &str) -> Result<String> {
     if name.ends_with(".ts") || name.ends_with(".tsx") {
         // Use the SWC parser+emitter to strip type annotations.
-        let (cm, module) = wundler_transform::swc_util::parse_source(name, source)
+        let (cm, module) = cloudpack_transform::swc_util::parse_source(name, source)
             .map_err(|e| anyhow!("parse: {}", e))?;
-        wundler_transform::swc_util::emit_module(cm, &module)
+        cloudpack_transform::swc_util::emit_module(cm, &module)
             .map_err(|e| anyhow!("emit: {}", e))
     } else {
         Ok(source.to_string())
@@ -2911,10 +2911,10 @@ fn transform_on_demand(name: &str, source: &str) -> Result<String> {
 }
 ```
 
-Modify `crates/wundler-pipeline/src/lib.rs`:
+Modify `crates/cloudpack-pipeline/src/lib.rs`:
 
 ```rust
-//! Wundler Build Pipeline — orchestrates summarize → analyze → transform → emit.
+//! Cloudpack Build Pipeline — orchestrates summarize → analyze → transform → emit.
 
 pub mod config;
 pub mod dev_server;
@@ -2926,14 +2926,14 @@ pub use dev_server::DevServer;
 pub use pipeline::{BuildOutput, BuildPipeline, BuildStats};
 
 pub fn hello() -> &'static str {
-    "wundler-pipeline"
+    "cloudpack-pipeline"
 }
 ```
 
 ### Step 4: Run test, verify PASSES
 
 ```bash
-cargo test -p wundler-pipeline --test dev_server_serve
+cargo test -p cloudpack-pipeline --test dev_server_serve
 ```
 
 Expected output: `test result: ok. 3 passed; 0 failed`.
@@ -2941,8 +2941,8 @@ Expected output: `test result: ok. 3 passed; 0 failed`.
 ### Step 5: Commit
 
 ```bash
-git add crates/wundler-pipeline
-git commit -m "wundler-pipeline: DevServer — Axum + on-demand SWC TS→JS transform"
+git add crates/cloudpack-pipeline
+git commit -m "cloudpack-pipeline: DevServer — Axum + on-demand SWC TS→JS transform"
 ```
 
 ---
@@ -2950,18 +2950,18 @@ git commit -m "wundler-pipeline: DevServer — Axum + on-demand SWC TS→JS tran
 ## Task 13 — Dev server: file watcher + SSE-based HMR
 
 **Files:**
-- Modify: `crates/wundler-pipeline/src/dev_server.rs`
-- Test: `crates/wundler-pipeline/tests/dev_server_hmr.rs`
+- Modify: `crates/cloudpack-pipeline/src/dev_server.rs`
+- Test: `crates/cloudpack-pipeline/tests/dev_server_hmr.rs`
 
 ### Step 1: Write the failing test
 
-`crates/wundler-pipeline/tests/dev_server_hmr.rs`:
+`crates/cloudpack-pipeline/tests/dev_server_hmr.rs`:
 
 ```rust
 use std::time::Duration;
 use tempfile::tempdir;
 use tokio::time::timeout;
-use wundler_pipeline::dev_server::DevServer;
+use cloudpack_pipeline::dev_server::DevServer;
 
 #[tokio::test]
 async fn sse_endpoint_emits_event_on_file_change() {
@@ -2975,7 +2975,7 @@ async fn sse_endpoint_emits_event_on_file_change() {
         port: 0,
     };
     let (addr, shutdown) = server.start_for_test().await.unwrap();
-    let url = format!("http://{}/__wundler__/hmr", addr);
+    let url = format!("http://{}/__cloudpack__/hmr", addr);
 
     // Open SSE stream
     let resp = reqwest::get(&url).await.unwrap();
@@ -3012,12 +3012,12 @@ async fn hmr_client_script_is_served() {
         port: 0,
     };
     let (addr, shutdown) = server.start_for_test().await.unwrap();
-    let url = format!("http://{}/__wundler__/hmr-client.js", addr);
+    let url = format!("http://{}/__cloudpack__/hmr-client.js", addr);
     let resp = reqwest::get(&url).await.unwrap();
     assert_eq!(resp.status().as_u16(), 200);
     let body = resp.text().await.unwrap();
     assert!(body.contains("EventSource"));
-    assert!(body.contains("__wundler__/hmr"));
+    assert!(body.contains("__cloudpack__/hmr"));
     shutdown.send(()).ok();
 }
 ```
@@ -3034,14 +3034,14 @@ futures-util = "0.3"
 ### Step 2: Run test, verify it FAILS
 
 ```bash
-cargo test -p wundler-pipeline --test dev_server_hmr
+cargo test -p cloudpack-pipeline --test dev_server_hmr
 ```
 
-Expected failure: status 404 on the `__wundler__/hmr` endpoint (or test timeout) — the routes do not yet exist.
+Expected failure: status 404 on the `__cloudpack__/hmr` endpoint (or test timeout) — the routes do not yet exist.
 
 ### Step 3: Write minimal implementation
 
-Replace the body of `crates/wundler-pipeline/src/dev_server.rs` with this expanded version:
+Replace the body of `crates/cloudpack-pipeline/src/dev_server.rs` with this expanded version:
 
 ```rust
 //! Development server. Serves source modules as native ESM, transforming
@@ -3067,12 +3067,12 @@ use tokio::net::TcpListener;
 use tokio::sync::{broadcast, oneshot};
 use tokio_stream::wrappers::BroadcastStream;
 
-const HMR_CLIENT_JS: &str = r#"// Wundler HMR client — connect to /__wundler__/hmr and reload on change.
+const HMR_CLIENT_JS: &str = r#"// Cloudpack HMR client — connect to /__cloudpack__/hmr and reload on change.
 (function() {
   if (typeof EventSource === 'undefined') return;
-  const es = new EventSource('/__wundler__/hmr');
+  const es = new EventSource('/__cloudpack__/hmr');
   es.addEventListener('change', (ev) => {
-    console.log('[wundler] change:', ev.data);
+    console.log('[cloudpack] change:', ev.data);
     // For Level 0 we full-reload. Granular accept() comes in a later milestone.
     location.reload();
   });
@@ -3121,7 +3121,7 @@ impl DevServer {
             })
             .expect("notify watcher init");
             if let Err(e) = watcher.watch(&watch_root, RecursiveMode::Recursive) {
-                eprintln!("[wundler] watch error on {}: {}", watch_root.display(), e);
+                eprintln!("[cloudpack] watch error on {}: {}", watch_root.display(), e);
                 return;
             }
             for ev in rx {
@@ -3138,8 +3138,8 @@ impl DevServer {
         });
 
         let app = Router::new()
-            .route("/__wundler__/hmr-client.js", get(hmr_client))
-            .route("/__wundler__/hmr", get(hmr_sse))
+            .route("/__cloudpack__/hmr-client.js", get(hmr_client))
+            .route("/__cloudpack__/hmr", get(hmr_sse))
             .route("/*path", get(serve_module))
             .with_state(state);
 
@@ -3211,9 +3211,9 @@ async fn serve_module(
 
 fn transform_on_demand(name: &str, source: &str) -> Result<String> {
     if name.ends_with(".ts") || name.ends_with(".tsx") {
-        let (cm, module) = wundler_transform::swc_util::parse_source(name, source)
+        let (cm, module) = cloudpack_transform::swc_util::parse_source(name, source)
             .map_err(|e| anyhow!("parse: {}", e))?;
-        wundler_transform::swc_util::emit_module(cm, &module)
+        cloudpack_transform::swc_util::emit_module(cm, &module)
             .map_err(|e| anyhow!("emit: {}", e))
     } else {
         Ok(source.to_string())
@@ -3223,13 +3223,13 @@ fn transform_on_demand(name: &str, source: &str) -> Result<String> {
 use futures_util::StreamExt;
 ```
 
-Update `crates/wundler-pipeline/Cargo.toml` dependencies block:
+Update `crates/cloudpack-pipeline/Cargo.toml` dependencies block:
 
 ```toml
 [dependencies]
-wundler-core = { path = "../wundler-core" }
-wundler-graph = { path = "../wundler-graph" }
-wundler-transform = { path = "../wundler-transform" }
+cloudpack-core = { path = "../cloudpack-core" }
+cloudpack-graph = { path = "../cloudpack-graph" }
+cloudpack-transform = { path = "../cloudpack-transform" }
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 axum = { version = "0.8", features = ["macros"] }
@@ -3251,7 +3251,7 @@ futures-core = "0.3"
 ### Step 4: Run test, verify PASSES
 
 ```bash
-cargo test -p wundler-pipeline --test dev_server_hmr
+cargo test -p cloudpack-pipeline --test dev_server_hmr
 ```
 
 Expected output: `test result: ok. 2 passed; 0 failed`.
@@ -3259,37 +3259,37 @@ Expected output: `test result: ok. 2 passed; 0 failed`.
 Also re-run the prior dev server test to confirm no regression:
 
 ```bash
-cargo test -p wundler-pipeline --test dev_server_serve
+cargo test -p cloudpack-pipeline --test dev_server_serve
 ```
 
 ### Step 5: Commit
 
 ```bash
-git add crates/wundler-pipeline
-git commit -m "wundler-pipeline: DevServer — notify watcher + SSE HMR endpoint + hmr-client.js"
+git add crates/cloudpack-pipeline
+git commit -m "cloudpack-pipeline: DevServer — notify watcher + SSE HMR endpoint + hmr-client.js"
 ```
 
 ---
 
-## Task 14 — CLI: `wundler build` and `wundler dev` with progress
+## Task 14 — CLI: `cloudpack build` and `cloudpack dev` with progress
 
 **Files:**
-- Modify: `crates/wundler-cli/Cargo.toml`
-- Modify: `crates/wundler-cli/src/main.rs`
-- Test: `crates/wundler-cli/tests/cli_smoke.rs`
+- Modify: `crates/cloudpack-cli/Cargo.toml`
+- Modify: `crates/cloudpack-cli/src/main.rs`
+- Test: `crates/cloudpack-cli/tests/cli_smoke.rs`
 
 ### Step 1: Write the failing test
 
-`crates/wundler-cli/tests/cli_smoke.rs`:
+`crates/cloudpack-cli/tests/cli_smoke.rs`:
 
 ```rust
 use std::process::Command;
 use tempfile::tempdir;
 
 fn cli_path() -> std::path::PathBuf {
-    let mut p = std::path::PathBuf::from(env!("CARGO_BIN_EXE_wundler"));
+    let mut p = std::path::PathBuf::from(env!("CARGO_BIN_EXE_cloudpack"));
     if !p.exists() {
-        p = std::path::PathBuf::from(env!("CARGO_BIN_EXE_wundler-cli"));
+        p = std::path::PathBuf::from(env!("CARGO_BIN_EXE_cloudpack-cli"));
     }
     p
 }
@@ -3305,7 +3305,7 @@ fn cli_build_subcommand_runs_end_to_end() {
     .unwrap();
     std::fs::write(dir.path().join("src/util.ts"), "export const y = 2;\n").unwrap();
     std::fs::write(
-        dir.path().join("wundler.toml"),
+        dir.path().join("cloudpack.toml"),
         format!(
             r#"
 [build]
@@ -3327,7 +3327,7 @@ source_maps = false
     let status = Command::new(cli_path())
         .arg("build")
         .arg("--config")
-        .arg(dir.path().join("wundler.toml"))
+        .arg(dir.path().join("cloudpack.toml"))
         .status()
         .expect("spawn cli");
     assert!(status.success(), "cli build exited non-zero");
@@ -3352,42 +3352,42 @@ fn cli_build_help_lists_subcommands() {
 ### Step 2: Run test, verify it FAILS
 
 ```bash
-cargo test -p wundler-cli --test cli_smoke
+cargo test -p cloudpack-cli --test cli_smoke
 ```
 
 Expected failure: `unrecognized subcommand 'build'` or `unrecognized argument '--config'` (the existing CLI from Plan 1/2 does not yet ship these commands).
 
 ### Step 3: Write minimal implementation
 
-Update `crates/wundler-cli/Cargo.toml` dependencies:
+Update `crates/cloudpack-cli/Cargo.toml` dependencies:
 
 ```toml
 [dependencies]
-wundler-core = { path = "../wundler-core" }
-wundler-graph = { path = "../wundler-graph" }
-wundler-transform = { path = "../wundler-transform" }
-wundler-pipeline = { path = "../wundler-pipeline" }
+cloudpack-core = { path = "../cloudpack-core" }
+cloudpack-graph = { path = "../cloudpack-graph" }
+cloudpack-transform = { path = "../cloudpack-transform" }
+cloudpack-pipeline = { path = "../cloudpack-pipeline" }
 clap = { version = "4", features = ["derive"] }
 anyhow = { workspace = true }
 indicatif = "0.17"
 tokio = { version = "1", features = ["full"] }
 ```
 
-Replace `crates/wundler-cli/src/main.rs` (additive — preserve any existing `summarize`/`validate-scale`/`analyze` subcommands from prior plans by leaving their match arms intact; the snippet below shows the new `build` and `dev` arms inserted alongside them):
+Replace `crates/cloudpack-cli/src/main.rs` (additive — preserve any existing `summarize`/`validate-scale`/`analyze` subcommands from prior plans by leaving their match arms intact; the snippet below shows the new `build` and `dev` arms inserted alongside them):
 
 ```rust
-//! Wundler CLI.
+//! Cloudpack CLI.
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
-use wundler_pipeline::config::BuildConfig;
-use wundler_pipeline::dev_server::DevServer;
-use wundler_pipeline::pipeline::BuildPipeline;
+use cloudpack_pipeline::config::BuildConfig;
+use cloudpack_pipeline::dev_server::DevServer;
+use cloudpack_pipeline::pipeline::BuildPipeline;
 
 #[derive(Parser)]
-#[command(name = "wundler", version, about = "Wundler bundler CLI")]
+#[command(name = "cloudpack", version, about = "Cloudpack bundler CLI")]
 struct Cli {
     #[command(subcommand)]
     command: Cmd,
@@ -3397,14 +3397,14 @@ struct Cli {
 enum Cmd {
     /// Run a full build (summarize → analyze → transform → emit).
     Build {
-        #[arg(long, default_value = "wundler.toml")]
+        #[arg(long, default_value = "cloudpack.toml")]
         config: PathBuf,
         #[arg(long)]
         engine: Option<String>,
     },
     /// Start the development server.
     Dev {
-        #[arg(long, default_value = "wundler.toml")]
+        #[arg(long, default_value = "cloudpack.toml")]
         config: PathBuf,
         #[arg(long, default_value_t = 3000)]
         port: u16,
@@ -3427,9 +3427,9 @@ fn run_build(config_path: &std::path::Path, engine_override: Option<String>) -> 
     let mut cfg = BuildConfig::load(config_path)?;
     if let Some(name) = engine_override {
         cfg.engine = match name.as_str() {
-            "swc" => wundler_pipeline::config::EngineChoice::Swc,
-            "rolldown" => wundler_pipeline::config::EngineChoice::Rolldown,
-            "rspack" => wundler_pipeline::config::EngineChoice::Rspack,
+            "swc" => cloudpack_pipeline::config::EngineChoice::Swc,
+            "rolldown" => cloudpack_pipeline::config::EngineChoice::Rolldown,
+            "rspack" => cloudpack_pipeline::config::EngineChoice::Rspack,
             other => return Err(anyhow::anyhow!("unknown engine: {}", other)),
         };
     }
@@ -3453,7 +3453,7 @@ fn run_build(config_path: &std::path::Path, engine_override: Option<String>) -> 
 
 async fn run_dev(config_path: &std::path::Path, port: u16) -> Result<()> {
     let cfg = BuildConfig::load(config_path)?;
-    println!("wundler dev: serving {} on http://127.0.0.1:{}", cfg.root.display(), port);
+    println!("cloudpack dev: serving {} on http://127.0.0.1:{}", cfg.root.display(), port);
     let server = DevServer {
         root: cfg.root,
         port,
@@ -3463,18 +3463,18 @@ async fn run_dev(config_path: &std::path::Path, port: u16) -> Result<()> {
 }
 ```
 
-If the workspace `Cargo.toml` of `wundler-cli` sets `name = "wundler-cli"` but emits a binary called `wundler`, the test relies on `CARGO_BIN_EXE_wundler` or `CARGO_BIN_EXE_wundler-cli`. If neither matches the actual binary name, add `[[bin]] name = "wundler"` to `crates/wundler-cli/Cargo.toml`:
+If the workspace `Cargo.toml` of `cloudpack-cli` sets `name = "cloudpack-cli"` but emits a binary called `cloudpack`, the test relies on `CARGO_BIN_EXE_cloudpack` or `CARGO_BIN_EXE_cloudpack-cli`. If neither matches the actual binary name, add `[[bin]] name = "cloudpack"` to `crates/cloudpack-cli/Cargo.toml`:
 
 ```toml
 [[bin]]
-name = "wundler"
+name = "cloudpack"
 path = "src/main.rs"
 ```
 
 ### Step 4: Run test, verify PASSES
 
 ```bash
-cargo test -p wundler-cli --test cli_smoke
+cargo test -p cloudpack-cli --test cli_smoke
 ```
 
 Expected output: `test result: ok. 2 passed; 0 failed`.
@@ -3482,8 +3482,8 @@ Expected output: `test result: ok. 2 passed; 0 failed`.
 ### Step 5: Commit
 
 ```bash
-git add crates/wundler-cli
-git commit -m "wundler-cli: add `build` and `dev` subcommands with progress indicators"
+git add crates/cloudpack-cli
+git commit -m "cloudpack-cli: add `build` and `dev` subcommands with progress indicators"
 ```
 
 ---
@@ -3491,19 +3491,19 @@ git commit -m "wundler-cli: add `build` and `dev` subcommands with progress indi
 ## Task 15 — Integration: end-to-end 5-module TypeScript project build
 
 **Files:**
-- Create: `crates/wundler-pipeline/tests/fixtures/five-module-app/src/index.ts`
-- Create: `crates/wundler-pipeline/tests/fixtures/five-module-app/src/util.ts`
-- Create: `crates/wundler-pipeline/tests/fixtures/five-module-app/src/dashboard.ts`
-- Create: `crates/wundler-pipeline/tests/fixtures/five-module-app/src/settings.ts`
-- Create: `crates/wundler-pipeline/tests/fixtures/five-module-app/src/orphan.ts`
-- Create: `crates/wundler-pipeline/tests/fixtures/five-module-app/wundler.toml.template`
-- Test: `crates/wundler-pipeline/tests/integration_five_module.rs`
+- Create: `crates/cloudpack-pipeline/tests/fixtures/five-module-app/src/index.ts`
+- Create: `crates/cloudpack-pipeline/tests/fixtures/five-module-app/src/util.ts`
+- Create: `crates/cloudpack-pipeline/tests/fixtures/five-module-app/src/dashboard.ts`
+- Create: `crates/cloudpack-pipeline/tests/fixtures/five-module-app/src/settings.ts`
+- Create: `crates/cloudpack-pipeline/tests/fixtures/five-module-app/src/orphan.ts`
+- Create: `crates/cloudpack-pipeline/tests/fixtures/five-module-app/cloudpack.toml.template`
+- Test: `crates/cloudpack-pipeline/tests/integration_five_module.rs`
 
 ### Step 1: Write the failing test
 
 Create the fixture files:
 
-`crates/wundler-pipeline/tests/fixtures/five-module-app/src/index.ts`:
+`crates/cloudpack-pipeline/tests/fixtures/five-module-app/src/index.ts`:
 
 ```typescript
 import { greet } from './util';
@@ -3513,7 +3513,7 @@ export function main(): void {
 main();
 ```
 
-`crates/wundler-pipeline/tests/fixtures/five-module-app/src/util.ts`:
+`crates/cloudpack-pipeline/tests/fixtures/five-module-app/src/util.ts`:
 
 ```typescript
 export function greet(name: string): string {
@@ -3524,7 +3524,7 @@ export function unused(): number {
 }
 ```
 
-`crates/wundler-pipeline/tests/fixtures/five-module-app/src/dashboard.ts`:
+`crates/cloudpack-pipeline/tests/fixtures/five-module-app/src/dashboard.ts`:
 
 ```typescript
 import { greet } from './util';
@@ -3533,7 +3533,7 @@ export function renderDashboard(): string {
 }
 ```
 
-`crates/wundler-pipeline/tests/fixtures/five-module-app/src/settings.ts`:
+`crates/cloudpack-pipeline/tests/fixtures/five-module-app/src/settings.ts`:
 
 ```typescript
 export function renderSettings(): string {
@@ -3541,21 +3541,21 @@ export function renderSettings(): string {
 }
 ```
 
-`crates/wundler-pipeline/tests/fixtures/five-module-app/src/orphan.ts`:
+`crates/cloudpack-pipeline/tests/fixtures/five-module-app/src/orphan.ts`:
 
 ```typescript
 // Not imported by any entry — should be dead.
 export const orphan = 99;
 ```
 
-Create `crates/wundler-pipeline/tests/integration_five_module.rs`:
+Create `crates/cloudpack-pipeline/tests/integration_five_module.rs`:
 
 ```rust
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tempfile::tempdir;
-use wundler_pipeline::config::{BuildConfig, EngineChoice};
-use wundler_pipeline::pipeline::BuildPipeline;
+use cloudpack_pipeline::config::{BuildConfig, EngineChoice};
+use cloudpack_pipeline::pipeline::BuildPipeline;
 
 fn fixture_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -3680,7 +3680,7 @@ fn integration_build_is_deterministic() {
 Initially the fixture directory does not exist:
 
 ```bash
-cargo test -p wundler-pipeline --test integration_five_module
+cargo test -p cloudpack-pipeline --test integration_five_module
 ```
 
 Expected failure: `No such file or directory` when reading the fixture files (because the fixture tree must be created first).
@@ -3694,9 +3694,9 @@ Create the five fixture `.ts` files exactly as listed in Step 1 above. There is 
 Full workspace test sweep — every test from every task in this plan, plus prior plans, must pass:
 
 ```bash
-cargo test -p wundler-transform
-cargo test -p wundler-pipeline
-cargo test -p wundler-cli
+cargo test -p cloudpack-transform
+cargo test -p cloudpack-pipeline
+cargo test -p cloudpack-cli
 cargo test --workspace
 ```
 
@@ -3705,14 +3705,14 @@ Expected: every `cargo test` command reports `test result: ok` with zero failure
 Then run a manual smoke check from the command line:
 
 ```bash
-cd /Users/ken/workspace/ms/wundler
+cd /Users/ken/workspace/ms/cloudpack
 cargo build --release --workspace
 # Set up a tiny scratch project
 SCRATCH=$(mktemp -d)
 mkdir -p "$SCRATCH/src"
 echo "import { y } from './util'; export const z = y + 1;" > "$SCRATCH/src/index.ts"
 echo "export const y = 2;" > "$SCRATCH/src/util.ts"
-cat > "$SCRATCH/wundler.toml" <<TOML
+cat > "$SCRATCH/cloudpack.toml" <<TOML
 [build]
 root = "$SCRATCH/src"
 out_dir = "$SCRATCH/dist"
@@ -3721,7 +3721,7 @@ engine = "swc"
 [entry]
 "/" = "$SCRATCH/src/index.ts"
 TOML
-./target/release/wundler build --config "$SCRATCH/wundler.toml"
+./target/release/cloudpack build --config "$SCRATCH/cloudpack.toml"
 ls "$SCRATCH/dist"
 cat "$SCRATCH/dist/manifest.json" | head -30
 ```
@@ -3731,8 +3731,8 @@ Expected smoke output: the `ls` command shows `chunks/`, `manifest.json`, and `i
 ### Step 5: Commit
 
 ```bash
-git add crates/wundler-pipeline/tests
-git commit -m "wundler-pipeline: integration — end-to-end 5-module TypeScript build (Level 0 gate)"
+git add crates/cloudpack-pipeline/tests
+git commit -m "cloudpack-pipeline: integration — end-to-end 5-module TypeScript build (Level 0 gate)"
 ```
 
 ---
@@ -3743,21 +3743,21 @@ The plan is complete when **all of the following are true**:
 
 1. `cargo build --workspace --release` succeeds with zero warnings escalated to errors
 2. `cargo test --workspace` reports zero failures across every crate
-3. `cargo test -p wundler-pipeline --test integration_five_module` reports both tests passing
-4. The release `wundler` binary, when pointed at a real-world TypeScript project's `wundler.toml`, produces:
+3. `cargo test -p cloudpack-pipeline --test integration_five_module` reports both tests passing
+4. The release `cloudpack` binary, when pointed at a real-world TypeScript project's `cloudpack.toml`, produces:
    - A `dist/manifest.json` parseable as `ChunkManifest`
    - A `dist/chunks/` directory containing only content-hashed `.js` files (and their `.js.map` files if source maps are enabled)
    - A `dist/index.html` referencing the initial chunks for the configured entry
-5. `wundler dev --port <port>` serves TypeScript files transformed to JavaScript at `http://127.0.0.1:<port>/<path>` and emits SSE HMR events on file change
+5. `cloudpack dev --port <port>` serves TypeScript files transformed to JavaScript at `http://127.0.0.1:<port>/<path>` and emits SSE HMR events on file change
 
 ## Level 0 Validation Gate
 
 The success criterion for **shipping Level 0** to a real consumer:
 
-- Run `wundler build` against a project that currently builds via Vite/Webpack/Rspack
+- Run `cloudpack build` against a project that currently builds via Vite/Webpack/Rspack
 - Compare the rebuild time of a single-file edit:
-  - Wundler must be **at least as fast** as the incumbent on first build
-  - Wundler must be **strictly faster** on the second build (cache hit on summaries)
+  - Cloudpack must be **at least as fast** as the incumbent on first build
+  - Cloudpack must be **strictly faster** on the second build (cache hit on summaries)
 - Verify the produced bundle loads in a browser and renders identically to the incumbent's bundle
 
 If the rebuild-time check passes, Level 0 is real. The system is then ready to layer the Adaptive Bundle Service (Plan 4) on top.

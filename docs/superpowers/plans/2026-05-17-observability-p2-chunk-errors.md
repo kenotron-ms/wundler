@@ -22,29 +22,29 @@
 ## File Structure
 
 **Created:**
-- `crates/wundler-abs/src/metrics/mod.rs` — `Metrics`, `ChunkErrorKey`, `ErrorType`, `Metrics::prune`.
-- `crates/wundler-abs/src/metrics/chunk_error.rs` — `ChunkErrorReport`, `ChunkErrorEvent`, `ChunkErrorDeps`, `post_chunk_error` handler.
-- `crates/wundler-abs/src/metrics/prometheus.rs` — `render(&Metrics) -> String` hand-rolled text-exposition renderer.
+- `crates/cloudpack-abs/src/metrics/mod.rs` — `Metrics`, `ChunkErrorKey`, `ErrorType`, `Metrics::prune`.
+- `crates/cloudpack-abs/src/metrics/chunk_error.rs` — `ChunkErrorReport`, `ChunkErrorEvent`, `ChunkErrorDeps`, `post_chunk_error` handler.
+- `crates/cloudpack-abs/src/metrics/prometheus.rs` — `render(&Metrics) -> String` hand-rolled text-exposition renderer.
 
 **Modified:**
-- `crates/wundler-abs/Cargo.toml` — add `dashmap = "5"`.
-- `crates/wundler-abs/src/lib.rs` — add `pub mod metrics;`.
-- `crates/wundler-abs/src/types.rs` — add `TelemetryEventV2` tagged enum + `ManifestEvent` (additive, leaves `TelemetryEvent` untouched).
-- `crates/wundler-abs/src/server.rs` — thread `Arc<Metrics>` through `RouterState`, register `/telemetry/chunk-error` + `/metrics` routes, call `Metrics::prune` after a successful `POST /reload`, update `test_state()` helper.
-- `crates/wundler-abs/assets/sw.js` — add `reportChunkError()` + dedup set, wire into chunk-fetch failure paths.
+- `crates/cloudpack-abs/Cargo.toml` — add `dashmap = "5"`.
+- `crates/cloudpack-abs/src/lib.rs` — add `pub mod metrics;`.
+- `crates/cloudpack-abs/src/types.rs` — add `TelemetryEventV2` tagged enum + `ManifestEvent` (additive, leaves `TelemetryEvent` untouched).
+- `crates/cloudpack-abs/src/server.rs` — thread `Arc<Metrics>` through `RouterState`, register `/telemetry/chunk-error` + `/metrics` routes, call `Metrics::prune` after a successful `POST /reload`, update `test_state()` helper.
+- `crates/cloudpack-abs/assets/sw.js` — add `reportChunkError()` + dedup set, wire into chunk-fetch failure paths.
 
 ---
 
 ## Task 1 — `metrics` module skeleton: types + `prune()`
 
 **Files:**
-- Modify: `crates/wundler-abs/Cargo.toml`
-- Create: `crates/wundler-abs/src/metrics/mod.rs`
-- Modify: `crates/wundler-abs/src/lib.rs`
+- Modify: `crates/cloudpack-abs/Cargo.toml`
+- Create: `crates/cloudpack-abs/src/metrics/mod.rs`
+- Modify: `crates/cloudpack-abs/src/lib.rs`
 
 - [ ] **Step 1.1: Add `dashmap` dependency**
 
-Edit `crates/wundler-abs/Cargo.toml`. In the `[dependencies]` block, after `governor = "0.7"`, insert:
+Edit `crates/cloudpack-abs/Cargo.toml`. In the `[dependencies]` block, after `governor = "0.7"`, insert:
 
 ```toml
 dashmap = "5"
@@ -60,7 +60,7 @@ tempfile = "3"
 
 - [ ] **Step 1.2: Write the failing unit tests for `Metrics::new` and `Metrics::prune`**
 
-Create `crates/wundler-abs/src/metrics/mod.rs` with **only the tests** filled in — the implementation comes next so we can watch the tests fail.
+Create `crates/cloudpack-abs/src/metrics/mod.rs` with **only the tests** filled in — the implementation comes next so we can watch the tests fail.
 
 ```rust
 //! In-process metrics for the Asset Bundling Server.
@@ -204,7 +204,7 @@ mod tests {
 
 - [ ] **Step 1.3: Register the new module**
 
-Edit `crates/wundler-abs/src/lib.rs`. Below the existing `pub mod manifest;` line, add `pub mod metrics;` so the module list reads:
+Edit `crates/cloudpack-abs/src/lib.rs`. Below the existing `pub mod manifest;` line, add `pub mod metrics;` so the module list reads:
 
 ```rust
 pub mod archive;
@@ -222,13 +222,13 @@ pub mod types;
 
 The `mod.rs` references `pub mod chunk_error;` and `pub mod prometheus;`. Create empty stubs so this task can compile and run its tests in isolation. They will be filled out in Tasks 2 and 3.
 
-Create `crates/wundler-abs/src/metrics/chunk_error.rs`:
+Create `crates/cloudpack-abs/src/metrics/chunk_error.rs`:
 
 ```rust
 //! `POST /telemetry/chunk-error` handler. Filled in by Task 2.
 ```
 
-Create `crates/wundler-abs/src/metrics/prometheus.rs`:
+Create `crates/cloudpack-abs/src/metrics/prometheus.rs`:
 
 ```rust
 //! Hand-rolled Prometheus text-exposition renderer. Filled in by Task 3.
@@ -237,8 +237,8 @@ Create `crates/wundler-abs/src/metrics/prometheus.rs`:
 - [ ] **Step 1.5: Run the unit tests — expect them to PASS**
 
 ```bash
-cd /home/ken/workspace/wundler
-cargo test -p wundler-abs metrics:: -- --nocapture
+cd /home/ken/workspace/cloudpack
+cargo test -p cloudpack-abs metrics:: -- --nocapture
 ```
 
 Expected: all 4 tests in `metrics::tests` pass. If `cargo` complains about an unused import in the stubs, that is fine — just ensure tests pass.
@@ -246,7 +246,7 @@ Expected: all 4 tests in `metrics::tests` pass. If `cargo` complains about an un
 - [ ] **Step 1.6: Verify the whole crate still compiles and all pre-existing tests pass**
 
 ```bash
-cargo test -p wundler-abs
+cargo test -p cloudpack-abs
 ```
 
 Expected: full test suite green; nothing in `server.rs`, `archive.rs`, `manifest.rs`, etc. should have regressed.
@@ -254,11 +254,11 @@ Expected: full test suite green; nothing in `server.rs`, `archive.rs`, `manifest
 - [ ] **Step 1.7: Commit**
 
 ```bash
-git add crates/wundler-abs/Cargo.toml \
-        crates/wundler-abs/src/lib.rs \
-        crates/wundler-abs/src/metrics/mod.rs \
-        crates/wundler-abs/src/metrics/chunk_error.rs \
-        crates/wundler-abs/src/metrics/prometheus.rs
+git add crates/cloudpack-abs/Cargo.toml \
+        crates/cloudpack-abs/src/lib.rs \
+        crates/cloudpack-abs/src/metrics/mod.rs \
+        crates/cloudpack-abs/src/metrics/chunk_error.rs \
+        crates/cloudpack-abs/src/metrics/prometheus.rs
 git commit -m "feat(abs): metrics module skeleton — Metrics, ChunkErrorKey, ErrorType, prune"
 ```
 
@@ -267,13 +267,13 @@ git commit -m "feat(abs): metrics module skeleton — Metrics, ChunkErrorKey, Er
 ## Task 2 — `POST /telemetry/chunk-error` handler
 
 **Files:**
-- Modify: `crates/wundler-abs/src/metrics/chunk_error.rs`
+- Modify: `crates/cloudpack-abs/src/metrics/chunk_error.rs`
 
 The handler is built as a *self-contained unit* — it takes its dependencies via a small `ChunkErrorDeps` substate so it can be unit-tested without dragging the entire `RouterState` along. Task 3 wires it into the main router via `axum::extract::FromRef`.
 
 - [ ] **Step 2.1: Write the failing handler tests**
 
-Replace the stub in `crates/wundler-abs/src/metrics/chunk_error.rs` with the file below. The tests reference `post_chunk_error`, `ChunkErrorReport`, `ChunkErrorEvent`, and `ChunkErrorDeps`, which do not exist yet — that is intentional.
+Replace the stub in `crates/cloudpack-abs/src/metrics/chunk_error.rs` with the file below. The tests reference `post_chunk_error`, `ChunkErrorReport`, `ChunkErrorEvent`, and `ChunkErrorDeps`, which do not exist yet — that is intentional.
 
 ```rust
 //! `POST /telemetry/chunk-error` — fire-and-forget chunk failure reports
@@ -537,13 +537,13 @@ mod tests {
 - [ ] **Step 2.2: Run the tests to confirm they fail to compile**
 
 ```bash
-cargo test -p wundler-abs metrics::chunk_error
+cargo test -p cloudpack-abs metrics::chunk_error
 ```
 
 Expected: compile error if you somehow skipped step 2.1's contents — but if you wrote the file as shown above (which already contains the implementation), the tests will compile. In strict TDD you'd write tests first, then add the impl in 2.3. Since the file is one cohesive unit here, instead **temporarily comment out the four `pub fn`/`pub async fn` bodies** (replace each with `todo!()`) and re-run:
 
 ```bash
-cargo test -p wundler-abs metrics::chunk_error
+cargo test -p cloudpack-abs metrics::chunk_error
 ```
 
 Expected: tests compile, but every test fails with `panicked at 'not yet implemented'`. This is the "red" step.
@@ -555,7 +555,7 @@ Revert the `todo!()` substitutions so the file is identical to Step 2.1. (Or, if
 - [ ] **Step 2.4: Run the tests to confirm they pass**
 
 ```bash
-cargo test -p wundler-abs metrics::chunk_error -- --nocapture
+cargo test -p cloudpack-abs metrics::chunk_error -- --nocapture
 ```
 
 Expected output (4 tests, all PASS):
@@ -567,7 +567,7 @@ Expected output (4 tests, all PASS):
 - [ ] **Step 2.5: Sanity-check the whole crate still builds and tests pass**
 
 ```bash
-cargo test -p wundler-abs
+cargo test -p cloudpack-abs
 ```
 
 Expected: full test suite green.
@@ -575,7 +575,7 @@ Expected: full test suite green.
 - [ ] **Step 2.6: Commit**
 
 ```bash
-git add crates/wundler-abs/src/metrics/chunk_error.rs
+git add crates/cloudpack-abs/src/metrics/chunk_error.rs
 git commit -m "feat(abs): POST /telemetry/chunk-error handler + ChunkErrorDeps substate"
 ```
 
@@ -584,14 +584,14 @@ git commit -m "feat(abs): POST /telemetry/chunk-error handler + ChunkErrorDeps s
 ## Task 3 — Prometheus exposition + thread `Arc<Metrics>` through the router
 
 **Files:**
-- Modify: `crates/wundler-abs/src/metrics/prometheus.rs`
-- Modify: `crates/wundler-abs/src/server.rs`
+- Modify: `crates/cloudpack-abs/src/metrics/prometheus.rs`
+- Modify: `crates/cloudpack-abs/src/server.rs`
 
 This task does three things at once because they cannot meaningfully be split: (a) write the Prometheus renderer, (b) extend `RouterState` with `Arc<Metrics>` and thread it through `build_router` + `run()`, and (c) register the two new routes (`POST /telemetry/chunk-error`, `GET /metrics`).
 
 - [ ] **Step 3.1: Write the failing tests for `prometheus::render`**
 
-Replace the stub in `crates/wundler-abs/src/metrics/prometheus.rs` with the test module only, leaving the function body as `todo!()`:
+Replace the stub in `crates/cloudpack-abs/src/metrics/prometheus.rs` with the test module only, leaving the function body as `todo!()`:
 
 ```rust
 //! Hand-rolled Prometheus text-exposition renderer.
@@ -609,9 +609,9 @@ use crate::metrics::{ChunkErrorKey, ErrorType, Metrics};
 /// Emitted series:
 /// * `manifest_requests_total` — counter, scalar
 /// * `manifest_bytes_total` — counter, scalar
-/// * `wundler_chunk_errors_total{build_id=..,chunk_id=..,error_type=..}` — counter, vector
+/// * `cloudpack_chunk_errors_total{build_id=..,chunk_id=..,error_type=..}` — counter, vector
 ///
-/// (Note: only the chunk-error series is prefixed with `wundler_`. This
+/// (Note: only the chunk-error series is prefixed with `cloudpack_`. This
 /// matches the design spec — do not "normalise" the other names.)
 pub fn render(metrics: &Metrics) -> String {
     todo!("Task 3.3")
@@ -657,8 +657,8 @@ mod tests {
         assert!(out.contains("# TYPE manifest_bytes_total counter"));
         assert!(out.contains("manifest_bytes_total 0"));
         // Chunk-error series HELP/TYPE always present.
-        assert!(out.contains("# HELP wundler_chunk_errors_total"));
-        assert!(out.contains("# TYPE wundler_chunk_errors_total counter"));
+        assert!(out.contains("# HELP cloudpack_chunk_errors_total"));
+        assert!(out.contains("# TYPE cloudpack_chunk_errors_total counter"));
     }
 
     #[test]
@@ -684,7 +684,7 @@ mod tests {
         m.incr_chunk_error(key);
 
         let out = render(&m);
-        let expected = r#"wundler_chunk_errors_total{build_id="build-A",chunk_id="chunkX",error_type="load_failed"} 2"#;
+        let expected = r#"cloudpack_chunk_errors_total{build_id="build-A",chunk_id="chunkX",error_type="load_failed"} 2"#;
         assert!(
             out.contains(expected),
             "expected line not found in output:\n{out}"
@@ -712,7 +712,7 @@ mod tests {
 - [ ] **Step 3.2: Run the renderer tests — expect them to FAIL**
 
 ```bash
-cargo test -p wundler-abs metrics::prometheus
+cargo test -p cloudpack-abs metrics::prometheus
 ```
 
 Expected: 4 tests fail with `panicked at 'not yet implemented: Task 3.3'`.
@@ -753,13 +753,13 @@ pub fn render(metrics: &Metrics) -> String {
     )
     .unwrap();
 
-    // ----- wundler_chunk_errors_total -----
+    // ----- cloudpack_chunk_errors_total -----
     writeln!(
         out,
-        "# HELP wundler_chunk_errors_total Chunk load failures reported by service workers, labelled by build/chunk/error_type."
+        "# HELP cloudpack_chunk_errors_total Chunk load failures reported by service workers, labelled by build/chunk/error_type."
     )
     .unwrap();
-    writeln!(out, "# TYPE wundler_chunk_errors_total counter").unwrap();
+    writeln!(out, "# TYPE cloudpack_chunk_errors_total counter").unwrap();
 
     // Iterate the DashMap.  Order is non-deterministic; that's fine for
     // Prometheus consumers — they parse by name+labels, not by line order.
@@ -768,7 +768,7 @@ pub fn render(metrics: &Metrics) -> String {
         let count = entry.value().load(Ordering::Relaxed);
         writeln!(
             out,
-            r#"wundler_chunk_errors_total{{build_id="{}",chunk_id="{}",error_type="{}"}} {}"#,
+            r#"cloudpack_chunk_errors_total{{build_id="{}",chunk_id="{}",error_type="{}"}} {}"#,
             esc(&key.build_id),
             esc(&key.chunk_id),
             error_type_label(key.error_type),
@@ -784,14 +784,14 @@ pub fn render(metrics: &Metrics) -> String {
 - [ ] **Step 3.4: Run the renderer tests — expect PASS**
 
 ```bash
-cargo test -p wundler-abs metrics::prometheus -- --nocapture
+cargo test -p cloudpack-abs metrics::prometheus -- --nocapture
 ```
 
 Expected: 4 tests pass.
 
 - [ ] **Step 3.5: Write the failing integration tests in `server.rs`**
 
-Open `crates/wundler-abs/src/server.rs`. At the bottom of the existing `#[cfg(test)] mod tests` block (after the `default_config_has_no_rate_limit` test, before the closing `}` on line 771), append:
+Open `crates/cloudpack-abs/src/server.rs`. At the bottom of the existing `#[cfg(test)] mod tests` block (after the `default_config_has_no_rate_limit` test, before the closing `}` on line 771), append:
 
 ```rust
     // -----------------------------------------------------------------
@@ -825,7 +825,7 @@ Open `crates/wundler-abs/src/server.rs`. At the bottom of the existing `#[cfg(te
         let body = String::from_utf8(bytes.to_vec()).unwrap();
         assert!(body.contains("# TYPE manifest_requests_total counter"));
         assert!(body.contains("manifest_requests_total 0"));
-        assert!(body.contains("# TYPE wundler_chunk_errors_total counter"));
+        assert!(body.contains("# TYPE cloudpack_chunk_errors_total counter"));
     }
 
     /// POST /telemetry/chunk-error is reachable through the production router,
@@ -882,14 +882,14 @@ Open `crates/wundler-abs/src/server.rs`. At the bottom of the existing `#[cfg(te
 - [ ] **Step 3.6: Run these tests — expect compile error**
 
 ```bash
-cargo test -p wundler-abs --no-run
+cargo test -p cloudpack-abs --no-run
 ```
 
 Expected: compile errors complaining that `build_router` has the wrong arity (we're passing 4 args) and that there's no `/metrics` or `/telemetry/chunk-error` route. This is the "red" signal.
 
 - [ ] **Step 3.7: Extend `RouterState` and `build_router`**
 
-In `crates/wundler-abs/src/server.rs`:
+In `crates/cloudpack-abs/src/server.rs`:
 
 (a) Update the imports near the top of the file. Replace the existing line:
 
@@ -1062,7 +1062,7 @@ Apply the same change to the other two helpers.
 - [ ] **Step 3.8: Run all crate tests — expect PASS**
 
 ```bash
-cargo test -p wundler-abs
+cargo test -p cloudpack-abs
 ```
 
 Expected: every test passes, including the two new ones from Step 3.5 (`metrics_endpoint_renders_text_exposition`, `chunk_error_endpoint_increments_metric`) and all pre-existing tests.
@@ -1073,13 +1073,13 @@ Expected: every test passes, including the two new ones from Step 3.5 (`metrics_
 cargo check --workspace
 ```
 
-Expected: clean compile. If any other crate calls `wundler_abs::server::build_router` directly, update its arity to include `Arc<Metrics>` between `telemetry` and `security` and re-run.
+Expected: clean compile. If any other crate calls `cloudpack_abs::server::build_router` directly, update its arity to include `Arc<Metrics>` between `telemetry` and `security` and re-run.
 
 - [ ] **Step 3.10: Commit**
 
 ```bash
-git add crates/wundler-abs/src/metrics/prometheus.rs \
-        crates/wundler-abs/src/server.rs
+git add crates/cloudpack-abs/src/metrics/prometheus.rs \
+        crates/cloudpack-abs/src/server.rs
 git commit -m "feat(abs): GET /metrics + POST /telemetry/chunk-error wired through RouterState"
 ```
 
@@ -1088,13 +1088,13 @@ git commit -m "feat(abs): GET /metrics + POST /telemetry/chunk-error wired throu
 ## Task 4 — `TelemetryEventV2` tagged enum + `Metrics::prune` on reload
 
 **Files:**
-- Modify: `crates/wundler-abs/src/types.rs`
-- Modify: `crates/wundler-abs/src/metrics/chunk_error.rs`
-- Modify: `crates/wundler-abs/src/server.rs`
+- Modify: `crates/cloudpack-abs/src/types.rs`
+- Modify: `crates/cloudpack-abs/src/metrics/chunk_error.rs`
+- Modify: `crates/cloudpack-abs/src/server.rs`
 
 - [ ] **Step 4.1: Add the additive `TelemetryEventV2` enum**
 
-Append to `crates/wundler-abs/src/types.rs` (after the existing `TelemetryEvent` struct, after line 96):
+Append to `crates/cloudpack-abs/src/types.rs` (after the existing `TelemetryEvent` struct, after line 96):
 
 ```rust
 // ---------------------------------------------------------------------------
@@ -1139,7 +1139,7 @@ pub struct ChunkErrorEventV2 {
 
 - [ ] **Step 4.2: Write a test that the tagged enum round-trips correctly**
 
-Append to the test module at the bottom of `types.rs` (if one exists; otherwise add it). Insert into `crates/wundler-abs/src/types.rs`:
+Append to the test module at the bottom of `types.rs` (if one exists; otherwise add it). Insert into `crates/cloudpack-abs/src/types.rs`:
 
 ```rust
 #[cfg(test)]
@@ -1189,14 +1189,14 @@ mod v2_tests {
 - [ ] **Step 4.3: Run the new tests — expect PASS**
 
 ```bash
-cargo test -p wundler-abs types::v2_tests
+cargo test -p cloudpack-abs types::v2_tests
 ```
 
 Expected: both tests pass. (`TelemetryLogger::log`'s generic `<T: Serialize>` bound means we did not have to touch the logger at all.)
 
 - [ ] **Step 4.4: Switch `post_chunk_error` to log via `TelemetryEventV2`**
 
-In `crates/wundler-abs/src/metrics/chunk_error.rs`:
+In `crates/cloudpack-abs/src/metrics/chunk_error.rs`:
 
 (a) Add the import near the top:
 
@@ -1285,14 +1285,14 @@ Add to the `mod tests` inside `chunk_error.rs`:
 Run it:
 
 ```bash
-cargo test -p wundler-abs metrics::chunk_error::tests::jsonl_line_has_kind_chunk_error
+cargo test -p cloudpack-abs metrics::chunk_error::tests::jsonl_line_has_kind_chunk_error
 ```
 
 Expected: PASS.
 
 - [ ] **Step 4.6: Wire `Metrics::prune` into `POST /reload`**
 
-In `crates/wundler-abs/src/server.rs`, inside `post_reload` (currently lines 401–478), locate the success block at the very bottom:
+In `crates/cloudpack-abs/src/server.rs`, inside `post_reload` (currently lines 401–478), locate the success block at the very bottom:
 
 ```rust
     (StatusCode::OK, Json(SwapResponseBody {
@@ -1406,17 +1406,17 @@ Append to the `tests` module in `server.rs`:
 - [ ] **Step 4.8: Run the full crate test suite**
 
 ```bash
-cargo test -p wundler-abs
+cargo test -p cloudpack-abs
 ```
 
-Expected: all tests pass (legacy + new). If `reload_prunes_stale_chunk_error_counters` fails because the test fixture's `ChunkManifest` deserialization rejects empty `module_index`, simplify the JSON to match `wundler_graph::ChunkManifest`'s exact shape — check the struct definition in `crates/wundler-graph/src/lib.rs` and adjust.
+Expected: all tests pass (legacy + new). If `reload_prunes_stale_chunk_error_counters` fails because the test fixture's `ChunkManifest` deserialization rejects empty `module_index`, simplify the JSON to match `cloudpack_graph::ChunkManifest`'s exact shape — check the struct definition in `crates/cloudpack-graph/src/lib.rs` and adjust.
 
 - [ ] **Step 4.9: Commit**
 
 ```bash
-git add crates/wundler-abs/src/types.rs \
-        crates/wundler-abs/src/metrics/chunk_error.rs \
-        crates/wundler-abs/src/server.rs
+git add crates/cloudpack-abs/src/types.rs \
+        crates/cloudpack-abs/src/metrics/chunk_error.rs \
+        crates/cloudpack-abs/src/server.rs
 git commit -m "feat(abs): TelemetryEventV2 tagged enum + prune chunk-error counters on /reload"
 ```
 
@@ -1425,7 +1425,7 @@ git commit -m "feat(abs): TelemetryEventV2 tagged enum + prune chunk-error count
 ## Task 5 — Service Worker: `reportChunkError()` + dedup + wire into failure paths
 
 **Files:**
-- Modify: `crates/wundler-abs/assets/sw.js`
+- Modify: `crates/cloudpack-abs/assets/sw.js`
 
 The current SW has three places where a chunk fetch can fail without telling the server:
 
@@ -1438,14 +1438,14 @@ We replace all three with `reportChunkError()` calls plus a per-SW-lifecycle ded
 - [ ] **Step 5.1: Read the current SW file to confirm line offsets**
 
 ```bash
-sed -n '120,150p' crates/wundler-abs/assets/sw.js
+sed -n '120,150p' crates/cloudpack-abs/assets/sw.js
 ```
 
 Expected: shows the required-chunk `Promise.all` block (no try/catch) and the prefetch `void (async () => { try { ... } catch {} })()` block. Note exact line offsets in case they have drifted.
 
 - [ ] **Step 5.2: Add `reportChunkError()` helper and the dedup set**
 
-Edit `crates/wundler-abs/assets/sw.js`. Immediately above the existing `// src/buildid.ts` marker (around line 61), insert:
+Edit `crates/cloudpack-abs/assets/sw.js`. Immediately above the existing `// src/buildid.ts` marker (around line 61), insert:
 
 ```js
   // src/chunkerr.ts
@@ -1483,7 +1483,7 @@ Edit `crates/wundler-abs/assets/sw.js`. Immediately above the existing `// src/b
       url,
       error_type: errorType,
       timestamp_ms: Date.now(),
-      session_id: globalThis.__WUNDLER_SESSION_ID__ ?? "anonymous",
+      session_id: globalThis.__CLOUDPACK_SESSION_ID__ ?? "anonymous",
     };
   }
 ```
@@ -1596,14 +1596,14 @@ with:
 There is no JS test harness in this repo, so we lean on Node's parser:
 
 ```bash
-node --check crates/wundler-abs/assets/sw.js
+node --check crates/cloudpack-abs/assets/sw.js
 ```
 
 Expected: no output (exit 0). Any syntax error would print here.
 
 - [ ] **Step 5.6: Add an inline Rust integration test that proves the SW string contains the new code**
 
-Embed a minimal smoke check so future refactors of `sw.js` can't accidentally drop the chunk-error wiring. Append to the `tests` module in `crates/wundler-abs/src/server.rs`:
+Embed a minimal smoke check so future refactors of `sw.js` can't accidentally drop the chunk-error wiring. Append to the `tests` module in `crates/cloudpack-abs/src/server.rs`:
 
 ```rust
     /// Smoke test: the embedded SW carries the chunk-error wiring.
@@ -1631,7 +1631,7 @@ Embed a minimal smoke check so future refactors of `sw.js` can't accidentally dr
 - [ ] **Step 5.7: Run the new test**
 
 ```bash
-cargo test -p wundler-abs embedded_sw_contains_chunk_error_reporter
+cargo test -p cloudpack-abs embedded_sw_contains_chunk_error_reporter
 ```
 
 Expected: PASS.
@@ -1639,7 +1639,7 @@ Expected: PASS.
 - [ ] **Step 5.8: Run the full crate test suite once more**
 
 ```bash
-cargo test -p wundler-abs
+cargo test -p cloudpack-abs
 ```
 
 Expected: every test passes.
@@ -1647,8 +1647,8 @@ Expected: every test passes.
 - [ ] **Step 5.9: Commit**
 
 ```bash
-git add crates/wundler-abs/assets/sw.js \
-        crates/wundler-abs/src/server.rs
+git add crates/cloudpack-abs/assets/sw.js \
+        crates/cloudpack-abs/src/server.rs
 git commit -m "feat(sw): reportChunkError() with per-lifecycle dedup, wired into required + prefetch fetches"
 ```
 
@@ -1659,9 +1659,9 @@ git commit -m "feat(sw): reportChunkError() with per-lifecycle dedup, wired into
 After all five tasks land:
 
 - [ ] `cargo test --workspace` is fully green.
-- [ ] `cargo clippy -p wundler-abs --all-targets -- -D warnings` reports no new warnings.
-- [ ] `node --check crates/wundler-abs/assets/sw.js` exits 0.
-- [ ] Boot the server locally (`cargo run -p wundler-abs -- ...`), `curl http://localhost:8080/metrics` returns Prometheus text exposition with the three series HELP/TYPE blocks at zero.
+- [ ] `cargo clippy -p cloudpack-abs --all-targets -- -D warnings` reports no new warnings.
+- [ ] `node --check crates/cloudpack-abs/assets/sw.js` exits 0.
+- [ ] Boot the server locally (`cargo run -p cloudpack-abs -- ...`), `curl http://localhost:8080/metrics` returns Prometheus text exposition with the three series HELP/TYPE blocks at zero.
 - [ ] `curl -X POST -H 'content-type: application/json' -d '{"build_id":"b","chunk_id":"c","url":"u","error_type":"load_failed","timestamp_ms":1,"session_id":"s"}' http://localhost:8080/telemetry/chunk-error` returns `200 OK`; re-curling `/metrics` shows the counter at 1.
 
 ---

@@ -1,0 +1,18 @@
+[package]
+name = "cloudpack-transform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cloudpack-core = { path = "../cloudpack-core" }
+cloudpack-graph = { path = "../cloudpack-graph" }
+swc_core = { version = "65", features = ["ecma_parser", "ecma_ast", "ecma_visit", "ecma_codegen", "ecma_transforms", "ecma_transforms_typescript", "ecma_transforms_react", "common"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+rayon = { workspace = true }
+tempfile = "3"
+sha2 = "0.10"
+hex = "0.4"

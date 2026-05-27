@@ -1,0 +1,22 @@
+# cloudpack.toml — five-module-app fixture
+#
+# This is a template; replace {{ROOT}} and {{OUT_DIR}} with absolute paths
+# before using with `cloudpack build`.
+#
+# Three entry points:
+#   "/"           → src/index.ts     (imports util.ts)
+#   "/dashboard"  → src/dashboard.ts (imports util.ts)
+#   "/settings"   → src/settings.ts  (standalone)
+#
+# src/orphan.ts is present but not reachable from any entry point, making it
+# a dead module that DCE should exclude from all output chunks.
+
+[build]
+root     = "{{ROOT}}"
+out_dir  = "{{OUT_DIR}}"
+source_maps = true
+
+[entry]
+"/"           = "src/index.ts"
+"/dashboard"  = "src/dashboard.ts"
+"/settings"   = "src/settings.ts"

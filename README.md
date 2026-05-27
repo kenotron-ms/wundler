@@ -1,4 +1,4 @@
-# wundler
+# cloudpack
 
 A continuously-maintained module graph and build system for large-scale JavaScript applications.
 
@@ -20,36 +20,36 @@ The output is a `ChunkManifest`: a JSON document listing which modules belong in
 
 | Crate | Job |
 |---|---|
-| `wundler-core` | SWC-based module summarizer, 2-tier content-addressed cache, CJS→ESM stub generator |
-| `wundler-graph` | BFS reachability, Tarjan SCC, route-based chunk splitting, ChunkManifest builder |
-| `wundler-transform` | `TransformEngine` trait; `SwcTransformAdapter` (type strip + JSX + dead-export strip); `RolldownAdapter` (subprocess) |
-| `wundler-pipeline` | `BuildPipeline` (summarize → analyze → transform → emit); dev server (Axum, on-demand SWC, SSE live reload) |
-| `wundler-abs` | Adaptive Bundle Service: Axum server returning delta manifests, ed25519 signing, `TelemetryLogger`, bundled Service Worker |
-| `wundler-pgo` | SQLite co-request matrix, JSONL ingestor, C³ clustering, `PgoHints` computation, atomic manifest updater |
-| `wundler-cli` | All CLI subcommands |
+| `cloudpack-core` | SWC-based module summarizer, 2-tier content-addressed cache, CJS→ESM stub generator |
+| `cloudpack-graph` | BFS reachability, Tarjan SCC, route-based chunk splitting, ChunkManifest builder |
+| `cloudpack-transform` | `TransformEngine` trait; `SwcTransformAdapter` (type strip + JSX + dead-export strip); `RolldownAdapter` (subprocess) |
+| `cloudpack-pipeline` | `BuildPipeline` (summarize → analyze → transform → emit); dev server (Axum, on-demand SWC, SSE live reload) |
+| `cloudpack-abs` | Adaptive Bundle Service: Axum server returning delta manifests, ed25519 signing, `TelemetryLogger`, bundled Service Worker |
+| `cloudpack-pgo` | SQLite co-request matrix, JSONL ingestor, C³ clustering, `PgoHints` computation, atomic manifest updater |
+| `cloudpack-cli` | All CLI subcommands |
 
 ## Quick start
 
 ```bash
 # Build
-wundler build --config wundler.toml
+cloudpack build --config cloudpack.toml
 
 # Dev (live reload, on-demand SWC transform)
-wundler dev --port 3000
+cloudpack dev --port 3000
 
 # Sign the manifest for ABS verification
-wundler abs keygen --signing-out signing.pem --verifying-out verifying.pem
-wundler build --config wundler.toml --sign --key signing.pem
+cloudpack abs keygen --signing-out signing.pem --verifying-out verifying.pem
+cloudpack build --config cloudpack.toml --sign --key signing.pem
 
 # Start the Adaptive Bundle Service
-wundler abs serve --config abs.toml
+cloudpack abs serve --config abs.toml
 
 # Ingest browser telemetry and apply PGO hints
-wundler pgo ingest telemetry.jsonl --db pgo.sqlite
-wundler pgo apply --db pgo.sqlite --manifest dist/manifest.json
+cloudpack pgo ingest telemetry.jsonl --db pgo.sqlite
+cloudpack pgo apply --db pgo.sqlite --manifest dist/manifest.json
 ```
 
-## wundler.toml
+## cloudpack.toml
 
 ```toml
 [build]
@@ -67,37 +67,37 @@ commons_threshold = 2    # modules in N+ chunks → commons
 ## CLI reference
 
 ```
-wundler summarize <file>             Emit ModuleSummary as JSON
-wundler analyze <dir>                Emit ChunkManifest as JSON
+cloudpack summarize <file>             Emit ModuleSummary as JSON
+cloudpack analyze <dir>                Emit ChunkManifest as JSON
   --entry route=path
-wundler build                        Summarize + analyze + transform + emit
-  --config wundler.toml
+cloudpack build                        Summarize + analyze + transform + emit
+  --config cloudpack.toml
   --engine rolldown|swc
   --sign --key <pem>                 Sign the manifest with ed25519
-wundler dev                          Dev server (on-demand SWC, live reload)
+cloudpack dev                          Dev server (on-demand SWC, live reload)
   --port 3000
 
-wundler abs keygen                   Generate ed25519 key pair
+cloudpack abs keygen                   Generate ed25519 key pair
   --signing-out signing.pem
   --verifying-out verifying.pem
-wundler abs serve                    Start ABS delta manifest server
+cloudpack abs serve                    Start ABS delta manifest server
   --config abs.toml
 
-wundler pgo ingest <log.jsonl>       Load browser telemetry into SQLite
+cloudpack pgo ingest <log.jsonl>       Load browser telemetry into SQLite
   --db pgo.sqlite
-wundler pgo analyze                  Print C³ merge suggestions (no writes)
-  --db pgo.sqlite
-  --manifest dist/manifest.json
-wundler pgo apply                    Apply PGO hints to manifest (atomic write)
+cloudpack pgo analyze                  Print C³ merge suggestions (no writes)
   --db pgo.sqlite
   --manifest dist/manifest.json
-wundler pgo status                   Show session count, readiness
+cloudpack pgo apply                    Apply PGO hints to manifest (atomic write)
+  --db pgo.sqlite
+  --manifest dist/manifest.json
+cloudpack pgo status                   Show session count, readiness
   --db pgo.sqlite
 ```
 
 ## Why not Vite, esbuild, Rolldown
 
-Those tools rebuild from source on every invocation. Wundler summarizes once per file change, caches content-addressed, and analyzes summaries. Graph analysis is O(changed files), not O(all files). At 50k modules the difference is seconds vs minutes.
+Those tools rebuild from source on every invocation. Cloudpack summarizes once per file change, caches content-addressed, and analyzes summaries. Graph analysis is O(changed files), not O(all files). At 50k modules the difference is seconds vs minutes.
 
 The ABS is the other piece. It serves the minimum fetch set for a specific browser client. Not a static bundle, not the full manifest, but a delta computed from what the client already has in Cache Storage. Service Workers intercept navigations and call the ABS. The static CDN never changes. Only the manifest changes when PGO hints are applied.
 
@@ -109,8 +109,8 @@ The ABS is the other piece. It serves the minimum fetch set for a specific brows
 # Rolldown baseline
 cd test-app && npm run build
 
-# Wundler + rolldown backend
-wundler build --config test-app/wundler-rolldown.toml
+# Cloudpack + rolldown backend
+cloudpack build --config test-app/cloudpack-rolldown.toml
 ```
 
 Both produce a working application in the browser.

@@ -30,7 +30,7 @@ export default function Home() {
           Welcome to Taskflow
         </h1>
         <p style={{ color: '#6b7280', marginBottom: '24px' }}>
-          A demo app validating the Wundler module graph bundler. Today: {formatDate(new Date())}
+          A demo app validating the Cloudpack module graph bundler. Today: {formatDate(new Date())}
         </p>
         <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '10px' }}>
           {features.map((f, i) => (

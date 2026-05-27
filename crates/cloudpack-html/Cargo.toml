@@ -1,0 +1,13 @@
+[package]
+name = "cloudpack-html"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cloudpack-graph = { path = "../cloudpack-graph" }
+hex = "0.4"
+base64 = "0.22"
+
+[dev-dependencies]
+cloudpack-core = { path = "../cloudpack-core" }

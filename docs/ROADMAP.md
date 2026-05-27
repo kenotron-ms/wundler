@@ -1,4 +1,4 @@
-# wundler roadmap
+# cloudpack roadmap
 
 Upcoming work, grouped by category. These are directions, not promises. No dates. Each item is honest about what is missing today and why it matters.
 
@@ -18,7 +18,7 @@ The SW currently trusts the manifest response from the ABS as long as the `build
 
 ### Subresource Integrity
 
-The generated `index.html` should include `integrity="sha256-..."` attributes on every `<script>` tag so the browser refuses to execute tampered chunks. Wundler already has the content hashes; emitting them is a small change.
+The generated `index.html` should include `integrity="sha256-..."` attributes on every `<script>` tag so the browser refuses to execute tampered chunks. Cloudpack already has the content hashes; emitting them is a small change.
 
 ### Content Security Policy
 
@@ -36,7 +36,7 @@ See `docs/superpowers/plans/future/true-hmr.md`. Replace `location.reload()` wit
 
 ### Dependency pre-bundling
 
-Bare specifiers in dev mode are resolved via CDN import maps, which requires a network round-trip per dependency on cold start. Vite pre-bundles `node_modules` into a single ESM file on first start. Wundler should do the same: on the first `wundler dev` after a `package.json` change, scan all bare specifiers across the module graph, invoke rolldown to pre-bundle them into `node_modules/.wundler/`, and rewrite the import map to point at the pre-bundled file. Cache keyed on `package.json` hash.
+Bare specifiers in dev mode are resolved via CDN import maps, which requires a network round-trip per dependency on cold start. Vite pre-bundles `node_modules` into a single ESM file on first start. Cloudpack should do the same: on the first `cloudpack dev` after a `package.json` change, scan all bare specifiers across the module graph, invoke rolldown to pre-bundle them into `node_modules/.cloudpack/`, and rewrite the import map to point at the pre-bundled file. Cache keyed on `package.json` hash.
 
 ### Compressed manifests
 
@@ -52,7 +52,7 @@ The graph analyzer currently re-runs reachability and SCC over the entire summar
 
 ### ABS manifest hot reload
 
-The ABS loads `manifest.json` once at startup and holds the parsed structure in memory. When `wundler pgo apply` writes a new manifest, the ABS does not pick up the change until restart. Adding inotify (Linux) and FSEvents (macOS) watchers to reload the manifest atomically on file change would eliminate the restart and let PGO updates take effect without downtime.
+The ABS loads `manifest.json` once at startup and holds the parsed structure in memory. When `cloudpack pgo apply` writes a new manifest, the ABS does not pick up the change until restart. Adding inotify (Linux) and FSEvents (macOS) watchers to reload the manifest atomically on file change would eliminate the restart and let PGO updates take effect without downtime.
 
 ## Telemetry and observability
 
@@ -74,22 +74,22 @@ If a chunk fails to evaluate — syntax error, network error, integrity mismatch
 
 The ABS should expose `/metrics` in Prometheus format. Useful counters and histograms:
 
-- `wundler_manifest_requests_total{entry_point, status}`
-- `wundler_chunks_served_total{chunk_id}`
-- `wundler_cache_hit_rate{entry_point}`
-- `wundler_delta_size_bytes` (histogram of bytes returned per response)
+- `cloudpack_manifest_requests_total{entry_point, status}`
+- `cloudpack_chunks_served_total{chunk_id}`
+- `cloudpack_cache_hit_rate{entry_point}`
+- `cloudpack_delta_size_bytes` (histogram of bytes returned per response)
 
 OpenTelemetry export would let users push these into existing observability stacks without scraping.
 
 ### Build size tracking
 
-`wundler build` should emit `build-stats.json` alongside the manifest, containing per-chunk sizes (raw and gzipped), total bundle size, and a diff against the previous build's stats file. CI can fail the build when total size grows by more than a configured threshold.
+`cloudpack build` should emit `build-stats.json` alongside the manifest, containing per-chunk sizes (raw and gzipped), total bundle size, and a diff against the previous build's stats file. CI can fail the build when total size grows by more than a configured threshold.
 
 ## Production readiness
 
 ### ABS high availability
 
-Today a single ABS instance is the deployment model. In production, you want multiple ABS replicas behind a load balancer. The manifest is loaded from disk, so as long as every replica points at the same `manifest_path` — NFS, shared volume, or object storage with a sidecar that syncs to local disk — they serve consistent deltas. Telemetry needs more thought: a single JSONL file does not work across replicas. The log should fan out to a centralized sink (Kafka, Kinesis, S3) and `wundler pgo ingest` should consume from there.
+Today a single ABS instance is the deployment model. In production, you want multiple ABS replicas behind a load balancer. The manifest is loaded from disk, so as long as every replica points at the same `manifest_path` — NFS, shared volume, or object storage with a sidecar that syncs to local disk — they serve consistent deltas. Telemetry needs more thought: a single JSONL file does not work across replicas. The log should fan out to a centralized sink (Kafka, Kinesis, S3) and `cloudpack pgo ingest` should consume from there.
 
 ### Manifest versioning and rollback
 
@@ -118,15 +118,15 @@ The generated `index.html` requires a working Service Worker. In private browsin
 
 ### Bundle analysis viewer
 
-`wundler build --analyze` should open a treemap visualization showing module sizes, chunk membership, dead code, and suggested merges. Comparable to `rollup-plugin-visualizer` and webpack-bundle-analyzer. The data is already in the `ChunkManifest`; this is a UI task.
+`cloudpack build --analyze` should open a treemap visualization showing module sizes, chunk membership, dead code, and suggested merges. Comparable to `rollup-plugin-visualizer` and webpack-bundle-analyzer. The data is already in the `ChunkManifest`; this is a UI task.
 
 ### VS Code extension
 
-Surface wundler diagnostics inline. Greyed-out unused exports, strikethrough unreachable modules, status-bar chunk membership for the active file. The `wundler analyze` JSON output is enough to drive the extension.
+Surface cloudpack diagnostics inline. Greyed-out unused exports, strikethrough unreachable modules, status-bar chunk membership for the active file. The `cloudpack analyze` JSON output is enough to drive the extension.
 
 ### CI size budget enforcement
 
-A `[budget]` section in `wundler.toml`:
+A `[budget]` section in `cloudpack.toml`:
 
 ```toml
 [budget]
@@ -139,4 +139,4 @@ The build pipeline knows every chunk's compressed size; enforcing budgets is a c
 
 ### Rspack adapter
 
-Add `RspackAdapter` alongside `RolldownAdapter` as a third `TransformEngine`. The `ChunkManifest` from wundler's graph analysis can drive rspack's `optimization.splitChunks` config. Useful for teams already invested in the rspack and webpack plugin ecosystem who want wundler's incremental summarization and PGO without abandoning their loader stack.
+Add `RspackAdapter` alongside `RolldownAdapter` as a third `TransformEngine`. The `ChunkManifest` from cloudpack's graph analysis can drive rspack's `optimization.splitChunks` config. Useful for teams already invested in the rspack and webpack plugin ecosystem who want cloudpack's incremental summarization and PGO without abandoning their loader stack.

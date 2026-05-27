@@ -6,24 +6,24 @@
 
 **Architecture:** A new `build_stats` module owns the on-disk schema (`BuildStatsArtifact`, sub-blocks, and a `from_build()` constructor). A new `budget` module owns opt-in size enforcement (`BudgetConfig`, `check()`, `BudgetViolation` with actionable messages). `BuildPipeline::build()` is instrumented with `Instant`-based per-phase timing, reads any previous `build-stats.json` for delta computation, constructs the artifact, atomically writes it to disk, then runs an opt-in budget check (non-fatal warning in this plan — CLI exit-1 wiring is a deferred follow-up).
 
-**Tech Stack:** Rust 2021, `serde` + `serde_json`, `chrono` (UTC timestamps), `anyhow`, `tempfile` (dev-deps), `wundler-graph::types::ChunkManifest` + `LoadCondition`.
+**Tech Stack:** Rust 2021, `serde` + `serde_json`, `chrono` (UTC timestamps), `anyhow`, `tempfile` (dev-deps), `cloudpack-graph::types::ChunkManifest` + `LoadCondition`.
 
 ---
 
 ## File Structure
 
 **Create:**
-- `crates/wundler-pipeline/src/build_stats.rs` — schema types + constructor
-- `crates/wundler-pipeline/src/budget.rs` — budget config + checker
-- `crates/wundler-pipeline/tests/build_stats_test.rs` — integration tests for artifact
-- `crates/wundler-pipeline/tests/budget_test.rs` — integration tests for budget
+- `crates/cloudpack-pipeline/src/build_stats.rs` — schema types + constructor
+- `crates/cloudpack-pipeline/src/budget.rs` — budget config + checker
+- `crates/cloudpack-pipeline/tests/build_stats_test.rs` — integration tests for artifact
+- `crates/cloudpack-pipeline/tests/budget_test.rs` — integration tests for budget
 
 **Modify:**
-- `crates/wundler-pipeline/Cargo.toml` — add `chrono` dependency
-- `crates/wundler-pipeline/src/lib.rs` — export new modules
-- `crates/wundler-pipeline/src/config.rs` — add `budget: Option<BudgetConfig>` field
-- `crates/wundler-pipeline/src/output.rs` — add atomic `write_build_stats` + `read_previous_stats`
-- `crates/wundler-pipeline/src/pipeline.rs` — replace old `BuildStats`/stats-write logic with `BuildStatsArtifact` + `BuildTiming` instrumentation + budget call
+- `crates/cloudpack-pipeline/Cargo.toml` — add `chrono` dependency
+- `crates/cloudpack-pipeline/src/lib.rs` — export new modules
+- `crates/cloudpack-pipeline/src/config.rs` — add `budget: Option<BudgetConfig>` field
+- `crates/cloudpack-pipeline/src/output.rs` — add atomic `write_build_stats` + `read_previous_stats`
+- `crates/cloudpack-pipeline/src/pipeline.rs` — replace old `BuildStats`/stats-write logic with `BuildStatsArtifact` + `BuildTiming` instrumentation + budget call
 
 **Delete (logically):** the old `pub struct BuildStats` and its inline write in `pipeline.rs` (replaced by `BuildStatsArtifact`). The struct is removed entirely — there are no external consumers of the old type besides the re-export in `lib.rs`.
 
@@ -32,13 +32,13 @@
 ## Task 1: Add `chrono` and scaffold `build_stats.rs` with all types
 
 **Files:**
-- Modify: `crates/wundler-pipeline/Cargo.toml`
-- Create: `crates/wundler-pipeline/src/build_stats.rs`
-- Modify: `crates/wundler-pipeline/src/lib.rs`
+- Modify: `crates/cloudpack-pipeline/Cargo.toml`
+- Create: `crates/cloudpack-pipeline/src/build_stats.rs`
+- Modify: `crates/cloudpack-pipeline/src/lib.rs`
 
 - [ ] **Step 1: Add `chrono` to `Cargo.toml` dependencies**
 
-Open `crates/wundler-pipeline/Cargo.toml` and add to the `[dependencies]` section (anywhere among other deps):
+Open `crates/cloudpack-pipeline/Cargo.toml` and add to the `[dependencies]` section (anywhere among other deps):
 
 ```toml
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
@@ -46,12 +46,12 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 
 - [ ] **Step 2: Verify the crate still builds with the new dep**
 
-Run: `~/.cargo/bin/cargo build -p wundler-pipeline`
+Run: `~/.cargo/bin/cargo build -p cloudpack-pipeline`
 Expected: builds cleanly (chrono compiles, no other changes yet).
 
 - [ ] **Step 3: Create `build_stats.rs` with the full schema (no constructor body yet)**
 
-Create `crates/wundler-pipeline/src/build_stats.rs`:
+Create `crates/cloudpack-pipeline/src/build_stats.rs`:
 
 ```rust
 //! On-disk schema for `build-stats.json` (schema_version = "1").
@@ -93,8 +93,8 @@ pub struct BuildStatsArtifact {
     pub schema_version: &'static str,
     /// Content-based build identifier (mirrors `BuildOutput.manifest.build_id`).
     pub build_id: String,
-    /// `env!("CARGO_PKG_VERSION")` of the `wundler-pipeline` crate.
-    pub wundler_version: String,
+    /// `env!("CARGO_PKG_VERSION")` of the `cloudpack-pipeline` crate.
+    pub cloudpack_version: String,
     /// ISO-8601 UTC timestamp when the artifact was generated.
     pub generated_at: String,
 
@@ -175,7 +175,7 @@ pub struct EntryPointRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BudgetResult {
-    /// `true` if a `[budget]` section was present in `wundler.toml`.
+    /// `true` if a `[budget]` section was present in `cloudpack.toml`.
     pub configured: bool,
     pub checks: Vec<BudgetCheck>,
     pub result: BudgetStatus,
@@ -231,10 +231,10 @@ pub struct SizeDelta {
 
 - [ ] **Step 4: Register module + re-exports in `lib.rs`**
 
-The current `crates/wundler-pipeline/src/lib.rs` is:
+The current `crates/cloudpack-pipeline/src/lib.rs` is:
 
 ```rust
-//! Wundler Build Pipeline — orchestrates summarize → analyze → transform → emit.
+//! Cloudpack Build Pipeline — orchestrates summarize → analyze → transform → emit.
 
 pub mod build_id;
 pub mod config;
@@ -247,14 +247,14 @@ pub use dev_server::DevServer;
 pub use pipeline::{BuildOutput, BuildPipeline, BuildStats};
 
 pub fn hello() -> &'static str {
-    "wundler-pipeline"
+    "cloudpack-pipeline"
 }
 ```
 
 Replace it with:
 
 ```rust
-//! Wundler Build Pipeline — orchestrates summarize → analyze → transform → emit.
+//! Cloudpack Build Pipeline — orchestrates summarize → analyze → transform → emit.
 
 pub mod build_id;
 pub mod build_stats;
@@ -275,7 +275,7 @@ pub use dev_server::DevServer;
 pub use pipeline::{BuildOutput, BuildPipeline};
 
 pub fn hello() -> &'static str {
-    "wundler-pipeline"
+    "cloudpack-pipeline"
 }
 ```
 
@@ -289,7 +289,7 @@ Note: `BuildStats` is no longer exported (removed in Task 4). `budget` module is
 And drop `pub mod budget;` until Task 5. Also keep `pub use pipeline::{BuildOutput, BuildPipeline, BuildStats};` until Task 4 actually removes `BuildStats`. So the **transitional** lib.rs for end of Task 1 is:
 
 ```rust
-//! Wundler Build Pipeline — orchestrates summarize → analyze → transform → emit.
+//! Cloudpack Build Pipeline — orchestrates summarize → analyze → transform → emit.
 
 pub mod build_id;
 pub mod build_stats;
@@ -308,26 +308,26 @@ pub use dev_server::DevServer;
 pub use pipeline::{BuildOutput, BuildPipeline, BuildStats};
 
 pub fn hello() -> &'static str {
-    "wundler-pipeline"
+    "cloudpack-pipeline"
 }
 ```
 
 - [ ] **Step 5: Verify the crate builds**
 
-Run: `~/.cargo/bin/cargo build -p wundler-pipeline`
+Run: `~/.cargo/bin/cargo build -p cloudpack-pipeline`
 Expected: builds cleanly. No tests yet for the new types — they are pure data shapes.
 
 - [ ] **Step 6: Verify clippy is clean**
 
-Run: `~/.cargo/bin/cargo clippy -p wundler-pipeline -- -D warnings`
+Run: `~/.cargo/bin/cargo clippy -p cloudpack-pipeline -- -D warnings`
 Expected: no warnings.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add crates/wundler-pipeline/Cargo.toml \
-        crates/wundler-pipeline/src/build_stats.rs \
-        crates/wundler-pipeline/src/lib.rs
+git add crates/cloudpack-pipeline/Cargo.toml \
+        crates/cloudpack-pipeline/src/build_stats.rs \
+        crates/cloudpack-pipeline/src/lib.rs
 git commit -m "feat(pipeline): scaffold BuildStatsArtifact schema (schema_version=1)"
 ```
 
@@ -336,12 +336,12 @@ git commit -m "feat(pipeline): scaffold BuildStatsArtifact schema (schema_versio
 ## Task 2: `BuildStatsArtifact::from_build()` constructor + unit tests
 
 **Files:**
-- Modify: `crates/wundler-pipeline/src/build_stats.rs` (add constructor + unit tests)
+- Modify: `crates/cloudpack-pipeline/src/build_stats.rs` (add constructor + unit tests)
 - (No external test file yet — these are in-module unit tests against simple inputs.)
 
 - [ ] **Step 1: Write failing unit tests for `from_build` (no previous build)**
 
-Append the following test module at the bottom of `crates/wundler-pipeline/src/build_stats.rs`:
+Append the following test module at the bottom of `crates/cloudpack-pipeline/src/build_stats.rs`:
 
 ```rust
 #[cfg(test)]
@@ -351,8 +351,8 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
-    use wundler_core::types::{ContentHash, ModuleKind};
-    use wundler_graph::types::{Chunk, ChunkManifest, LoadCondition};
+    use cloudpack_core::types::{ContentHash, ModuleKind};
+    use cloudpack_graph::types::{Chunk, ChunkManifest, LoadCondition};
 
     use crate::pipeline::{BuildOutput, BuildStats};
 
@@ -436,7 +436,7 @@ mod tests {
 
         assert_eq!(artifact.schema_version, "1");
         assert_eq!(artifact.build_id, "deadbeefdeadbeef");
-        assert!(!artifact.wundler_version.is_empty());
+        assert!(!artifact.cloudpack_version.is_empty());
         assert!(!artifact.generated_at.is_empty());
 
         // Summary
@@ -517,12 +517,12 @@ mod tests {
 
 - [ ] **Step 2: Run the test and verify failure (`from_build` not yet defined)**
 
-Run: `~/.cargo/bin/cargo test -p wundler-pipeline --lib build_stats::tests`
+Run: `~/.cargo/bin/cargo test -p cloudpack-pipeline --lib build_stats::tests`
 Expected: FAIL with `error[E0599]: no function or associated item named 'from_build' found`.
 
 - [ ] **Step 3: Implement `from_build` (and a helper for `ChunkRole`)**
 
-Insert this `impl` block in `crates/wundler-pipeline/src/build_stats.rs`, immediately after the type definitions (before the `#[cfg(test)]` module):
+Insert this `impl` block in `crates/cloudpack-pipeline/src/build_stats.rs`, immediately after the type definitions (before the `#[cfg(test)]` module):
 
 ```rust
 // ---------------------------------------------------------------------------
@@ -532,7 +532,7 @@ Insert this `impl` block in `crates/wundler-pipeline/src/build_stats.rs`, immedi
 use std::fs;
 use std::path::Path;
 
-use wundler_graph::types::LoadCondition;
+use cloudpack_graph::types::LoadCondition;
 
 use crate::pipeline::BuildOutput;
 
@@ -587,7 +587,7 @@ impl BuildStatsArtifact {
         Self {
             schema_version: "1",
             build_id: out.manifest.build_id.clone(),
-            wundler_version: env!("CARGO_PKG_VERSION").to_string(),
+            cloudpack_version: env!("CARGO_PKG_VERSION").to_string(),
             generated_at: chrono::Utc::now().to_rfc3339(),
             summary,
             timing: timing_block,
@@ -605,7 +605,7 @@ impl BuildStatsArtifact {
 
 /// Build one [`ChunkRecord`] per file in `out.chunk_files`.
 ///
-/// For each file we resolve the matching [`wundler_graph::types::Chunk`] from
+/// For each file we resolve the matching [`cloudpack_graph::types::Chunk`] from
 /// the manifest by hash. Files whose hash does not match any manifest chunk
 /// are skipped (defensive — this should not happen in practice).
 fn build_chunk_records(out: &BuildOutput) -> Vec<ChunkRecord> {
@@ -752,24 +752,24 @@ fn compute_previous_build_info(
 
 The fixture uses `..Default::default()` on `ChunkManifest`. Verify the type implements `Default`:
 
-Run: `~/.cargo/bin/cargo build -p wundler-pipeline --tests 2>&1 | head -60`
+Run: `~/.cargo/bin/cargo build -p cloudpack-pipeline --tests 2>&1 | head -60`
 
-If you see `the trait 'Default' is not implemented for 'ChunkManifest'`, change the fixture to construct the manifest explicitly without the spread (the fields we set — `chunks`, `entry_chunks`, `build_id` — are the only ones used by `from_build`, so if other fields exist you must provide them too). Read `crates/wundler-graph/src/types.rs` (`grep -n "pub struct ChunkManifest" crates/wundler-graph/src/types.rs`) and adjust the fixture to set every required field with zero/empty values. Expected: build succeeds.
+If you see `the trait 'Default' is not implemented for 'ChunkManifest'`, change the fixture to construct the manifest explicitly without the spread (the fields we set — `chunks`, `entry_chunks`, `build_id` — are the only ones used by `from_build`, so if other fields exist you must provide them too). Read `crates/cloudpack-graph/src/types.rs` (`grep -n "pub struct ChunkManifest" crates/cloudpack-graph/src/types.rs`) and adjust the fixture to set every required field with zero/empty values. Expected: build succeeds.
 
 - [ ] **Step 5: Run the new tests and verify they pass**
 
-Run: `~/.cargo/bin/cargo test -p wundler-pipeline --lib build_stats::tests`
+Run: `~/.cargo/bin/cargo test -p cloudpack-pipeline --lib build_stats::tests`
 Expected: 4 tests pass.
 
 - [ ] **Step 6: Verify clippy is clean**
 
-Run: `~/.cargo/bin/cargo clippy -p wundler-pipeline --all-targets -- -D warnings`
+Run: `~/.cargo/bin/cargo clippy -p cloudpack-pipeline --all-targets -- -D warnings`
 Expected: no warnings.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add crates/wundler-pipeline/src/build_stats.rs
+git add crates/cloudpack-pipeline/src/build_stats.rs
 git commit -m "feat(pipeline): BuildStatsArtifact::from_build constructor + tests"
 ```
 
@@ -778,12 +778,12 @@ git commit -m "feat(pipeline): BuildStatsArtifact::from_build constructor + test
 ## Task 3: Atomic `write_build_stats`, `read_previous_stats`, and `BuildTiming` plumbing readiness
 
 **Files:**
-- Modify: `crates/wundler-pipeline/src/output.rs` (add `write_build_stats` + `read_previous_stats`)
-- Create: `crates/wundler-pipeline/tests/build_stats_io_test.rs`
+- Modify: `crates/cloudpack-pipeline/src/output.rs` (add `write_build_stats` + `read_previous_stats`)
+- Create: `crates/cloudpack-pipeline/tests/build_stats_io_test.rs`
 
 - [ ] **Step 1: Write a failing test for atomic `write_build_stats` + `read_previous_stats` round-trip**
 
-Create `crates/wundler-pipeline/tests/build_stats_io_test.rs`:
+Create `crates/cloudpack-pipeline/tests/build_stats_io_test.rs`:
 
 ```rust
 //! Integration tests for `output::write_build_stats` (atomic) and
@@ -791,10 +791,10 @@ Create `crates/wundler-pipeline/tests/build_stats_io_test.rs`:
 
 use std::collections::HashMap;
 
-use wundler_pipeline::build_stats::{
+use cloudpack_pipeline::build_stats::{
     BuildStatsArtifact, ChunkRecord, ChunkRole, EntryPointRecord, SummaryBlock, TimingBlock,
 };
-use wundler_pipeline::output;
+use cloudpack_pipeline::output;
 
 fn sample_artifact(build_id: &str) -> BuildStatsArtifact {
     let mut entry_points = HashMap::new();
@@ -810,7 +810,7 @@ fn sample_artifact(build_id: &str) -> BuildStatsArtifact {
     BuildStatsArtifact {
         schema_version: "1",
         build_id: build_id.to_string(),
-        wundler_version: "0.0.0-test".to_string(),
+        cloudpack_version: "0.0.0-test".to_string(),
         generated_at: "2026-05-16T00:00:00+00:00".to_string(),
         summary: SummaryBlock {
             total_modules: 1,
@@ -901,12 +901,12 @@ fn read_previous_stats_returns_none_for_corrupt_file() {
 
 - [ ] **Step 2: Run the test and verify failure**
 
-Run: `~/.cargo/bin/cargo test -p wundler-pipeline --test build_stats_io_test`
+Run: `~/.cargo/bin/cargo test -p cloudpack-pipeline --test build_stats_io_test`
 Expected: FAIL with `no function or associated item named 'write_build_stats' / 'read_previous_stats'`.
 
 - [ ] **Step 3: Add `write_build_stats` and `read_previous_stats` to `output.rs`**
 
-At the bottom of `crates/wundler-pipeline/src/output.rs`, append:
+At the bottom of `crates/cloudpack-pipeline/src/output.rs`, append:
 
 ```rust
 // ---------------------------------------------------------------------------
@@ -918,7 +918,7 @@ use crate::build_stats::BuildStatsArtifact;
 /// Atomically write the build-stats artifact to `<out_dir>/build-stats.json`.
 ///
 /// Strategy: write JSON to `<out_dir>/build-stats.json.tmp`, then `rename` it
-/// into place. The rename is atomic on every platform supported by Wundler
+/// into place. The rename is atomic on every platform supported by Cloudpack
 /// (POSIX guarantees this; on Windows NTFS the rename is also atomic when the
 /// destination is on the same volume).
 pub fn write_build_stats(out_dir: &Path, stats: &BuildStatsArtifact) -> Result<()> {
@@ -947,19 +947,19 @@ pub fn read_previous_stats(out_dir: &Path) -> Option<BuildStatsArtifact> {
 
 - [ ] **Step 4: Run the test and verify it passes**
 
-Run: `~/.cargo/bin/cargo test -p wundler-pipeline --test build_stats_io_test`
+Run: `~/.cargo/bin/cargo test -p cloudpack-pipeline --test build_stats_io_test`
 Expected: all 5 tests pass.
 
 - [ ] **Step 5: Verify clippy is clean**
 
-Run: `~/.cargo/bin/cargo clippy -p wundler-pipeline --all-targets -- -D warnings`
+Run: `~/.cargo/bin/cargo clippy -p cloudpack-pipeline --all-targets -- -D warnings`
 Expected: no warnings.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/wundler-pipeline/src/output.rs \
-        crates/wundler-pipeline/tests/build_stats_io_test.rs
+git add crates/cloudpack-pipeline/src/output.rs \
+        crates/cloudpack-pipeline/tests/build_stats_io_test.rs
 git commit -m "feat(pipeline): atomic write_build_stats + read_previous_stats"
 ```
 
@@ -968,16 +968,16 @@ git commit -m "feat(pipeline): atomic write_build_stats + read_previous_stats"
 ## Task 4: Wire `BuildStatsArtifact` into `BuildPipeline::build()`; instrument per-phase timing; remove old `BuildStats`
 
 **Files:**
-- Modify: `crates/wundler-pipeline/src/pipeline.rs`
-- Modify: `crates/wundler-pipeline/src/lib.rs` (drop `BuildStats` re-export)
-- Modify: `crates/wundler-pipeline/src/build_stats.rs` (fixture inside test module no longer relies on the old `BuildStats` field — replace with a small inline struct)
-- Create: `crates/wundler-pipeline/tests/build_pipeline_stats_test.rs`
+- Modify: `crates/cloudpack-pipeline/src/pipeline.rs`
+- Modify: `crates/cloudpack-pipeline/src/lib.rs` (drop `BuildStats` re-export)
+- Modify: `crates/cloudpack-pipeline/src/build_stats.rs` (fixture inside test module no longer relies on the old `BuildStats` field — replace with a small inline struct)
+- Create: `crates/cloudpack-pipeline/tests/build_pipeline_stats_test.rs`
 
 This task is the biggest single change in the plan. The full updated `pipeline.rs` is given in Step 3.
 
 - [ ] **Step 1: Write an integration test that runs `BuildPipeline::build()` and asserts the artifact on disk**
 
-Create `crates/wundler-pipeline/tests/build_pipeline_stats_test.rs`:
+Create `crates/cloudpack-pipeline/tests/build_pipeline_stats_test.rs`:
 
 ```rust
 //! End-to-end test: run BuildPipeline::build() and verify build-stats.json
@@ -987,9 +987,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-use wundler_pipeline::build_stats::BuildStatsArtifact;
-use wundler_pipeline::config::{BuildConfig, EngineChoice};
-use wundler_pipeline::pipeline::BuildPipeline;
+use cloudpack_pipeline::build_stats::BuildStatsArtifact;
+use cloudpack_pipeline::config::{BuildConfig, EngineChoice};
+use cloudpack_pipeline::pipeline::BuildPipeline;
 
 /// Build a trivial single-entry project rooted at `tmp/src` and bundle it.
 fn run_build(tmp: &std::path::Path) -> BuildStatsArtifact {
@@ -1031,7 +1031,7 @@ fn build_writes_extended_stats_with_schema_version_1() {
 
     assert_eq!(a.schema_version, "1");
     assert!(!a.build_id.is_empty());
-    assert!(!a.wundler_version.is_empty());
+    assert!(!a.cloudpack_version.is_empty());
     assert!(!a.generated_at.is_empty());
 }
 
@@ -1094,12 +1094,12 @@ fn build_stats_timing_is_populated() {
 
 - [ ] **Step 2: Run the test and verify failure**
 
-Run: `~/.cargo/bin/cargo test -p wundler-pipeline --test build_pipeline_stats_test`
+Run: `~/.cargo/bin/cargo test -p cloudpack-pipeline --test build_pipeline_stats_test`
 Expected: FAIL — `BuildConfig` has no `budget` field, and the test imports types that aren't yet wired in.
 
 - [ ] **Step 3: Update `pipeline.rs` end-to-end**
 
-Replace the **entire** contents of `crates/wundler-pipeline/src/pipeline.rs` with:
+Replace the **entire** contents of `crates/cloudpack-pipeline/src/pipeline.rs` with:
 
 ```rust
 //! `BuildPipeline` — orchestrates the full build from summarize → analyze → transform → emit.
@@ -1111,14 +1111,14 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 
-use wundler_core::cache::local::LocalCache;
-use wundler_core::summarizer::summarize_directory;
-use wundler_core::types::{BundleGraphNode, ContentHash};
-use wundler_graph::analyzer::{AnalysisResult, GraphAnalyzer};
-use wundler_graph::types::ChunkManifest;
-use wundler_transform::engine::{BatchConfig, ChunkOutput, TransformEngine};
-use wundler_transform::rolldown_adapter::{RolldownAdapter, RolldownAdapterConfig};
-use wundler_transform::swc_adapter::{SwcAdapterConfig, SwcTransformAdapter};
+use cloudpack_core::cache::local::LocalCache;
+use cloudpack_core::summarizer::summarize_directory;
+use cloudpack_core::types::{BundleGraphNode, ContentHash};
+use cloudpack_graph::analyzer::{AnalysisResult, GraphAnalyzer};
+use cloudpack_graph::types::ChunkManifest;
+use cloudpack_transform::engine::{BatchConfig, ChunkOutput, TransformEngine};
+use cloudpack_transform::rolldown_adapter::{RolldownAdapter, RolldownAdapterConfig};
+use cloudpack_transform::swc_adapter::{SwcAdapterConfig, SwcTransformAdapter};
 
 use crate::build_id;
 use crate::build_stats::{BuildStatsArtifact, BuildTiming};
@@ -1150,7 +1150,7 @@ pub struct BuildOutput {
     pub stats: BuildStats,
 }
 
-/// Orchestrates the Wundler build pipeline: summarize → analyze → transform → emit.
+/// Orchestrates the Cloudpack build pipeline: summarize → analyze → transform → emit.
 pub struct BuildPipeline {
     pub config: BuildConfig,
     pub engine: Arc<dyn TransformEngine>,
@@ -1336,10 +1336,10 @@ impl BuildPipeline {
 
 - [ ] **Step 4: Update `lib.rs` re-exports**
 
-Replace `crates/wundler-pipeline/src/lib.rs` with:
+Replace `crates/cloudpack-pipeline/src/lib.rs` with:
 
 ```rust
-//! Wundler Build Pipeline — orchestrates summarize → analyze → transform → emit.
+//! Cloudpack Build Pipeline — orchestrates summarize → analyze → transform → emit.
 
 pub mod build_id;
 pub mod build_stats;
@@ -1358,7 +1358,7 @@ pub use dev_server::DevServer;
 pub use pipeline::{BuildOutput, BuildPipeline};
 
 pub fn hello() -> &'static str {
-    "wundler-pipeline"
+    "cloudpack-pipeline"
 }
 ```
 
@@ -1366,7 +1366,7 @@ pub fn hello() -> &'static str {
 
 - [ ] **Step 5: Add the `budget` field to `BuildConfig` (with default `None`)**
 
-Open `crates/wundler-pipeline/src/config.rs`. The current `BuildConfig` is:
+Open `crates/cloudpack-pipeline/src/config.rs`. The current `BuildConfig` is:
 
 ```rust
 #[derive(Debug, Clone)]
@@ -1392,18 +1392,18 @@ pub struct BuildConfig {
     pub engine: EngineChoice,
     pub entry_points: HashMap<String, PathBuf>,
     /// Optional budget enforcement; `None` means "no budget configured".
-    /// Wired up in Task 5 to `[budget]` in `wundler.toml`.
+    /// Wired up in Task 5 to `[budget]` in `cloudpack.toml`.
     pub budget: Option<crate::budget::BudgetConfig>,
 }
 ```
 
-This forces creating `budget.rs` now as a tiny stub (Task 5 fills it out). At the bottom of `crates/wundler-pipeline/src/lib.rs`, add:
+This forces creating `budget.rs` now as a tiny stub (Task 5 fills it out). At the bottom of `crates/cloudpack-pipeline/src/lib.rs`, add:
 
 ```rust
 pub mod budget;
 ```
 
-And create `crates/wundler-pipeline/src/budget.rs` as a **stub**:
+And create `crates/cloudpack-pipeline/src/budget.rs` as a **stub**:
 
 ```rust
 //! Budget enforcement — full implementation arrives in Task 5.
@@ -1451,28 +1451,28 @@ Change to:
 
 - [ ] **Step 7: Verify the crate compiles**
 
-Run: `~/.cargo/bin/cargo build -p wundler-pipeline --all-targets`
+Run: `~/.cargo/bin/cargo build -p cloudpack-pipeline --all-targets`
 Expected: builds. Fix any field-type mismatches the compiler reports (most likely `largest_chunk_bytes` in the in-module fixture).
 
 - [ ] **Step 8: Run all pipeline tests**
 
-Run: `~/.cargo/bin/cargo test -p wundler-pipeline`
+Run: `~/.cargo/bin/cargo test -p cloudpack-pipeline`
 Expected: all tests pass (Task 2's in-module tests + Task 3's IO tests + Task 4's pipeline test).
 
 - [ ] **Step 9: Verify clippy is clean**
 
-Run: `~/.cargo/bin/cargo clippy -p wundler-pipeline --all-targets -- -D warnings`
+Run: `~/.cargo/bin/cargo clippy -p cloudpack-pipeline --all-targets -- -D warnings`
 Expected: no warnings.
 
 - [ ] **Step 10: Commit**
 
 ```bash
-git add crates/wundler-pipeline/src/pipeline.rs \
-        crates/wundler-pipeline/src/lib.rs \
-        crates/wundler-pipeline/src/config.rs \
-        crates/wundler-pipeline/src/budget.rs \
-        crates/wundler-pipeline/src/build_stats.rs \
-        crates/wundler-pipeline/tests/build_pipeline_stats_test.rs
+git add crates/cloudpack-pipeline/src/pipeline.rs \
+        crates/cloudpack-pipeline/src/lib.rs \
+        crates/cloudpack-pipeline/src/config.rs \
+        crates/cloudpack-pipeline/src/budget.rs \
+        crates/cloudpack-pipeline/src/build_stats.rs \
+        crates/cloudpack-pipeline/tests/build_pipeline_stats_test.rs
 git commit -m "feat(pipeline): wire BuildStatsArtifact + per-phase timing into build()"
 ```
 
@@ -1481,22 +1481,22 @@ git commit -m "feat(pipeline): wire BuildStatsArtifact + per-phase timing into b
 ## Task 5: Full `budget.rs` — `check()`, `BudgetViolation`, TOML wiring, non-fatal pipeline call
 
 **Files:**
-- Modify: `crates/wundler-pipeline/src/budget.rs` (replace stub with full impl)
-- Modify: `crates/wundler-pipeline/src/config.rs` (parse `[budget]` from TOML)
-- Modify: `crates/wundler-pipeline/src/pipeline.rs` (run budget check, populate `artifact.budget`)
-- Create: `crates/wundler-pipeline/tests/budget_test.rs`
+- Modify: `crates/cloudpack-pipeline/src/budget.rs` (replace stub with full impl)
+- Modify: `crates/cloudpack-pipeline/src/config.rs` (parse `[budget]` from TOML)
+- Modify: `crates/cloudpack-pipeline/src/pipeline.rs` (run budget check, populate `artifact.budget`)
+- Create: `crates/cloudpack-pipeline/tests/budget_test.rs`
 
 - [ ] **Step 1: Write failing tests for `budget::check`**
 
-Create `crates/wundler-pipeline/tests/budget_test.rs`:
+Create `crates/cloudpack-pipeline/tests/budget_test.rs`:
 
 ```rust
 //! Tests for `budget::check` against a synthetic `BuildStatsArtifact`.
 
 use std::collections::HashMap;
 
-use wundler_pipeline::budget::{check, BudgetConfig};
-use wundler_pipeline::build_stats::{
+use cloudpack_pipeline::budget::{check, BudgetConfig};
+use cloudpack_pipeline::build_stats::{
     BuildStatsArtifact, BudgetStatus, ChunkRecord, ChunkRole, EntryPointRecord, SummaryBlock,
     TimingBlock,
 };
@@ -1536,7 +1536,7 @@ fn artifact(total: u64, initial: u64, lazy_sizes: &[(&str, u64)]) -> BuildStatsA
     BuildStatsArtifact {
         schema_version: "1",
         build_id: "test".to_string(),
-        wundler_version: "0.0.0-test".to_string(),
+        cloudpack_version: "0.0.0-test".to_string(),
         generated_at: "2026-05-16T00:00:00+00:00".to_string(),
         summary: SummaryBlock {
             total_modules: 1,
@@ -1653,17 +1653,17 @@ fn multiple_violations_all_reported() {
 
 - [ ] **Step 2: Run the tests and verify failure**
 
-Run: `~/.cargo/bin/cargo test -p wundler-pipeline --test budget_test`
+Run: `~/.cargo/bin/cargo test -p cloudpack-pipeline --test budget_test`
 Expected: FAIL — `check` not yet defined.
 
 - [ ] **Step 3: Replace `budget.rs` stub with the full implementation**
 
-Replace the contents of `crates/wundler-pipeline/src/budget.rs` with:
+Replace the contents of `crates/cloudpack-pipeline/src/budget.rs` with:
 
 ```rust
 //! Budget enforcement against a [`BuildStatsArtifact`].
 //!
-//! `[budget]` in `wundler.toml` is opt-in: an absent section is `None`, which
+//! `[budget]` in `cloudpack.toml` is opt-in: an absent section is `None`, which
 //! means **no checks run** and the build behaves exactly as before. Each
 //! individual limit field is also `Option<u64>` — `None` means "this rule is
 //! disabled".
@@ -1673,7 +1673,7 @@ use serde::Deserialize;
 use crate::build_stats::{BudgetCheck, BudgetStatus, BuildStatsArtifact, ChunkRole};
 
 // ---------------------------------------------------------------------------
-// Config — populated from `[budget]` in `wundler.toml`.
+// Config — populated from `[budget]` in `cloudpack.toml`.
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -1896,7 +1896,7 @@ pub fn build_budget_result(
 
 - [ ] **Step 4: Wire `[budget]` into `BuildConfig::load`**
 
-Open `crates/wundler-pipeline/src/config.rs`. The current raw types section is:
+Open `crates/cloudpack-pipeline/src/config.rs`. The current raw types section is:
 
 ```rust
 #[derive(Debug, Deserialize)]
@@ -1948,7 +1948,7 @@ to:
 
 - [ ] **Step 5: Re-export `BudgetConfig` + `BudgetViolation` from `lib.rs`**
 
-In `crates/wundler-pipeline/src/lib.rs`, ensure the file contains:
+In `crates/cloudpack-pipeline/src/lib.rs`, ensure the file contains:
 
 ```rust
 pub use budget::{BudgetConfig, BudgetViolation};
@@ -1958,12 +1958,12 @@ pub use budget::{BudgetConfig, BudgetViolation};
 
 - [ ] **Step 6: Run the budget tests**
 
-Run: `~/.cargo/bin/cargo test -p wundler-pipeline --test budget_test`
+Run: `~/.cargo/bin/cargo test -p cloudpack-pipeline --test budget_test`
 Expected: all 6 tests pass.
 
 - [ ] **Step 7: Wire the budget check into `BuildPipeline::build()`**
 
-In `crates/wundler-pipeline/src/pipeline.rs`, find the section that constructs the artifact and writes it:
+In `crates/cloudpack-pipeline/src/pipeline.rs`, find the section that constructs the artifact and writes it:
 
 ```rust
         let artifact = BuildStatsArtifact::from_build(&output, previous.as_ref(), timing);
@@ -1981,7 +1981,7 @@ Replace with:
 ```rust
         let mut artifact = BuildStatsArtifact::from_build(&output, previous.as_ref(), timing);
 
-        // ----- Budget check (opt-in via [budget] in wundler.toml) -----
+        // ----- Budget check (opt-in via [budget] in cloudpack.toml) -----
         // Populate `artifact.budget` so the on-disk JSON reflects the result,
         // then run the strict `check()` for diagnostics. The CLI exit-1 wire-up
         // is a deferred follow-up plan; for now violations are non-fatal here.
@@ -2006,12 +2006,12 @@ Replace with:
 
 - [ ] **Step 8: Add an integration test asserting `artifact.budget` is populated**
 
-Append to `crates/wundler-pipeline/tests/build_pipeline_stats_test.rs`:
+Append to `crates/cloudpack-pipeline/tests/build_pipeline_stats_test.rs`:
 
 ```rust
 #[test]
 fn build_with_budget_populates_budget_result() {
-    use wundler_pipeline::budget::BudgetConfig;
+    use cloudpack_pipeline::budget::BudgetConfig;
 
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("src");
@@ -2042,14 +2042,14 @@ fn build_with_budget_populates_budget_result() {
 
     let b = a.budget.expect("budget block present");
     assert!(b.configured);
-    assert_eq!(b.result, wundler_pipeline::build_stats::BudgetStatus::Ok);
+    assert_eq!(b.result, cloudpack_pipeline::build_stats::BudgetStatus::Ok);
     assert!(b.checks.iter().any(|c| c.name == "initial_bundle_max_bytes"));
 }
 
 #[test]
 fn build_with_violated_budget_marks_result_violated() {
-    use wundler_pipeline::build_stats::BudgetStatus;
-    use wundler_pipeline::budget::BudgetConfig;
+    use cloudpack_pipeline::build_stats::BudgetStatus;
+    use cloudpack_pipeline::budget::BudgetConfig;
 
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("src");
@@ -2085,23 +2085,23 @@ fn build_with_violated_budget_marks_result_violated() {
 
 - [ ] **Step 9: Run the full pipeline test suite**
 
-Run: `~/.cargo/bin/cargo test -p wundler-pipeline`
+Run: `~/.cargo/bin/cargo test -p cloudpack-pipeline`
 Expected: every test passes.
 
 - [ ] **Step 10: Verify clippy is clean**
 
-Run: `~/.cargo/bin/cargo clippy -p wundler-pipeline --all-targets -- -D warnings`
+Run: `~/.cargo/bin/cargo clippy -p cloudpack-pipeline --all-targets -- -D warnings`
 Expected: no warnings.
 
 - [ ] **Step 11: Commit**
 
 ```bash
-git add crates/wundler-pipeline/src/budget.rs \
-        crates/wundler-pipeline/src/config.rs \
-        crates/wundler-pipeline/src/lib.rs \
-        crates/wundler-pipeline/src/pipeline.rs \
-        crates/wundler-pipeline/tests/budget_test.rs \
-        crates/wundler-pipeline/tests/build_pipeline_stats_test.rs
+git add crates/cloudpack-pipeline/src/budget.rs \
+        crates/cloudpack-pipeline/src/config.rs \
+        crates/cloudpack-pipeline/src/lib.rs \
+        crates/cloudpack-pipeline/src/pipeline.rs \
+        crates/cloudpack-pipeline/tests/budget_test.rs \
+        crates/cloudpack-pipeline/tests/build_pipeline_stats_test.rs
 git commit -m "feat(pipeline): opt-in budget check + on-disk budget block"
 ```
 
@@ -2110,12 +2110,12 @@ git commit -m "feat(pipeline): opt-in budget check + on-disk budget block"
 ## Task 6: Implement `previous_build` delta + final sweep
 
 **Files:**
-- Modify: `crates/wundler-pipeline/src/build_stats.rs` (real `compute_previous_build_info`)
-- Create: `crates/wundler-pipeline/tests/build_stats_delta_test.rs`
+- Modify: `crates/cloudpack-pipeline/src/build_stats.rs` (real `compute_previous_build_info`)
+- Create: `crates/cloudpack-pipeline/tests/build_stats_delta_test.rs`
 
 - [ ] **Step 1: Write failing tests for the delta computation**
 
-Create `crates/wundler-pipeline/tests/build_stats_delta_test.rs`:
+Create `crates/cloudpack-pipeline/tests/build_stats_delta_test.rs`:
 
 ```rust
 //! End-to-end delta test: run two builds back-to-back and verify the second
@@ -2125,9 +2125,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-use wundler_pipeline::build_stats::BuildStatsArtifact;
-use wundler_pipeline::config::{BuildConfig, EngineChoice};
-use wundler_pipeline::pipeline::BuildPipeline;
+use cloudpack_pipeline::build_stats::BuildStatsArtifact;
+use cloudpack_pipeline::config::{BuildConfig, EngineChoice};
+use cloudpack_pipeline::pipeline::BuildPipeline;
 
 fn cfg(root: PathBuf, out_dir: PathBuf) -> BuildConfig {
     let mut entry_points: HashMap<String, PathBuf> = HashMap::new();
@@ -2228,12 +2228,12 @@ fn previous_build_id_unchanged_when_source_identical() {
 
 - [ ] **Step 2: Run the tests and verify failure**
 
-Run: `~/.cargo/bin/cargo test -p wundler-pipeline --test build_stats_delta_test`
+Run: `~/.cargo/bin/cargo test -p cloudpack-pipeline --test build_stats_delta_test`
 Expected: FAIL — `compute_previous_build_info` is still the stub from Task 2, so `prev.build_id` will be `""`.
 
 - [ ] **Step 3: Replace the stub `compute_previous_build_info` with the real implementation**
 
-In `crates/wundler-pipeline/src/build_stats.rs`, find the stub:
+In `crates/cloudpack-pipeline/src/build_stats.rs`, find the stub:
 
 ```rust
 // Filled in by Task 6 — stub for now so `from_build` compiles.
@@ -2318,20 +2318,20 @@ fn size_delta(prev: u64, curr: u64) -> SizeDelta {
 
 - [ ] **Step 4: Run the delta tests**
 
-Run: `~/.cargo/bin/cargo test -p wundler-pipeline --test build_stats_delta_test`
+Run: `~/.cargo/bin/cargo test -p cloudpack-pipeline --test build_stats_delta_test`
 Expected: all 3 tests pass.
 
 - [ ] **Step 5: Run the full pipeline test suite**
 
-Run: `~/.cargo/bin/cargo test -p wundler-pipeline`
+Run: `~/.cargo/bin/cargo test -p cloudpack-pipeline`
 Expected: every test passes (Tasks 2–6).
 
 - [ ] **Step 6: Run a workspace-wide build + clippy to catch downstream regressions**
 
 Run: `~/.cargo/bin/cargo build --workspace`
-Expected: clean build. If any crate (e.g. `wundler-cli`) referenced the removed `BuildStats` re-export, fix the import — it is now `wundler_pipeline::pipeline::BuildStats`. Run `grep -rn "BuildStats" crates/wundler-cli/` to check.
+Expected: clean build. If any crate (e.g. `cloudpack-cli`) referenced the removed `BuildStats` re-export, fix the import — it is now `cloudpack_pipeline::pipeline::BuildStats`. Run `grep -rn "BuildStats" crates/cloudpack-cli/` to check.
 
-Run: `~/.cargo/bin/cargo clippy -p wundler-pipeline --all-targets -- -D warnings`
+Run: `~/.cargo/bin/cargo clippy -p cloudpack-pipeline --all-targets -- -D warnings`
 Expected: no warnings.
 
 - [ ] **Step 7: Verify a build-stats.json sample by hand**
@@ -2339,7 +2339,7 @@ Expected: no warnings.
 Run a one-shot smoke check via a throwaway script — or simply re-read one of the test outputs:
 
 ```bash
-~/.cargo/bin/cargo test -p wundler-pipeline --test build_pipeline_stats_test -- --nocapture 2>&1 | head -5
+~/.cargo/bin/cargo test -p cloudpack-pipeline --test build_pipeline_stats_test -- --nocapture 2>&1 | head -5
 ```
 
 This is just an extra eyeballing pass — automated assertions already cover the schema.
@@ -2347,8 +2347,8 @@ This is just an extra eyeballing pass — automated assertions already cover the
 - [ ] **Step 8: Commit**
 
 ```bash
-git add crates/wundler-pipeline/src/build_stats.rs \
-        crates/wundler-pipeline/tests/build_stats_delta_test.rs
+git add crates/cloudpack-pipeline/src/build_stats.rs \
+        crates/cloudpack-pipeline/tests/build_stats_delta_test.rs
 git commit -m "feat(pipeline): previous_build delta in BuildStatsArtifact"
 ```
 

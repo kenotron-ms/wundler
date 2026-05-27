@@ -1,7 +1,7 @@
 # Performance P3 SCA — Incremental Graph Analysis (SCC cache)
 
 **Date:** 2026-05-20
-**Owner:** wundler-graph / wundler-pipeline
+**Owner:** cloudpack-graph / cloudpack-pipeline
 **Scope:** P3 SCA only — Tarjan SCC cache with adjacency-based invalidation
 **Status:** Ready to implement
 
@@ -9,7 +9,7 @@
 
 ## Goal
 
-Cache `wundler_graph::graph::tarjan_sccs` output across consecutive analyses driven
+Cache `cloudpack_graph::graph::tarjan_sccs` output across consecutive analyses driven
 by the dev loop and invalidate it only when the resolved import adjacency changes.
 
 This is the **SCA wedge** of P3:
@@ -49,7 +49,7 @@ merge and is treated as a P0 regression.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  BuildPipeline (wundler-pipeline)                                   │
+│  BuildPipeline (cloudpack-pipeline)                                   │
 │  ───────────────────────────────                                    │
 │  config: BuildConfig                                                │
 │  engine: Arc<dyn TransformEngine>                                   │
@@ -61,7 +61,7 @@ merge and is treated as a P0 regression.
                    │
                    ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│  IncrementalAnalyzer (wundler-graph::incremental)        ← NEW      │
+│  IncrementalAnalyzer (cloudpack-graph::incremental)        ← NEW      │
 │  ─────────────────────────────────────────────────                  │
 │  entry_points: HashMap<String, PathBuf>                             │
 │  commons_threshold: usize  (default 2)                              │
@@ -83,7 +83,7 @@ merge and is treated as a P0 regression.
 ```
 
 `GraphAnalyzer::analyze` is **unchanged in behaviour** — it still drives the
-one-shot `wundler build`. Internally, Task 1 introduces a shared
+one-shot `cloudpack build`. Internally, Task 1 introduces a shared
 `pub(crate) resolve_entries(...)` helper that both analyzers call so the
 entry-resolution logic does not diverge between the two pipelines.
 
@@ -112,17 +112,17 @@ P3 bailout policy (reachability/chunk delta failures) without an API change.
 
 ## Tech Stack
 
-* `wundler-core` types: `BundleGraphNode`, `ContentHash`, `ModuleSummary`,
+* `cloudpack-core` types: `BundleGraphNode`, `ContentHash`, `ModuleSummary`,
   `Import`, `ImportKind`.
-* `wundler-graph`: `build_adjacency`, `tarjan_sccs`,
+* `cloudpack-graph`: `build_adjacency`, `tarjan_sccs`,
   `compute_reachability_with_sccs`, `compute_dead_exports`, `assign_chunks`,
   `build_manifest`, `AnalysisResult`, `AnalysisStats`, `GraphAnalyzer`,
   `ChunkManifest`.
-* `wundler-pipeline`: `BuildPipeline`, `BuildConfig`.
+* `cloudpack-pipeline`: `BuildPipeline`, `BuildConfig`.
 * Std only: `std::collections::{HashMap, HashSet, VecDeque}`,
   `std::path::PathBuf`.
 * `anyhow::{Result, Context, anyhow}`.
-* Test deps already in `wundler-graph/Cargo.toml`: `serde_json`, `tempfile`.
+* Test deps already in `cloudpack-graph/Cargo.toml`: `serde_json`, `tempfile`.
 
 No new crate dependencies.
 
@@ -132,18 +132,18 @@ No new crate dependencies.
 
 **In scope (this plan):**
 
-1. `wundler_graph::reachability::compute_reachability_with_cached_sccs` —
+1. `cloudpack_graph::reachability::compute_reachability_with_cached_sccs` —
    pure helper that takes pre-computed SCCs.
 2. Refactor `compute_reachability_with_sccs` to a thin wrapper that calls
    `tarjan_sccs` then the new helper. **No semantic change.**
-3. `pub(crate) fn wundler_graph::analyzer::resolve_entries(...)` — extracted
+3. `pub(crate) fn cloudpack_graph::analyzer::resolve_entries(...)` — extracted
    from the existing `GraphAnalyzer::analyze` body. **No semantic change to
    the public method.**
-4. `wundler_graph::incremental::IncrementalAnalyzer` — new public type, owns
+4. `cloudpack_graph::incremental::IncrementalAnalyzer` — new public type, owns
    the SCC cache, exposes `bailout_count()` and `tarjan_calls()`.
-5. `wundler_pipeline::pipeline::BuildPipeline::run_analyze_incremental` —
+5. `cloudpack_pipeline::pipeline::BuildPipeline::run_analyze_incremental` —
    new method, lazily constructs and reuses an `IncrementalAnalyzer`.
-6. V6 mandatory property test in `crates/wundler-graph/tests/incremental_v6.rs`.
+6. V6 mandatory property test in `crates/cloudpack-graph/tests/incremental_v6.rs`.
 
 **Out of scope (this plan, called out so reviewers don't ask):**
 
@@ -158,7 +158,7 @@ No new crate dependencies.
 ## File Structure
 
 ```
-crates/wundler-graph/
+crates/cloudpack-graph/
 ├── src/
 │   ├── lib.rs                       (modify: pub mod incremental + re-export)
 │   ├── analyzer.rs                  (modify: extract resolve_entries)
@@ -167,7 +167,7 @@ crates/wundler-graph/
 └── tests/
     └── incremental_v6.rs            (NEW: V6 invariant property test)
 
-crates/wundler-pipeline/
+crates/cloudpack-pipeline/
 ├── src/
 │   ├── lib.rs                       (modify: re-export IncrementalAnalyzer)
 │   └── pipeline.rs                  (modify: incremental field +
@@ -178,9 +178,9 @@ crates/wundler-pipeline/
 
 **Existing tests that must still pass after every commit in this plan:**
 
-* `cargo test -p wundler-graph` — currently 47 tests across 14 files.
-* `cargo test -p wundler-pipeline` — full suite (the pipeline integration tests).
-* `cargo test -p wundler-cli` — full suite.
+* `cargo test -p cloudpack-graph` — currently 47 tests across 14 files.
+* `cargo test -p cloudpack-pipeline` — full suite (the pipeline integration tests).
+* `cargo test -p cloudpack-cli` — full suite.
 
 ---
 
@@ -195,19 +195,19 @@ crates/wundler-pipeline/
 
 ### Task 1 — `compute_reachability_with_cached_sccs` helper + `resolve_entries` extraction
 
-**Files modified:** `crates/wundler-graph/src/reachability.rs`,
-`crates/wundler-graph/src/analyzer.rs`.
+**Files modified:** `crates/cloudpack-graph/src/reachability.rs`,
+`crates/cloudpack-graph/src/analyzer.rs`.
 
 **TDD step 1: write the failing test.**
 
-Append to `crates/wundler-graph/tests/reachability_scc.rs` (or create a new
+Append to `crates/cloudpack-graph/tests/reachability_scc.rs` (or create a new
 file if `reachability_scc.rs` is already large — check before editing):
 
 ```rust
-// crates/wundler-graph/tests/reachability_scc.rs (additions)
+// crates/cloudpack-graph/tests/reachability_scc.rs (additions)
 
-use wundler_graph::graph::{build_adjacency, tarjan_sccs};
-use wundler_graph::reachability::{
+use cloudpack_graph::graph::{build_adjacency, tarjan_sccs};
+use cloudpack_graph::reachability::{
     compute_reachability_with_cached_sccs, compute_reachability_with_sccs,
 };
 
@@ -266,7 +266,7 @@ it at the top of the test file as:
 
 ```rust
 use std::collections::HashSet;
-use wundler_core::types::{
+use cloudpack_core::types::{
     BundleGraphNode, ContentHash, Import, ImportKind, ModuleSummary,
     SideEffectMarker,
 };
@@ -300,7 +300,7 @@ fn make_node(path: &str, imports: &[&str]) -> BundleGraphNode {
 Run:
 
 ```bash
-cargo test -p wundler-graph --test reachability_scc \
+cargo test -p cloudpack-graph --test reachability_scc \
     -- cached_sccs_helper_matches_wrapper_on_acyclic_graph \
        cached_sccs_helper_matches_wrapper_on_cyclic_graph
 ```
@@ -308,17 +308,17 @@ cargo test -p wundler-graph --test reachability_scc \
 **Expected output (red):**
 
 ```
-error[E0432]: unresolved import `wundler_graph::reachability::compute_reachability_with_cached_sccs`
+error[E0432]: unresolved import `cloudpack_graph::reachability::compute_reachability_with_cached_sccs`
 ```
 
 **TDD step 2: implement.**
 
-Edit `crates/wundler-graph/src/reachability.rs`. Replace the existing
+Edit `crates/cloudpack-graph/src/reachability.rs`. Replace the existing
 `compute_reachability_with_sccs` body with a wrapper, and add the new helper
 plus a thin documentation update. The full diff is:
 
 ```rust
-// crates/wundler-graph/src/reachability.rs
+// crates/cloudpack-graph/src/reachability.rs
 
 pub fn compute_reachability_with_sccs(
     nodes: &[BundleGraphNode],
@@ -391,12 +391,12 @@ The existing private `activate_scc` is unchanged.
 
 **TDD step 3: extract `resolve_entries`.**
 
-Edit `crates/wundler-graph/src/analyzer.rs`. Replace the entry-resolution
+Edit `crates/cloudpack-graph/src/analyzer.rs`. Replace the entry-resolution
 block inside `GraphAnalyzer::analyze` (currently lines 94–139) with a single
 call to a new `pub(crate) fn`. Add the function at module level:
 
 ```rust
-// crates/wundler-graph/src/analyzer.rs (additions, near the top of impl block)
+// crates/cloudpack-graph/src/analyzer.rs (additions, near the top of impl block)
 
 /// Resolve every entry-point path to a `ContentHash`.
 ///
@@ -457,10 +457,10 @@ let (entry_hashes, entry_hash_set) =
 This is a pure refactor: identical behaviour, identical return values,
 identical error messages.
 
-**TDD step 4: run all wundler-graph tests.**
+**TDD step 4: run all cloudpack-graph tests.**
 
 ```bash
-cargo test -p wundler-graph
+cargo test -p cloudpack-graph
 ```
 
 **Expected output (green):**
@@ -492,19 +492,19 @@ No public API changes. Prep work for P3 SCA (Tarjan SCC cache).
 
 ### Task 2 — `IncrementalAnalyzer` with SCC cache
 
-**Files:** new `crates/wundler-graph/src/incremental.rs`, modify
-`crates/wundler-graph/src/lib.rs`.
+**Files:** new `crates/cloudpack-graph/src/incremental.rs`, modify
+`crates/cloudpack-graph/src/lib.rs`.
 
 **TDD step 1: write the failing tests** (in `incremental.rs`).
 
 ```rust
-// crates/wundler-graph/src/incremental.rs
+// crates/cloudpack-graph/src/incremental.rs
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use wundler_core::types::{
+    use cloudpack_core::types::{
         BundleGraphNode, ContentHash, Import, ImportKind, ModuleSummary,
         SideEffectMarker,
     };
@@ -671,18 +671,18 @@ mod tests {
 Run:
 
 ```bash
-cargo test -p wundler-graph --lib incremental
+cargo test -p cloudpack-graph --lib incremental
 ```
 
 **Expected output (red):**
 
 ```
-error[E0433]: failed to resolve: could not find `incremental` in `wundler_graph`
+error[E0433]: failed to resolve: could not find `incremental` in `cloudpack_graph`
 ```
 
 **TDD step 2: implement.**
 
-Create `crates/wundler-graph/src/incremental.rs`:
+Create `crates/cloudpack-graph/src/incremental.rs`:
 
 ```rust
 //! Incremental dependency-graph analyzer with a Tarjan-SCC cache.
@@ -700,14 +700,14 @@ Create `crates/wundler-graph/src/incremental.rs`:
 //! GraphAnalyzer::new(entries).analyze(G).manifest.to_json()
 //! ```
 //!
-//! Enforced by `crates/wundler-graph/tests/incremental_v6.rs`. Any divergence
+//! Enforced by `crates/cloudpack-graph/tests/incremental_v6.rs`. Any divergence
 //! is treated as a P0 regression.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use anyhow::Result;
-use wundler_core::types::{BundleGraphNode, ContentHash};
+use cloudpack_core::types::{BundleGraphNode, ContentHash};
 
 use crate::analyzer::{resolve_entries, AnalysisResult, AnalysisStats};
 use crate::chunks::assign_chunks;
@@ -837,7 +837,7 @@ impl IncrementalAnalyzer {
 }
 ```
 
-Edit `crates/wundler-graph/src/lib.rs` — add module and re-export:
+Edit `crates/cloudpack-graph/src/lib.rs` — add module and re-export:
 
 ```rust
 pub mod analyzer;
@@ -860,7 +860,7 @@ directly via `use crate::analyzer::resolve_entries`.
 **TDD step 3: run tests.**
 
 ```bash
-cargo test -p wundler-graph --lib incremental
+cargo test -p cloudpack-graph --lib incremental
 ```
 
 **Expected output (green):**
@@ -879,7 +879,7 @@ test result: ok. 5 passed; 0 failed; 0 ignored
 Then verify nothing regressed in the broader graph suite:
 
 ```bash
-cargo test -p wundler-graph
+cargo test -p cloudpack-graph
 ```
 
 **Expected:**
@@ -895,7 +895,7 @@ test result: ok. 54 passed; 0 failed; 0 ignored
 ```
 feat(graph): add IncrementalAnalyzer with Tarjan-SCC cache (P3 SCA)
 
-Introduces wundler_graph::incremental::IncrementalAnalyzer, an
+Introduces cloudpack_graph::incremental::IncrementalAnalyzer, an
 incremental dependency-graph analyzer that caches tarjan_sccs output
 across analyze() calls and invalidates it only when the resolved
 import adjacency changes.
@@ -916,7 +916,7 @@ correctness invariant.
 
 ### Task 3 — V6 mandatory property test
 
-**File:** new `crates/wundler-graph/tests/incremental_v6.rs`.
+**File:** new `crates/cloudpack-graph/tests/incremental_v6.rs`.
 
 **This test is the merge gate.** It must pass before any P3 code (including
 this plan's Tasks 1 and 2) lands on `main`. The test asserts THE invariant
@@ -925,12 +925,12 @@ across a series of synthetic graph edits.
 **TDD step 1: write the failing test.**
 
 ```rust
-// crates/wundler-graph/tests/incremental_v6.rs
+// crates/cloudpack-graph/tests/incremental_v6.rs
 //
 // V6 mandatory property test for P3 SCA.
 //
 // Acceptance criterion:
-//   cargo test -p wundler-graph --test incremental_v6
+//   cargo test -p cloudpack-graph --test incremental_v6
 // reports
 //   test result: ok. 1 passed; 0 failed
 //
@@ -942,12 +942,12 @@ across a series of synthetic graph edits.
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use wundler_core::types::{
+use cloudpack_core::types::{
     BundleGraphNode, ContentHash, Import, ImportKind, ModuleSummary,
     SideEffectMarker,
 };
-use wundler_graph::analyzer::GraphAnalyzer;
-use wundler_graph::incremental::IncrementalAnalyzer;
+use cloudpack_graph::analyzer::GraphAnalyzer;
+use cloudpack_graph::incremental::IncrementalAnalyzer;
 
 const N_NODES: usize = 30;
 
@@ -1150,7 +1150,7 @@ fn v6_incremental_equals_full_recompute_for_k_in_1_5_20() {
 Run:
 
 ```bash
-cargo test -p wundler-graph --test incremental_v6
+cargo test -p cloudpack-graph --test incremental_v6
 ```
 
 **Expected output (green) — after Tasks 1 and 2 are in place:**
@@ -1178,7 +1178,7 @@ incremental and full pipelines diverged. Likely causes (debug checklist):
 ```
 test(graph): V6 mandatory property test for P3 SCA incremental analyzer
 
-Adds crates/wundler-graph/tests/incremental_v6.rs — the merge-gate
+Adds crates/cloudpack-graph/tests/incremental_v6.rs — the merge-gate
 test for P3.
 
 For K ∈ {1, 5, 20}, builds a 30-node synthetic graph with one cycle,
@@ -1198,13 +1198,13 @@ seeded by step index, no extra crate dependencies.
 
 ### Task 4 — Wire `run_analyze_incremental` into `BuildPipeline`
 
-**Files modified:** `crates/wundler-pipeline/src/pipeline.rs`,
-`crates/wundler-pipeline/src/lib.rs`. New file:
-`crates/wundler-pipeline/tests/pipeline_incremental.rs`.
+**Files modified:** `crates/cloudpack-pipeline/src/pipeline.rs`,
+`crates/cloudpack-pipeline/src/lib.rs`. New file:
+`crates/cloudpack-pipeline/tests/pipeline_incremental.rs`.
 
 **TDD step 1: write the failing integration test.**
 
-Create `crates/wundler-pipeline/tests/pipeline_incremental.rs`:
+Create `crates/cloudpack-pipeline/tests/pipeline_incremental.rs`:
 
 ```rust
 //! Integration test: BuildPipeline::run_analyze_incremental.
@@ -1220,12 +1220,12 @@ Create `crates/wundler-pipeline/tests/pipeline_incremental.rs`:
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use wundler_core::types::{
+use cloudpack_core::types::{
     BundleGraphNode, ContentHash, Import, ImportKind, ModuleSummary,
     SideEffectMarker,
 };
-use wundler_pipeline::config::{BuildConfig, EngineChoice};
-use wundler_pipeline::pipeline::BuildPipeline;
+use cloudpack_pipeline::config::{BuildConfig, EngineChoice};
+use cloudpack_pipeline::pipeline::BuildPipeline;
 
 fn make_node(path: &str, imports: &[&str]) -> BundleGraphNode {
     let id_src = format!("{path}|{}", imports.join(","));
@@ -1326,7 +1326,7 @@ fn run_analyze_incremental_caches_and_invalidates() {
 Run:
 
 ```bash
-cargo test -p wundler-pipeline --test pipeline_incremental
+cargo test -p cloudpack-pipeline --test pipeline_incremental
 ```
 
 **Expected output (red):**
@@ -1337,15 +1337,15 @@ error[E0599]: no method named `run_analyze_incremental` found for struct `BuildP
 
 **TDD step 2: implement.**
 
-Edit `crates/wundler-pipeline/src/pipeline.rs`. Add the import, field, and
+Edit `crates/cloudpack-pipeline/src/pipeline.rs`. Add the import, field, and
 methods. The complete diff to the file:
 
 ```rust
-// crates/wundler-pipeline/src/pipeline.rs
+// crates/cloudpack-pipeline/src/pipeline.rs
 
-use wundler_graph::analyzer::{AnalysisResult, GraphAnalyzer};
-use wundler_graph::incremental::IncrementalAnalyzer;          // NEW
-use wundler_graph::types::ChunkManifest;
+use cloudpack_graph::analyzer::{AnalysisResult, GraphAnalyzer};
+use cloudpack_graph::incremental::IncrementalAnalyzer;          // NEW
+use cloudpack_graph::types::ChunkManifest;
 // (existing imports unchanged)
 
 pub struct BuildPipeline {
@@ -1384,7 +1384,7 @@ impl BuildPipeline {
     /// Lazily constructs an [`IncrementalAnalyzer`] on first call, then
     /// reuses it across calls so its cache survives between invocations.
     /// Output is bit-identical to [`Self::run_analyze`] for the same input
-    /// (enforced by `crates/wundler-graph/tests/incremental_v6.rs`).
+    /// (enforced by `crates/cloudpack-graph/tests/incremental_v6.rs`).
     pub fn run_analyze_incremental(
         &mut self,
         nodes: Vec<BundleGraphNode>,
@@ -1421,21 +1421,21 @@ impl BuildPipeline {
 }
 ```
 
-Edit `crates/wundler-pipeline/src/lib.rs` — re-export `IncrementalAnalyzer`
-so dev-loop integrators can refer to it from the `wundler_pipeline`
-namespace without taking a direct dep on `wundler-graph`:
+Edit `crates/cloudpack-pipeline/src/lib.rs` — re-export `IncrementalAnalyzer`
+so dev-loop integrators can refer to it from the `cloudpack_pipeline`
+namespace without taking a direct dep on `cloudpack-graph`:
 
 ```rust
 pub use config::{BuildConfig, DevConfig, EngineChoice};
 pub use dev_server::DevServer;
 pub use pipeline::{BuildOutput, BuildPipeline};
-pub use wundler_graph::IncrementalAnalyzer;        // NEW (re-export)
+pub use cloudpack_graph::IncrementalAnalyzer;        // NEW (re-export)
 ```
 
 **TDD step 3: run all the things.**
 
 ```bash
-cargo test -p wundler-pipeline --test pipeline_incremental
+cargo test -p cloudpack-pipeline --test pipeline_incremental
 ```
 
 **Expected output (green):**
@@ -1451,7 +1451,7 @@ Then the full pipeline suite (to confirm no regression in `build()` or any
 other existing path):
 
 ```bash
-cargo test -p wundler-pipeline
+cargo test -p cloudpack-pipeline
 ```
 
 **Expected:** all existing pipeline tests + the new one pass, `0 failed`.
@@ -1490,10 +1490,10 @@ Note: this commit does NOT wire the new method into DevServer's
 notify watcher. The dev server currently does not re-run analysis on
 file change (it only emits SSE reload events); connecting the watcher
 to run_analyze_incremental is the next milestone and lives behind a
-small wundler-pipeline PR rather than this graph-layer change.
+small cloudpack-pipeline PR rather than this graph-layer change.
 
 Integration test:
-  cargo test -p wundler-pipeline --test pipeline_incremental
+  cargo test -p cloudpack-pipeline --test pipeline_incremental
 ```
 
 ---
@@ -1510,25 +1510,25 @@ cargo test  --workspace
 
 All three must exit `0`. In particular confirm:
 
-* `cargo test -p wundler-graph --test incremental_v6` — **the merge gate** — is `ok`.
-* `cargo test -p wundler-graph` total count is `54 passed` (47 baseline + 2 helper + 5 incremental).
-* `cargo test -p wundler-pipeline --test pipeline_incremental` is `ok`.
-* `cargo test -p wundler-cli` is unchanged (no failures introduced).
+* `cargo test -p cloudpack-graph --test incremental_v6` — **the merge gate** — is `ok`.
+* `cargo test -p cloudpack-graph` total count is `54 passed` (47 baseline + 2 helper + 5 incremental).
+* `cargo test -p cloudpack-pipeline --test pipeline_incremental` is `ok`.
+* `cargo test -p cloudpack-cli` is unchanged (no failures introduced).
 
 LoC budget audit (informational — keep us honest against the design doc's
 "~100 LoC" target):
 
 | File                                          | New / Changed LoC |
 |-----------------------------------------------|-------------------|
-| `wundler-graph/src/reachability.rs`           | ~35 (helper + refactor) |
-| `wundler-graph/src/analyzer.rs`               | ~40 (extract, no net new logic) |
-| `wundler-graph/src/incremental.rs`            | ~105 (struct + analyze + tests) |
-| `wundler-graph/src/lib.rs`                    | +2 |
-| `wundler-pipeline/src/pipeline.rs`            | ~30 |
-| `wundler-pipeline/src/lib.rs`                 | +1 |
+| `cloudpack-graph/src/reachability.rs`           | ~35 (helper + refactor) |
+| `cloudpack-graph/src/analyzer.rs`               | ~40 (extract, no net new logic) |
+| `cloudpack-graph/src/incremental.rs`            | ~105 (struct + analyze + tests) |
+| `cloudpack-graph/src/lib.rs`                    | +2 |
+| `cloudpack-pipeline/src/pipeline.rs`            | ~30 |
+| `cloudpack-pipeline/src/lib.rs`                 | +1 |
 | **Implementation total (excl. tests)**        | **~130** |
-| `wundler-graph/tests/incremental_v6.rs`       | ~180 (test infrastructure) |
-| `wundler-pipeline/tests/pipeline_incremental.rs` | ~85 |
+| `cloudpack-graph/tests/incremental_v6.rs`       | ~180 (test infrastructure) |
+| `cloudpack-pipeline/tests/pipeline_incremental.rs` | ~85 |
 
 Implementation is within the design doc's ballpark ("~100 LoC, ~30 % win").
 The bulk of the diff is test infrastructure — exactly as P3 SCA's

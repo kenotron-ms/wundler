@@ -13,7 +13,7 @@
 Before starting, verify the workspace builds cleanly:
 
 ```
-cargo test -p wundler-pipeline
+cargo test -p cloudpack-pipeline
 ```
 
 Expected: all existing tests pass. If not, stop and fix before proceeding.
@@ -23,14 +23,14 @@ Expected: all existing tests pass. If not, stop and fix before proceeding.
 ### Task 1: Write the failing tests
 
 **Files:**
-- Create: `crates/wundler-pipeline/tests/build_stats_json_test.rs`
+- Create: `crates/cloudpack-pipeline/tests/build_stats_json_test.rs`
 
 **Step 1: Create the test file**
 
 ```rust
 //! Tests for `build-stats.json` emission (Observability SCA).
 //!
-//! Acceptance criteria: `cargo test -p wundler-pipeline --test build_stats_json_test`
+//! Acceptance criteria: `cargo test -p cloudpack-pipeline --test build_stats_json_test`
 //! reports `test result: ok. 4 passed; 0 failed`.
 
 use std::collections::HashMap;
@@ -38,8 +38,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use tempfile::TempDir;
-use wundler_pipeline::config::{BuildConfig, EngineChoice};
-use wundler_pipeline::pipeline::BuildPipeline;
+use cloudpack_pipeline::config::{BuildConfig, EngineChoice};
+use cloudpack_pipeline::pipeline::BuildPipeline;
 
 // ---------------------------------------------------------------------------
 // Shared helper
@@ -173,7 +173,7 @@ fn test_build_stats_json_is_next_to_manifest() {
 **Step 2: Run to verify failure**
 
 ```
-cargo test -p wundler-pipeline --test build_stats_json_test
+cargo test -p cloudpack-pipeline --test build_stats_json_test
 ```
 
 Expected: all 4 tests **FAIL** — `build-stats.json` does not exist because the write logic hasn't been added yet.
@@ -190,7 +190,7 @@ test test_build_stats_json_is_next_to_manifest ... FAILED
 ### Task 2: Add `serde::Serialize` to `BuildStats`
 
 **Files:**
-- Modify: `crates/wundler-pipeline/src/pipeline.rs:26`
+- Modify: `crates/cloudpack-pipeline/src/pipeline.rs:26`
 
 **Step 1: Add `serde::Serialize` to the derive macro on `BuildStats`**
 
@@ -213,7 +213,7 @@ No other changes to the struct or its fields.
 **Step 2: Verify the crate compiles**
 
 ```
-cargo build -p wundler-pipeline
+cargo build -p cloudpack-pipeline
 ```
 
 Expected: **compiles without errors**. No test changes yet — the tests still fail at runtime because the file isn't written.
@@ -221,7 +221,7 @@ Expected: **compiles without errors**. No test changes yet — the tests still f
 **Step 3: Verify existing tests still pass**
 
 ```
-cargo test -p wundler-pipeline --test pipeline_build
+cargo test -p cloudpack-pipeline --test pipeline_build
 ```
 
 Expected: both existing `pipeline_build` tests **PASS** (no behavioral change from adding a derive).
@@ -231,7 +231,7 @@ Expected: both existing `pipeline_build` tests **PASS** (no behavioral change fr
 ### Task 3: Write `build-stats.json` after build
 
 **Files:**
-- Modify: `crates/wundler-pipeline/src/pipeline.rs:226-243`
+- Modify: `crates/cloudpack-pipeline/src/pipeline.rs:226-243`
 
 **Step 1: Refactor the stats assembly and add the write**
 
@@ -279,7 +279,7 @@ Find the `// ----- Compute stats -----` block near the end of `build()` (current
 **Step 2: Run the new tests**
 
 ```
-cargo test -p wundler-pipeline --test build_stats_json_test
+cargo test -p cloudpack-pipeline --test build_stats_json_test
 ```
 
 Expected: all 4 tests **PASS**.
@@ -297,10 +297,10 @@ test result: ok. 4 passed; 0 failed
 
 ### Task 4: Verify no regressions across the full crate
 
-**Step 1: Run all `wundler-pipeline` tests**
+**Step 1: Run all `cloudpack-pipeline` tests**
 
 ```
-cargo test -p wundler-pipeline
+cargo test -p cloudpack-pipeline
 ```
 
 Expected: all existing tests plus the 4 new ones pass. Zero failures.
@@ -320,8 +320,8 @@ Expected: zero failures across all crates.
 **Step 1: Stage the two changed files**
 
 ```
-git add crates/wundler-pipeline/src/pipeline.rs \
-        crates/wundler-pipeline/tests/build_stats_json_test.rs
+git add crates/cloudpack-pipeline/src/pipeline.rs \
+        crates/cloudpack-pipeline/tests/build_stats_json_test.rs
 ```
 
 **Step 2: Commit**

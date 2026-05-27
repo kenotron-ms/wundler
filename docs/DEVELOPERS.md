@@ -1,32 +1,32 @@
-# wundler developer reference
+# cloudpack developer reference
 
-Audience: engineers who want to understand the internals, contribute, or build on top of wundler.
+Audience: engineers who want to understand the internals, contribute, or build on top of cloudpack.
 
 ## 1. Repository layout
 
 ```
-wundler/
+cloudpack/
 ├── Cargo.toml                  # workspace manifest
 ├── crates/
-│   ├── wundler-core/           # summarizer, cache, CJS stub generator
-│   ├── wundler-graph/          # reachability, SCC, ChunkManifest builder
-│   ├── wundler-transform/      # TransformEngine trait + adapters
-│   ├── wundler-pipeline/       # BuildPipeline, dev server
-│   ├── wundler-abs/            # Adaptive Bundle Service
-│   ├── wundler-pgo/            # PGO store, ingestor, C³, updater
-│   ├── wundler-sw/             # Service Worker (TypeScript, bundled into wundler-abs)
-│   └── wundler-cli/            # CLI subcommands
+│   ├── cloudpack-core/           # summarizer, cache, CJS stub generator
+│   ├── cloudpack-graph/          # reachability, SCC, ChunkManifest builder
+│   ├── cloudpack-transform/      # TransformEngine trait + adapters
+│   ├── cloudpack-pipeline/       # BuildPipeline, dev server
+│   ├── cloudpack-abs/            # Adaptive Bundle Service
+│   ├── cloudpack-pgo/            # PGO store, ingestor, C³, updater
+│   ├── cloudpack-sw/             # Service Worker (TypeScript, bundled into cloudpack-abs)
+│   └── cloudpack-cli/            # CLI subcommands
 ├── docs/
-│   ├── wundler-architect-brief.md
+│   ├── cloudpack-architect-brief.md
 │   ├── DEVELOPERS.md
 │   └── superpowers/plans/      # design plans, current and future
 └── test-app/                   # React 19 + TS validation app
     ├── src/                    # routes, components, dead exports, analytics side-effect
-    ├── wundler-rolldown.toml
-    └── wundler-swc.toml
+    ├── cloudpack-rolldown.toml
+    └── cloudpack-swc.toml
 ```
 
-The workspace is a single Cargo workspace. Each crate has its own `Cargo.toml` and `tests/` directory. `wundler-cli` depends on every other crate and is the only binary target.
+The workspace is a single Cargo workspace. Each crate has its own `Cargo.toml` and `tests/` directory. `cloudpack-cli` depends on every other crate and is the only binary target.
 
 ## 2. ModuleSummary — the atomic unit
 
@@ -74,7 +74,7 @@ The rule for `SideEffects`: conservative at module boundaries, aggressive at fun
 
 ## 3. ChunkManifest
 
-The output of `wundler-graph`. The handshake with everything downstream.
+The output of `cloudpack-graph`. The handshake with everything downstream.
 
 ```json
 {
@@ -101,15 +101,15 @@ The output of `wundler-graph`. The handshake with everything downstream.
 }
 ```
 
-Every module is identified by `SHA-256(source_bytes)`. Chunk membership is content-addressed: two builds that produce the same module set in the same chunk produce the same `chunk.hash`. The `build_id` changes when the entry points or the summary set change. PGO fields (`co_request_score`, `median_load_order`, `suggested_merge`) are written in place by `wundler pgo apply` without modifying any other field.
+Every module is identified by `SHA-256(source_bytes)`. Chunk membership is content-addressed: two builds that produce the same module set in the same chunk produce the same `chunk.hash`. The `build_id` changes when the entry points or the summary set change. PGO fields (`co_request_score`, `median_load_order`, `suggested_merge`) are written in place by `cloudpack pgo apply` without modifying any other field.
 
 ## 4. The build pipeline
 
-`wundler-pipeline::BuildPipeline` runs four stages, each producing input for the next.
+`cloudpack-pipeline::BuildPipeline` runs four stages, each producing input for the next.
 
 **Summarize.** Walk the entry points and their transitive imports. For each source file, look up `SHA-256(source)` in the 2-tier cache (in-memory LRU → on-disk content-addressed). On miss, parse with SWC and emit a `ModuleSummary`; insert into both tiers. Driven by `rayon::par_iter` over the file set. No shared mutable state — the cache is the only shared structure and uses interior locking on the cold-tier writes only.
 
-**Analyze.** `wundler-graph` reads the summary set. Three passes:
+**Analyze.** `cloudpack-graph` reads the summary set. Three passes:
 1. BFS reachability from the entry-point set. Modules not reached are dead and excluded from emission.
 2. Tarjan SCC over module-level imports. Strongly connected components must stay in the same chunk; otherwise circular ESM evaluation breaks.
 3. Route-based chunk splitting. Modules reachable from exactly one route become route-local chunks. Modules reachable from N ≥ `commons_threshold` routes become commons chunks. Lazy imports become `Lazy` chunks.
@@ -136,11 +136,11 @@ pub trait TransformEngine: Send + Sync {
 
 Two implementations.
 
-**`SwcTransformAdapter`.** Per-chunk transform. For each chunk, reads the source of every member module, applies SWC passes (TypeScript strip, JSX transform, dead-export strip using the summary's call-edge information), and concatenates the resulting modules into a single chunk file, flattening their scopes. Fast and self-contained. Known limitation: scope-flattening across modules with conflicting default-export aliasing or complex re-export chains can produce incorrect output. Used by `wundler dev` (one module per request, no flattening) and acceptable for many production cases.
+**`SwcTransformAdapter`.** Per-chunk transform. For each chunk, reads the source of every member module, applies SWC passes (TypeScript strip, JSX transform, dead-export strip using the summary's call-edge information), and concatenates the resulting modules into a single chunk file, flattening their scopes. Fast and self-contained. Known limitation: scope-flattening across modules with conflicting default-export aliasing or complex re-export chains can produce incorrect output. Used by `cloudpack dev` (one module per request, no flattening) and acceptable for many production cases.
 
-**`RolldownAdapter`.** One subprocess invocation per build. Wundler writes a temporary entry stub per chunk, points rolldown at the entry stubs, and lets rolldown do scope merging. Slower than `SwcTransformAdapter` per invocation, but inherits rolldown's correctness for the edge cases SWC's intra-chunk flattening misses. Preferred for production builds.
+**`RolldownAdapter`.** One subprocess invocation per build. Cloudpack writes a temporary entry stub per chunk, points rolldown at the entry stubs, and lets rolldown do scope merging. Slower than `SwcTransformAdapter` per invocation, but inherits rolldown's correctness for the edge cases SWC's intra-chunk flattening misses. Preferred for production builds.
 
-The choice is `[build] engine = "rolldown" | "swc"` in `wundler.toml`.
+The choice is `[build] engine = "rolldown" | "swc"` in `cloudpack.toml`.
 
 ## 6. Adaptive Bundle Service
 
@@ -179,11 +179,11 @@ The Service Worker has a 100ms p99 timeout on the ABS request. On timeout, it fa
 
 ### Signing
 
-`wundler abs keygen` generates an ed25519 key pair. `wundler build --sign --key signing.pem` signs the manifest. The Service Worker verifies the signature with the embedded public key before trusting `fetch_urls`. Compromise of the ABS without the signing key cannot inject new content — only redirect to existing content-hashed chunks.
+`cloudpack abs keygen` generates an ed25519 key pair. `cloudpack build --sign --key signing.pem` signs the manifest. The Service Worker verifies the signature with the embedded public key before trusting `fetch_urls`. Compromise of the ABS without the signing key cannot inject new content — only redirect to existing content-hashed chunks.
 
 ## 7. PGO store
 
-`wundler-pgo` is a SQLite database, a JSONL ingestor, and a C³ clustering pass.
+`cloudpack-pgo` is a SQLite database, a JSONL ingestor, and a C³ clustering pass.
 
 ### Co-request matrix schema
 
@@ -218,15 +218,15 @@ P(B | A) = sessions(A ∩ B) / sessions(A)
 
 If `min(P(A|B), P(B|A)) > threshold` (default 0.8), the pair is a merge candidate. Candidates are sorted by `min(P(A|B), P(B|A))` descending and processed greedily: each chunk participates in at most one merge per pass. The sort is stable on `(chunk_id_a, chunk_id_b)` so the output is deterministic given the same input matrix.
 
-`wundler pgo analyze` prints the candidate list. `wundler pgo apply` writes `suggested_merge` and `co_request_score` fields back into the manifest.
+`cloudpack pgo analyze` prints the candidate list. `cloudpack pgo apply` writes `suggested_merge` and `co_request_score` fields back into the manifest.
 
 ### Two-stage update
 
-`wundler pgo apply` never mutates `chunks[].modules`, `chunks[].hash`, `build_id`, `entry_chunks`, or `module_index`. It writes PGO fields only. The write is staged: serialize the new manifest to `manifest.json.tmp`, `fsync`, then `rename` to `manifest.json`. The rename is atomic on POSIX filesystems. Concurrent readers see the old or new manifest, never a partial one.
+`cloudpack pgo apply` never mutates `chunks[].modules`, `chunks[].hash`, `build_id`, `entry_chunks`, or `module_index`. It writes PGO fields only. The write is staged: serialize the new manifest to `manifest.json.tmp`, `fsync`, then `rename` to `manifest.json`. The rename is atomic on POSIX filesystems. Concurrent readers see the old or new manifest, never a partial one.
 
 ## 8. Service Worker
 
-`wundler-sw` is bundled into the `wundler-abs` binary and served alongside the CDN. The SW is the runtime that makes adaptive delivery possible.
+`cloudpack-sw` is bundled into the `cloudpack-abs` binary and served alongside the CDN. The SW is the runtime that makes adaptive delivery possible.
 
 **Install.** Fetch the static `manifest.json` from the CDN. Store it in IndexedDB keyed by `build_id`. This is the fallback for ABS timeouts.
 
@@ -244,16 +244,16 @@ If `min(P(A|B), P(B|A)) > threshold` (default 0.8), the pair is a merge candidat
 ## 9. Running tests
 
 ```bash
-cargo test -p wundler-core      # 65 tests: extractors, cache, CJS stubs
-cargo test -p wundler-graph     # BFS, SCC, chunking, manifest
-cargo test -p wundler-transform # SWC adapter, JSX transform, intra-chunk stripping
-cargo test -p wundler-pipeline  # BuildPipeline, output writer, level0 ESM build
-cargo test -p wundler-abs       # delta computation, signing, telemetry
-cargo test -p wundler-pgo       # store queries, ingestor, C³, updater
+cargo test -p cloudpack-core      # 65 tests: extractors, cache, CJS stubs
+cargo test -p cloudpack-graph     # BFS, SCC, chunking, manifest
+cargo test -p cloudpack-transform # SWC adapter, JSX transform, intra-chunk stripping
+cargo test -p cloudpack-pipeline  # BuildPipeline, output writer, level0 ESM build
+cargo test -p cloudpack-abs       # delta computation, signing, telemetry
+cargo test -p cloudpack-pgo       # store queries, ingestor, C³, updater
 cargo test                      # all
 ```
 
-Integration tests against `test-app/` live in `crates/wundler-pipeline/tests/`. They run a full build and compare the chunk set and module assignment against fixtures.
+Integration tests against `test-app/` live in `crates/cloudpack-pipeline/tests/`. They run a full build and compare the chunk set and module assignment against fixtures.
 
 ## 10. Known issues and future work
 

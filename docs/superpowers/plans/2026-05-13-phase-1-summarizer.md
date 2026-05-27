@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the Wundler Phase 1 module summarizer — a Rust library that takes one JS/TS source file and emits a `BundleGraphNode` (with exports, imports, side-effect marker, call edges, and ambient refs) cached by SHA-256 of the source, then validate the design against Teams' full module graph (50k modules ≈ 100MB).
+**Goal:** Build the Cloudpack Phase 1 module summarizer — a Rust library that takes one JS/TS source file and emits a `BundleGraphNode` (with exports, imports, side-effect marker, call edges, and ambient refs) cached by SHA-256 of the source, then validate the design against Teams' full module graph (50k modules ≈ 100MB).
 
 **Architecture:** SWC is used to parse JS/TS source into an AST, which five independent extractor modules each visit once to produce structured metadata. A content-addressed disk cache keyed on `SHA-256(source)` avoids redundant work; node\_modules get a faster package-level key. A Rayon-parallelized directory scanner feeds the Month 1 validation gate.
 
@@ -12,36 +12,36 @@
 
 ## File Structure
 
-All paths relative to the workspace root (`wundler/`).
+All paths relative to the workspace root (`cloudpack/`).
 
 | File | Responsibility |
 |------|----------------|
 | `Cargo.toml` | Workspace root — declares `[workspace]` members |
-| `crates/wundler-core/Cargo.toml` | Core library manifest with all analysis dependencies |
-| `crates/wundler-core/src/lib.rs` | Module declarations and public re-exports |
-| `crates/wundler-core/src/types.rs` | All shared types: `ContentHash`, `Export`, `Import`, `CallEdge`, `SideEffectMarker`, `ModuleSummary`, `BundleGraphNode` |
-| `crates/wundler-core/src/summarizer/mod.rs` | `ModuleSummarizer` struct, `summarize()`, `summarize_directory()` |
-| `crates/wundler-core/src/summarizer/parser.rs` | `parse_module(source, path) -> Result<Module>` — SWC abstraction |
-| `crates/wundler-core/src/summarizer/exports.rs` | `extract_exports(module) -> Vec<Export>` |
-| `crates/wundler-core/src/summarizer/imports.rs` | `extract_imports(module) -> Vec<Import>` — static + dynamic |
-| `crates/wundler-core/src/summarizer/side_effects.rs` | `analyze_side_effects(module) -> SideEffectMarker` |
-| `crates/wundler-core/src/summarizer/call_edges.rs` | `extract_call_edges(module, exported_names) -> Vec<CallEdge>` |
-| `crates/wundler-core/src/summarizer/ambient_refs.rs` | `extract_ambient_refs(module) -> Vec<String>` |
-| `crates/wundler-core/src/cache/mod.rs` | Re-exports `local` and `package` sub-modules |
-| `crates/wundler-core/src/cache/local.rs` | `LocalCache` — disk-backed content-addressed store |
-| `crates/wundler-core/src/cache/package.rs` | `PackageLevelCache` — node\_modules fast-path key computation |
-| `crates/wundler-core/src/cjs/mod.rs` | Re-exports from `stub` |
-| `crates/wundler-core/src/cjs/stub.rs` | `is_cjs()`, `detect_cjs_exports()`, `generate_cjs_stub()` |
-| `crates/wundler-core/src/validation.rs` | `run_validate_scale()`, `ValidateScaleStats` |
-| `crates/wundler-core/tests/integration_test.rs` | End-to-end summarizer test using fixture files |
-| `crates/wundler-core/tests/fixtures/esm_basic.ts` | Named + default exports, static imports |
-| `crates/wundler-core/tests/fixtures/esm_reexport.ts` | Re-exports and star-exports |
-| `crates/wundler-core/tests/fixtures/dynamic_import.ts` | Literal and non-literal `import()` calls |
-| `crates/wundler-core/tests/fixtures/side_effects_ambient.ts` | Writes to `window` / `document` → DEFINITE |
-| `crates/wundler-core/tests/fixtures/side_effects_pure.ts` | Function-only module → NONE |
-| `crates/wundler-core/tests/fixtures/cjs_module.js` | `module.exports = { a, b, c }` |
-| `crates/wundler-cli/Cargo.toml` | CLI crate manifest |
-| `crates/wundler-cli/src/main.rs` | `wundler summarize <path>` and `wundler validate-scale <path>` |
+| `crates/cloudpack-core/Cargo.toml` | Core library manifest with all analysis dependencies |
+| `crates/cloudpack-core/src/lib.rs` | Module declarations and public re-exports |
+| `crates/cloudpack-core/src/types.rs` | All shared types: `ContentHash`, `Export`, `Import`, `CallEdge`, `SideEffectMarker`, `ModuleSummary`, `BundleGraphNode` |
+| `crates/cloudpack-core/src/summarizer/mod.rs` | `ModuleSummarizer` struct, `summarize()`, `summarize_directory()` |
+| `crates/cloudpack-core/src/summarizer/parser.rs` | `parse_module(source, path) -> Result<Module>` — SWC abstraction |
+| `crates/cloudpack-core/src/summarizer/exports.rs` | `extract_exports(module) -> Vec<Export>` |
+| `crates/cloudpack-core/src/summarizer/imports.rs` | `extract_imports(module) -> Vec<Import>` — static + dynamic |
+| `crates/cloudpack-core/src/summarizer/side_effects.rs` | `analyze_side_effects(module) -> SideEffectMarker` |
+| `crates/cloudpack-core/src/summarizer/call_edges.rs` | `extract_call_edges(module, exported_names) -> Vec<CallEdge>` |
+| `crates/cloudpack-core/src/summarizer/ambient_refs.rs` | `extract_ambient_refs(module) -> Vec<String>` |
+| `crates/cloudpack-core/src/cache/mod.rs` | Re-exports `local` and `package` sub-modules |
+| `crates/cloudpack-core/src/cache/local.rs` | `LocalCache` — disk-backed content-addressed store |
+| `crates/cloudpack-core/src/cache/package.rs` | `PackageLevelCache` — node\_modules fast-path key computation |
+| `crates/cloudpack-core/src/cjs/mod.rs` | Re-exports from `stub` |
+| `crates/cloudpack-core/src/cjs/stub.rs` | `is_cjs()`, `detect_cjs_exports()`, `generate_cjs_stub()` |
+| `crates/cloudpack-core/src/validation.rs` | `run_validate_scale()`, `ValidateScaleStats` |
+| `crates/cloudpack-core/tests/integration_test.rs` | End-to-end summarizer test using fixture files |
+| `crates/cloudpack-core/tests/fixtures/esm_basic.ts` | Named + default exports, static imports |
+| `crates/cloudpack-core/tests/fixtures/esm_reexport.ts` | Re-exports and star-exports |
+| `crates/cloudpack-core/tests/fixtures/dynamic_import.ts` | Literal and non-literal `import()` calls |
+| `crates/cloudpack-core/tests/fixtures/side_effects_ambient.ts` | Writes to `window` / `document` → DEFINITE |
+| `crates/cloudpack-core/tests/fixtures/side_effects_pure.ts` | Function-only module → NONE |
+| `crates/cloudpack-core/tests/fixtures/cjs_module.js` | `module.exports = { a, b, c }` |
+| `crates/cloudpack-cli/Cargo.toml` | CLI crate manifest |
+| `crates/cloudpack-cli/src/main.rs` | `cloudpack summarize <path>` and `cloudpack validate-scale <path>` |
 
 ---
 
@@ -49,15 +49,15 @@ All paths relative to the workspace root (`wundler/`).
 
 **Files:**
 - Create: `Cargo.toml`
-- Create: `crates/wundler-core/Cargo.toml`
-- Create: `crates/wundler-core/src/lib.rs`
-- Create: `crates/wundler-cli/Cargo.toml`
-- Create: `crates/wundler-cli/src/main.rs`
+- Create: `crates/cloudpack-core/Cargo.toml`
+- Create: `crates/cloudpack-core/src/lib.rs`
+- Create: `crates/cloudpack-cli/Cargo.toml`
+- Create: `crates/cloudpack-cli/src/main.rs`
 
 - [ ] **Step 1: Verify the workspace does not yet build**
 
 ```bash
-cd /path/to/wundler && cargo build
+cd /path/to/cloudpack && cargo build
 ```
 Expected: `error: could not find 'Cargo.toml'` (or similar — no workspace exists yet)
 
@@ -67,16 +67,16 @@ Expected: `error: could not find 'Cargo.toml'` (or similar — no workspace exis
 ```toml
 [workspace]
 members = [
-    "crates/wundler-core",
-    "crates/wundler-cli",
+    "crates/cloudpack-core",
+    "crates/cloudpack-cli",
 ]
 resolver = "2"
 ```
 
-`crates/wundler-core/Cargo.toml`:
+`crates/cloudpack-core/Cargo.toml`:
 ```toml
 [package]
-name = "wundler-core"
+name = "cloudpack-core"
 version = "0.1.0"
 edition = "2021"
 
@@ -95,7 +95,7 @@ walkdir = "2"
 tempfile = "3"
 ```
 
-`crates/wundler-core/src/lib.rs`:
+`crates/cloudpack-core/src/lib.rs`:
 ```rust
 pub mod cache;
 pub mod cjs;
@@ -109,25 +109,25 @@ pub use types::{
 };
 ```
 
-`crates/wundler-cli/Cargo.toml`:
+`crates/cloudpack-cli/Cargo.toml`:
 ```toml
 [package]
-name = "wundler-cli"
+name = "cloudpack-cli"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-wundler-core = { path = "../wundler-core" }
+cloudpack-core = { path = "../cloudpack-core" }
 clap = { version = "4", features = ["derive"] }
 indicatif = "0.17"
 anyhow = "1"
 serde_json = "1"
 ```
 
-`crates/wundler-cli/src/main.rs`:
+`crates/cloudpack-cli/src/main.rs`:
 ```rust
 fn main() {
-    println!("wundler");
+    println!("cloudpack");
 }
 ```
 
@@ -144,7 +144,7 @@ Expected: `Finished dev [unoptimized + debuginfo] target(s) in ...`
 
 ```bash
 git add Cargo.toml crates/
-git commit -m "chore: initialize Rust workspace with wundler-core and wundler-cli"
+git commit -m "chore: initialize Rust workspace with cloudpack-core and cloudpack-cli"
 ```
 
 ---
@@ -152,14 +152,14 @@ git commit -m "chore: initialize Rust workspace with wundler-core and wundler-cl
 ## Task 2: Define Core Types
 
 **Files:**
-- Create: `crates/wundler-core/src/types.rs`
+- Create: `crates/cloudpack-core/src/types.rs`
 
 - [ ] **Step 1: Write the failing test**
 
-Replace `crates/wundler-core/src/types.rs` with the test-only version (no types defined yet):
+Replace `crates/cloudpack-core/src/types.rs` with the test-only version (no types defined yet):
 
 ```rust
-// crates/wundler-core/src/types.rs
+// crates/cloudpack-core/src/types.rs
 
 #[cfg(test)]
 mod tests {
@@ -234,16 +234,16 @@ mod tests {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cargo test -p wundler-core types
+cargo test -p cloudpack-core types
 ```
 Expected: compilation error — `cannot find type 'ContentHash'`, `'BundleGraphNode'`, etc.
 
 - [ ] **Step 3: Write the minimal implementation**
 
-Replace `crates/wundler-core/src/types.rs` with the full implementation:
+Replace `crates/cloudpack-core/src/types.rs` with the full implementation:
 
 ```rust
-// crates/wundler-core/src/types.rs
+// crates/cloudpack-core/src/types.rs
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -445,14 +445,14 @@ mod tests {
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-cargo test -p wundler-core types
+cargo test -p cloudpack-core types
 ```
 Expected: `test result: ok. 4 passed; 0 failed; 0 ignored`
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/wundler-core/src/types.rs
+git add crates/cloudpack-core/src/types.rs
 git commit -m "feat(types): define core BundleGraphNode, ModuleSummary, and supporting types"
 ```
 
@@ -461,20 +461,20 @@ git commit -m "feat(types): define core BundleGraphNode, ModuleSummary, and supp
 ## Task 3: SWC Parser Abstraction
 
 **Files:**
-- Create: `crates/wundler-core/src/summarizer/mod.rs`
-- Create: `crates/wundler-core/src/summarizer/parser.rs`
+- Create: `crates/cloudpack-core/src/summarizer/mod.rs`
+- Create: `crates/cloudpack-core/src/summarizer/parser.rs`
 
 - [ ] **Step 1: Write the failing test**
 
-Create `crates/wundler-core/src/summarizer/mod.rs`:
+Create `crates/cloudpack-core/src/summarizer/mod.rs`:
 ```rust
-// crates/wundler-core/src/summarizer/mod.rs
+// crates/cloudpack-core/src/summarizer/mod.rs
 pub mod parser;
 ```
 
-Create `crates/wundler-core/src/summarizer/parser.rs` with only the test:
+Create `crates/cloudpack-core/src/summarizer/parser.rs` with only the test:
 ```rust
-// crates/wundler-core/src/summarizer/parser.rs
+// crates/cloudpack-core/src/summarizer/parser.rs
 
 #[cfg(test)]
 mod tests {
@@ -517,7 +517,7 @@ mod tests {
 }
 ```
 
-Also update `crates/wundler-core/src/lib.rs` to add the `summarizer` module:
+Also update `crates/cloudpack-core/src/lib.rs` to add the `summarizer` module:
 ```rust
 pub mod cache;
 pub mod cjs;
@@ -544,16 +544,16 @@ pub use types::{
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cargo test -p wundler-core summarizer::parser
+cargo test -p cloudpack-core summarizer::parser
 ```
 Expected: compilation error — `cannot find function 'parse_module' in module 'super'`
 
 - [ ] **Step 3: Write the minimal implementation**
 
-Add the implementation to `crates/wundler-core/src/summarizer/parser.rs`:
+Add the implementation to `crates/cloudpack-core/src/summarizer/parser.rs`:
 
 ```rust
-// crates/wundler-core/src/summarizer/parser.rs
+// crates/cloudpack-core/src/summarizer/parser.rs
 use anyhow::{anyhow, Result};
 use std::path::Path;
 use swc_core::common::{sync::Lrc, FileName, SourceMap};
@@ -662,14 +662,14 @@ mod tests {
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-cargo test -p wundler-core summarizer::parser
+cargo test -p cloudpack-core summarizer::parser
 ```
 Expected: `test result: ok. 4 passed; 0 failed; 0 ignored`
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/wundler-core/src/summarizer/
+git add crates/cloudpack-core/src/summarizer/
 git commit -m "feat(parser): add SWC parse_module abstraction with TS/TSX/JS/JSX support"
 ```
 
@@ -678,15 +678,15 @@ git commit -m "feat(parser): add SWC parse_module abstraction with TS/TSX/JS/JSX
 ## Task 4: Export Extractor
 
 **Files:**
-- Create: `crates/wundler-core/src/summarizer/exports.rs`
-- Modify: `crates/wundler-core/src/summarizer/mod.rs`
+- Create: `crates/cloudpack-core/src/summarizer/exports.rs`
+- Modify: `crates/cloudpack-core/src/summarizer/mod.rs`
 
 - [ ] **Step 1: Write the failing test**
 
-Create `crates/wundler-core/src/summarizer/exports.rs` with only the test:
+Create `crates/cloudpack-core/src/summarizer/exports.rs` with only the test:
 
 ```rust
-// crates/wundler-core/src/summarizer/exports.rs
+// crates/cloudpack-core/src/summarizer/exports.rs
 
 #[cfg(test)]
 mod tests {
@@ -773,7 +773,7 @@ mod tests {
 }
 ```
 
-Add `pub mod exports;` to `crates/wundler-core/src/summarizer/mod.rs`:
+Add `pub mod exports;` to `crates/cloudpack-core/src/summarizer/mod.rs`:
 ```rust
 pub mod exports;
 pub mod parser;
@@ -782,7 +782,7 @@ pub mod parser;
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cargo test -p wundler-core summarizer::exports
+cargo test -p cloudpack-core summarizer::exports
 ```
 Expected: compilation error — `cannot find function 'extract_exports' in module 'super'`
 
@@ -791,7 +791,7 @@ Expected: compilation error — `cannot find function 'extract_exports' in modul
 Add the implementation above the `#[cfg(test)]` block in `exports.rs`:
 
 ```rust
-// crates/wundler-core/src/summarizer/exports.rs
+// crates/cloudpack-core/src/summarizer/exports.rs
 use crate::types::{Export, ExportKind};
 use swc_core::ecma::ast::{
     Decl, DefaultDecl, ExportSpecifier, ModuleDecl, ModuleExportName, ModuleItem, Pat,
@@ -1058,14 +1058,14 @@ mod tests {
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-cargo test -p wundler-core summarizer::exports
+cargo test -p cloudpack-core summarizer::exports
 ```
 Expected: `test result: ok. 6 passed; 0 failed; 0 ignored`
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/wundler-core/src/summarizer/
+git add crates/cloudpack-core/src/summarizer/
 git commit -m "feat(exports): extract named, default, re-export, and star-export from module AST"
 ```
 
@@ -1074,15 +1074,15 @@ git commit -m "feat(exports): extract named, default, re-export, and star-export
 ## Task 5: Static Import Extractor
 
 **Files:**
-- Create: `crates/wundler-core/src/summarizer/imports.rs`
-- Modify: `crates/wundler-core/src/summarizer/mod.rs`
+- Create: `crates/cloudpack-core/src/summarizer/imports.rs`
+- Modify: `crates/cloudpack-core/src/summarizer/mod.rs`
 
 - [ ] **Step 1: Write the failing test**
 
-Create `crates/wundler-core/src/summarizer/imports.rs` with only the test:
+Create `crates/cloudpack-core/src/summarizer/imports.rs` with only the test:
 
 ```rust
-// crates/wundler-core/src/summarizer/imports.rs
+// crates/cloudpack-core/src/summarizer/imports.rs
 
 #[cfg(test)]
 mod tests {
@@ -1149,12 +1149,12 @@ mod tests {
 }
 ```
 
-Add `pub mod imports;` to `crates/wundler-core/src/summarizer/mod.rs`.
+Add `pub mod imports;` to `crates/cloudpack-core/src/summarizer/mod.rs`.
 
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cargo test -p wundler-core summarizer::imports
+cargo test -p cloudpack-core summarizer::imports
 ```
 Expected: compilation error — `cannot find function 'extract_imports' in module 'super'`
 
@@ -1163,7 +1163,7 @@ Expected: compilation error — `cannot find function 'extract_imports' in modul
 Replace `imports.rs` with the full implementation (tests included):
 
 ```rust
-// crates/wundler-core/src/summarizer/imports.rs
+// crates/cloudpack-core/src/summarizer/imports.rs
 use crate::types::{Import, ImportKind};
 use swc_core::ecma::ast::{
     Callee, Expr, ImportSpecifier, Lit, Module, ModuleDecl, ModuleItem,
@@ -1359,15 +1359,15 @@ mod tests {
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-cargo test -p wundler-core summarizer::imports
+cargo test -p cloudpack-core summarizer::imports
 ```
 Expected: `test result: ok. 7 passed; 0 failed; 0 ignored`
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/wundler-core/src/summarizer/imports.rs \
-        crates/wundler-core/src/summarizer/mod.rs
+git add crates/cloudpack-core/src/summarizer/imports.rs \
+        crates/cloudpack-core/src/summarizer/mod.rs
 git commit -m "feat(imports): extract static and dynamic imports with binding tracking"
 ```
 
@@ -1376,15 +1376,15 @@ git commit -m "feat(imports): extract static and dynamic imports with binding tr
 ## Task 6: Side Effect Analyzer
 
 **Files:**
-- Create: `crates/wundler-core/src/summarizer/side_effects.rs`
-- Modify: `crates/wundler-core/src/summarizer/mod.rs`
+- Create: `crates/cloudpack-core/src/summarizer/side_effects.rs`
+- Modify: `crates/cloudpack-core/src/summarizer/mod.rs`
 
 - [ ] **Step 1: Write the failing test**
 
-Create `crates/wundler-core/src/summarizer/side_effects.rs` with only the test:
+Create `crates/cloudpack-core/src/summarizer/side_effects.rs` with only the test:
 
 ```rust
-// crates/wundler-core/src/summarizer/side_effects.rs
+// crates/cloudpack-core/src/summarizer/side_effects.rs
 
 #[cfg(test)]
 mod tests {
@@ -1413,7 +1413,7 @@ export function subtract(a: number, b: number): number { return a - b; }
 
     #[test]
     fn test_pure_literal_const_is_none() {
-        let source = "export const PI = 3.14159; export const NAME = 'wundler';";
+        let source = "export const PI = 3.14159; export const NAME = 'cloudpack';";
         let module = parse_module(source, Path::new("constants.ts")).unwrap();
         let marker = analyze_side_effects(&module);
         assert_eq!(marker, SideEffectMarker::None);
@@ -1457,12 +1457,12 @@ export function subtract(a: number, b: number): number { return a - b; }
 }
 ```
 
-Add `pub mod side_effects;` to `crates/wundler-core/src/summarizer/mod.rs`.
+Add `pub mod side_effects;` to `crates/cloudpack-core/src/summarizer/mod.rs`.
 
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cargo test -p wundler-core summarizer::side_effects
+cargo test -p cloudpack-core summarizer::side_effects
 ```
 Expected: compilation error — `cannot find function 'analyze_side_effects' in module 'super'`
 
@@ -1471,7 +1471,7 @@ Expected: compilation error — `cannot find function 'analyze_side_effects' in 
 Replace `side_effects.rs` with the full implementation:
 
 ```rust
-// crates/wundler-core/src/summarizer/side_effects.rs
+// crates/cloudpack-core/src/summarizer/side_effects.rs
 use crate::types::SideEffectMarker;
 use swc_core::ecma::ast::{
     AssignTarget, Decl, Expr, Module, ModuleItem, SimpleAssignTarget, Stmt,
@@ -1599,7 +1599,7 @@ export function subtract(a: number, b: number): number { return a - b; }
 
     #[test]
     fn test_pure_literal_const_is_none() {
-        let source = "export const PI = 3.14159; export const NAME = 'wundler';";
+        let source = "export const PI = 3.14159; export const NAME = 'cloudpack';";
         let module = parse_module(source, Path::new("constants.ts")).unwrap();
         let marker = analyze_side_effects(&module);
         assert_eq!(marker, SideEffectMarker::None);
@@ -1646,15 +1646,15 @@ export function subtract(a: number, b: number): number { return a - b; }
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-cargo test -p wundler-core summarizer::side_effects
+cargo test -p cloudpack-core summarizer::side_effects
 ```
 Expected: `test result: ok. 7 passed; 0 failed; 0 ignored`
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/wundler-core/src/summarizer/side_effects.rs \
-        crates/wundler-core/src/summarizer/mod.rs
+git add crates/cloudpack-core/src/summarizer/side_effects.rs \
+        crates/cloudpack-core/src/summarizer/mod.rs
 git commit -m "feat(side-effects): analyze module-level side effects (NONE/POSSIBLE/DEFINITE)"
 ```
 
@@ -1663,15 +1663,15 @@ git commit -m "feat(side-effects): analyze module-level side effects (NONE/POSSI
 ## Task 7: Call Edge Analyzer
 
 **Files:**
-- Create: `crates/wundler-core/src/summarizer/call_edges.rs`
-- Modify: `crates/wundler-core/src/summarizer/mod.rs`
+- Create: `crates/cloudpack-core/src/summarizer/call_edges.rs`
+- Modify: `crates/cloudpack-core/src/summarizer/mod.rs`
 
 - [ ] **Step 1: Write the failing test**
 
-Create `crates/wundler-core/src/summarizer/call_edges.rs` with only the test:
+Create `crates/cloudpack-core/src/summarizer/call_edges.rs` with only the test:
 
 ```rust
-// crates/wundler-core/src/summarizer/call_edges.rs
+// crates/cloudpack-core/src/summarizer/call_edges.rs
 
 #[cfg(test)]
 mod tests {
@@ -1728,12 +1728,12 @@ export function mul(a: number, b: number): number { return a * b; }
 }
 ```
 
-Add `pub mod call_edges;` to `crates/wundler-core/src/summarizer/mod.rs`.
+Add `pub mod call_edges;` to `crates/cloudpack-core/src/summarizer/mod.rs`.
 
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cargo test -p wundler-core summarizer::call_edges
+cargo test -p cloudpack-core summarizer::call_edges
 ```
 Expected: compilation error — `cannot find function 'extract_call_edges' in module 'super'`
 
@@ -1742,7 +1742,7 @@ Expected: compilation error — `cannot find function 'extract_call_edges' in mo
 Replace `call_edges.rs` with the full implementation:
 
 ```rust
-// crates/wundler-core/src/summarizer/call_edges.rs
+// crates/cloudpack-core/src/summarizer/call_edges.rs
 use crate::types::CallEdge;
 use std::collections::HashSet;
 use swc_core::ecma::ast::{Callee, Decl, Expr, FnDecl, Module, ModuleDecl, ModuleItem, Stmt};
@@ -1871,15 +1871,15 @@ export function mul(a: number, b: number): number { return a * b; }
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-cargo test -p wundler-core summarizer::call_edges
+cargo test -p cloudpack-core summarizer::call_edges
 ```
 Expected: `test result: ok. 3 passed; 0 failed; 0 ignored`
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/wundler-core/src/summarizer/call_edges.rs \
-        crates/wundler-core/src/summarizer/mod.rs
+git add crates/cloudpack-core/src/summarizer/call_edges.rs \
+        crates/cloudpack-core/src/summarizer/mod.rs
 git commit -m "feat(call-edges): extract intra-module export-to-export call graph"
 ```
 
@@ -1888,15 +1888,15 @@ git commit -m "feat(call-edges): extract intra-module export-to-export call grap
 ## Task 8: Ambient Ref Analyzer
 
 **Files:**
-- Create: `crates/wundler-core/src/summarizer/ambient_refs.rs`
-- Modify: `crates/wundler-core/src/summarizer/mod.rs`
+- Create: `crates/cloudpack-core/src/summarizer/ambient_refs.rs`
+- Modify: `crates/cloudpack-core/src/summarizer/mod.rs`
 
 - [ ] **Step 1: Write the failing test**
 
-Create `crates/wundler-core/src/summarizer/ambient_refs.rs` with only the test:
+Create `crates/cloudpack-core/src/summarizer/ambient_refs.rs` with only the test:
 
 ```rust
-// crates/wundler-core/src/summarizer/ambient_refs.rs
+// crates/cloudpack-core/src/summarizer/ambient_refs.rs
 
 #[cfg(test)]
 mod tests {
@@ -1952,12 +1952,12 @@ mod tests {
 }
 ```
 
-Add `pub mod ambient_refs;` to `crates/wundler-core/src/summarizer/mod.rs`.
+Add `pub mod ambient_refs;` to `crates/cloudpack-core/src/summarizer/mod.rs`.
 
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cargo test -p wundler-core summarizer::ambient_refs
+cargo test -p cloudpack-core summarizer::ambient_refs
 ```
 Expected: compilation error — `cannot find function 'extract_ambient_refs' in module 'super'`
 
@@ -1966,7 +1966,7 @@ Expected: compilation error — `cannot find function 'extract_ambient_refs' in 
 Replace `ambient_refs.rs` with the full implementation:
 
 ```rust
-// crates/wundler-core/src/summarizer/ambient_refs.rs
+// crates/cloudpack-core/src/summarizer/ambient_refs.rs
 use std::collections::HashSet;
 use swc_core::ecma::ast::{Expr, MemberProp, Module};
 use swc_core::ecma::visit::{Visit, VisitWith};
@@ -2100,15 +2100,15 @@ mod tests {
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-cargo test -p wundler-core summarizer::ambient_refs
+cargo test -p cloudpack-core summarizer::ambient_refs
 ```
 Expected: `test result: ok. 5 passed; 0 failed; 0 ignored`
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/wundler-core/src/summarizer/ambient_refs.rs \
-        crates/wundler-core/src/summarizer/mod.rs
+git add crates/cloudpack-core/src/summarizer/ambient_refs.rs \
+        crates/cloudpack-core/src/summarizer/mod.rs
 git commit -m "feat(ambient-refs): detect reads/writes to browser and Node.js globals"
 ```
 
@@ -2117,19 +2117,19 @@ git commit -m "feat(ambient-refs): detect reads/writes to browser and Node.js gl
 ## Task 9: ModuleSummarizer — Wire All Extractors
 
 **Files:**
-- Modify: `crates/wundler-core/src/summarizer/mod.rs`
-- Create: `crates/wundler-core/tests/fixtures/esm_basic.ts`
-- Create: `crates/wundler-core/tests/fixtures/esm_reexport.ts`
-- Create: `crates/wundler-core/tests/fixtures/dynamic_import.ts`
-- Create: `crates/wundler-core/tests/fixtures/side_effects_ambient.ts`
-- Create: `crates/wundler-core/tests/fixtures/side_effects_pure.ts`
-- Create: `crates/wundler-core/tests/integration_test.rs`
+- Modify: `crates/cloudpack-core/src/summarizer/mod.rs`
+- Create: `crates/cloudpack-core/tests/fixtures/esm_basic.ts`
+- Create: `crates/cloudpack-core/tests/fixtures/esm_reexport.ts`
+- Create: `crates/cloudpack-core/tests/fixtures/dynamic_import.ts`
+- Create: `crates/cloudpack-core/tests/fixtures/side_effects_ambient.ts`
+- Create: `crates/cloudpack-core/tests/fixtures/side_effects_pure.ts`
+- Create: `crates/cloudpack-core/tests/integration_test.rs`
 
 - [ ] **Step 1: Write the failing test**
 
 Create the fixture files:
 
-`crates/wundler-core/tests/fixtures/esm_basic.ts`:
+`crates/cloudpack-core/tests/fixtures/esm_basic.ts`:
 ```typescript
 import { createContext } from 'react';
 import type { FC } from 'react';
@@ -2151,14 +2151,14 @@ export default function main(): void {
 }
 ```
 
-`crates/wundler-core/tests/fixtures/esm_reexport.ts`:
+`crates/cloudpack-core/tests/fixtures/esm_reexport.ts`:
 ```typescript
 export { useState, useEffect } from 'react';
 export * from './utils';
 export { greet as greetUser } from './greeter';
 ```
 
-`crates/wundler-core/tests/fixtures/dynamic_import.ts`:
+`crates/cloudpack-core/tests/fixtures/dynamic_import.ts`:
 ```typescript
 export async function loadHeavy(): Promise<unknown> {
   const mod = await import('./heavy');
@@ -2170,7 +2170,7 @@ export async function loadByName(name: string): Promise<unknown> {
 }
 ```
 
-`crates/wundler-core/tests/fixtures/side_effects_ambient.ts`:
+`crates/cloudpack-core/tests/fixtures/side_effects_ambient.ts`:
 ```typescript
 window.APP_VERSION = '2.0.0';
 document.title = 'My App';
@@ -2180,7 +2180,7 @@ export function getVersion(): string {
 }
 ```
 
-`crates/wundler-core/tests/fixtures/side_effects_pure.ts`:
+`crates/cloudpack-core/tests/fixtures/side_effects_pure.ts`:
 ```typescript
 export function add(a: number, b: number): number {
   return a + b;
@@ -2193,13 +2193,13 @@ export function multiply(a: number, b: number): number {
 export const PI = 3.14159;
 ```
 
-Create the integration test at `crates/wundler-core/tests/integration_test.rs` with only the test (no `ModuleSummarizer` yet):
+Create the integration test at `crates/cloudpack-core/tests/integration_test.rs` with only the test (no `ModuleSummarizer` yet):
 
 ```rust
-// crates/wundler-core/tests/integration_test.rs
+// crates/cloudpack-core/tests/integration_test.rs
 use std::path::PathBuf;
-use wundler_core::summarizer::ModuleSummarizer;
-use wundler_core::types::{ExportKind, ImportKind, SideEffectMarker};
+use cloudpack_core::summarizer::ModuleSummarizer;
+use cloudpack_core::types::{ExportKind, ImportKind, SideEffectMarker};
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures")
@@ -2260,7 +2260,7 @@ fn test_summarize_dynamic_import() {
     let summarizer = ModuleSummarizer::new();
     let node = summarizer.summarize(&path).unwrap();
 
-    let dynamic: Vec<&wundler_core::types::Import> =
+    let dynamic: Vec<&cloudpack_core::types::Import> =
         node.summary.imports.iter().filter(|i| i.is_dynamic).collect();
     assert_eq!(dynamic.len(), 1, "expected 1 literal dynamic import, got: {:?}", dynamic);
     assert_eq!(dynamic[0].specifier, "./heavy");
@@ -2302,16 +2302,16 @@ fn test_summary_serializes_to_json() {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cargo test -p wundler-core --test integration_test
+cargo test -p cloudpack-core --test integration_test
 ```
 Expected: compilation error — `module 'summarizer' has no struct 'ModuleSummarizer'`
 
 - [ ] **Step 3: Write the minimal implementation**
 
-Replace `crates/wundler-core/src/summarizer/mod.rs` with the full wired implementation:
+Replace `crates/cloudpack-core/src/summarizer/mod.rs` with the full wired implementation:
 
 ```rust
-// crates/wundler-core/src/summarizer/mod.rs
+// crates/cloudpack-core/src/summarizer/mod.rs
 pub mod ambient_refs;
 pub mod call_edges;
 pub mod exports;
@@ -2396,15 +2396,15 @@ impl Default for ModuleSummarizer {
 
 > **Note:** This implementation imports from `crate::cjs::stub`. The `cjs` module stub (Task 10) must exist for this to compile. Create a minimal placeholder now:
 
-Create `crates/wundler-core/src/cjs/mod.rs`:
+Create `crates/cloudpack-core/src/cjs/mod.rs`:
 ```rust
 pub mod stub;
 pub use stub::{detect_cjs_exports, generate_cjs_stub, is_cjs};
 ```
 
-Create `crates/wundler-core/src/cjs/stub.rs` (placeholder — full implementation in Task 10):
+Create `crates/cloudpack-core/src/cjs/stub.rs` (placeholder — full implementation in Task 10):
 ```rust
-// crates/wundler-core/src/cjs/stub.rs
+// crates/cloudpack-core/src/cjs/stub.rs
 use std::path::Path;
 
 pub fn is_cjs(source: &str) -> bool {
@@ -2420,7 +2420,7 @@ pub fn generate_cjs_stub(path: &Path, _exports: &[String]) -> String {
 }
 ```
 
-Also restore the full `crates/wundler-core/src/lib.rs` (remove the commented-out modules from Task 3):
+Also restore the full `crates/cloudpack-core/src/lib.rs` (remove the commented-out modules from Task 3):
 
 ```rust
 pub mod cache;
@@ -2437,23 +2437,23 @@ pub use types::{
 
 Create placeholder modules to unblock compilation:
 
-`crates/wundler-core/src/cache/mod.rs`:
+`crates/cloudpack-core/src/cache/mod.rs`:
 ```rust
 pub mod local;
 pub mod package;
 ```
 
-`crates/wundler-core/src/cache/local.rs`:
+`crates/cloudpack-core/src/cache/local.rs`:
 ```rust
 // placeholder — full implementation in Task 11
 ```
 
-`crates/wundler-core/src/cache/package.rs`:
+`crates/cloudpack-core/src/cache/package.rs`:
 ```rust
 // placeholder — full implementation in Task 12
 ```
 
-`crates/wundler-core/src/validation.rs`:
+`crates/cloudpack-core/src/validation.rs`:
 ```rust
 // placeholder — full implementation in Task 15
 ```
@@ -2461,19 +2461,19 @@ pub mod package;
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-cargo test -p wundler-core --test integration_test
+cargo test -p cloudpack-core --test integration_test
 ```
 Expected: `test result: ok. 6 passed; 0 failed; 0 ignored`
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/wundler-core/src/summarizer/mod.rs \
-        crates/wundler-core/src/cjs/ \
-        crates/wundler-core/src/cache/ \
-        crates/wundler-core/src/validation.rs \
-        crates/wundler-core/src/lib.rs \
-        crates/wundler-core/tests/
+git add crates/cloudpack-core/src/summarizer/mod.rs \
+        crates/cloudpack-core/src/cjs/ \
+        crates/cloudpack-core/src/cache/ \
+        crates/cloudpack-core/src/validation.rs \
+        crates/cloudpack-core/src/lib.rs \
+        crates/cloudpack-core/tests/
 git commit -m "feat(summarizer): wire all extractors into ModuleSummarizer + integration tests"
 ```
 
@@ -2482,14 +2482,14 @@ git commit -m "feat(summarizer): wire all extractors into ModuleSummarizer + int
 ## Task 10: Content-Addressed Local Cache
 
 **Files:**
-- Modify: `crates/wundler-core/src/cache/local.rs`
+- Modify: `crates/cloudpack-core/src/cache/local.rs`
 
 - [ ] **Step 1: Write the failing test**
 
-Replace `crates/wundler-core/src/cache/local.rs` with the test-only version:
+Replace `crates/cloudpack-core/src/cache/local.rs` with the test-only version:
 
 ```rust
-// crates/wundler-core/src/cache/local.rs
+// crates/cloudpack-core/src/cache/local.rs
 
 #[cfg(test)]
 mod tests {
@@ -2573,16 +2573,16 @@ mod tests {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cargo test -p wundler-core cache::local
+cargo test -p cloudpack-core cache::local
 ```
 Expected: compilation error — `cannot find struct 'LocalCache' in module 'super'`
 
 - [ ] **Step 3: Write the minimal implementation**
 
-Replace `crates/wundler-core/src/cache/local.rs` with the full implementation:
+Replace `crates/cloudpack-core/src/cache/local.rs` with the full implementation:
 
 ```rust
-// crates/wundler-core/src/cache/local.rs
+// crates/cloudpack-core/src/cache/local.rs
 use crate::types::{ContentHash, ModuleSummary};
 use anyhow::{Context, Result};
 use std::fs;
@@ -2606,13 +2606,13 @@ impl LocalCache {
         Ok(Self { root })
     }
 
-    /// Build the default cache path: `~/.wundler/cache/summaries/`.
+    /// Build the default cache path: `~/.cloudpack/cache/summaries/`.
     pub fn with_default_root() -> Result<Self> {
         let home = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("."));
-        Self::new(home.join(".wundler").join("cache").join("summaries"))
+        Self::new(home.join(".cloudpack").join("cache").join("summaries"))
     }
 
     /// Look up a cached `ModuleSummary` by content hash.
@@ -2745,14 +2745,14 @@ mod tests {
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-cargo test -p wundler-core cache::local
+cargo test -p cloudpack-core cache::local
 ```
 Expected: `test result: ok. 4 passed; 0 failed; 0 ignored`
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/wundler-core/src/cache/local.rs
+git add crates/cloudpack-core/src/cache/local.rs
 git commit -m "feat(cache): add content-addressed local disk cache with atomic writes and sharding"
 ```
 
@@ -2761,14 +2761,14 @@ git commit -m "feat(cache): add content-addressed local disk cache with atomic w
 ## Task 11: Package-Level Fast Path Cache
 
 **Files:**
-- Modify: `crates/wundler-core/src/cache/package.rs`
+- Modify: `crates/cloudpack-core/src/cache/package.rs`
 
 - [ ] **Step 1: Write the failing test**
 
-Replace `crates/wundler-core/src/cache/package.rs` with the test-only version:
+Replace `crates/cloudpack-core/src/cache/package.rs` with the test-only version:
 
 ```rust
-// crates/wundler-core/src/cache/package.rs
+// crates/cloudpack-core/src/cache/package.rs
 
 #[cfg(test)]
 mod tests {
@@ -2870,16 +2870,16 @@ mod tests {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cargo test -p wundler-core cache::package
+cargo test -p cloudpack-core cache::package
 ```
 Expected: compilation error — `cannot find function 'find_package_dir'`, `'compute_package_hash'`, `'PackageLevelCache'`
 
 - [ ] **Step 3: Write the minimal implementation**
 
-Replace `crates/wundler-core/src/cache/package.rs` with the full implementation:
+Replace `crates/cloudpack-core/src/cache/package.rs` with the full implementation:
 
 ```rust
-// crates/wundler-core/src/cache/package.rs
+// crates/cloudpack-core/src/cache/package.rs
 //
 // Two-tier cache fast path for node_modules.
 //
@@ -3093,14 +3093,14 @@ mod tests {
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-cargo test -p wundler-core cache::package
+cargo test -p cloudpack-core cache::package
 ```
 Expected: `test result: ok. 6 passed; 0 failed; 0 ignored`
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/wundler-core/src/cache/package.rs
+git add crates/cloudpack-core/src/cache/package.rs
 git commit -m "feat(cache): add package-level fast path for node_modules (skip source hashing)"
 ```
 
@@ -3109,14 +3109,14 @@ git commit -m "feat(cache): add package-level fast path for node_modules (skip s
 ## Task 12: CJS Stub Generator
 
 **Files:**
-- Modify: `crates/wundler-core/src/cjs/stub.rs`
-- Create: `crates/wundler-core/tests/fixtures/cjs_module.js`
+- Modify: `crates/cloudpack-core/src/cjs/stub.rs`
+- Create: `crates/cloudpack-core/tests/fixtures/cjs_module.js`
 
 - [ ] **Step 1: Write the failing test**
 
 Create the CJS fixture:
 
-`crates/wundler-core/tests/fixtures/cjs_module.js`:
+`crates/cloudpack-core/tests/fixtures/cjs_module.js`:
 ```javascript
 const helper = (x) => x * 2;
 
@@ -3127,10 +3127,10 @@ module.exports = {
 };
 ```
 
-Replace `crates/wundler-core/src/cjs/stub.rs` with the test-only version:
+Replace `crates/cloudpack-core/src/cjs/stub.rs` with the test-only version:
 
 ```rust
-// crates/wundler-core/src/cjs/stub.rs
+// crates/cloudpack-core/src/cjs/stub.rs
 
 #[cfg(test)]
 mod tests {
@@ -3202,16 +3202,16 @@ mod tests {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cargo test -p wundler-core cjs::stub
+cargo test -p cloudpack-core cjs::stub
 ```
 Expected: compilation error or runtime failure — `detect_cjs_exports` returns empty vec (placeholder from Task 9)
 
 - [ ] **Step 3: Write the minimal implementation**
 
-Replace `crates/wundler-core/src/cjs/stub.rs` with the full implementation:
+Replace `crates/cloudpack-core/src/cjs/stub.rs` with the full implementation:
 
 ```rust
-// crates/wundler-core/src/cjs/stub.rs
+// crates/cloudpack-core/src/cjs/stub.rs
 //
 // CJS → ESM stub generator using static analysis (regex-based).
 //
@@ -3449,15 +3449,15 @@ mod tests {
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-cargo test -p wundler-core cjs::stub
+cargo test -p cloudpack-core cjs::stub
 ```
 Expected: `test result: ok. 5 passed; 0 failed; 0 ignored`
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/wundler-core/src/cjs/stub.rs \
-        crates/wundler-core/tests/fixtures/cjs_module.js
+git add crates/cloudpack-core/src/cjs/stub.rs \
+        crates/cloudpack-core/tests/fixtures/cjs_module.js
 git commit -m "feat(cjs): add static CJS export detection and ESM stub generator"
 ```
 
@@ -3466,11 +3466,11 @@ git commit -m "feat(cjs): add static CJS export detection and ESM stub generator
 ## Task 13: Parallel Directory Summarizer
 
 **Files:**
-- Modify: `crates/wundler-core/src/summarizer/mod.rs`
+- Modify: `crates/cloudpack-core/src/summarizer/mod.rs`
 
 - [ ] **Step 1: Write the failing test**
 
-Add to the inline test module of `crates/wundler-core/src/summarizer/mod.rs` (the file already exists — append the `#[cfg(test)]` block with the new test):
+Add to the inline test module of `crates/cloudpack-core/src/summarizer/mod.rs` (the file already exists — append the `#[cfg(test)]` block with the new test):
 
 ```rust
 #[cfg(test)]
@@ -3546,13 +3546,13 @@ mod tests {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cargo test -p wundler-core summarizer::tests
+cargo test -p cloudpack-core summarizer::tests
 ```
 Expected: compilation error — `cannot find function 'summarize_directory' in module 'super'`
 
 - [ ] **Step 3: Write the minimal implementation**
 
-Add `summarize_directory` to `crates/wundler-core/src/summarizer/mod.rs` (append after `impl Default for ModuleSummarizer`):
+Add `summarize_directory` to `crates/cloudpack-core/src/summarizer/mod.rs` (append after `impl Default for ModuleSummarizer`):
 
 ```rust
 use crate::cache::local::LocalCache;
@@ -3627,14 +3627,14 @@ pub fn summarize_directory(dir: &Path, cache: &LocalCache) -> Result<Vec<BundleG
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-cargo test -p wundler-core summarizer::tests
+cargo test -p cloudpack-core summarizer::tests
 ```
 Expected: `test result: ok. 3 passed; 0 failed; 0 ignored`
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/wundler-core/src/summarizer/mod.rs
+git add crates/cloudpack-core/src/summarizer/mod.rs
 git commit -m "feat(summarizer): add parallel directory summarizer with cache integration (rayon)"
 ```
 
@@ -3643,15 +3643,15 @@ git commit -m "feat(summarizer): add parallel directory summarizer with cache in
 ## Task 14: Validation Module + CLI
 
 **Files:**
-- Modify: `crates/wundler-core/src/validation.rs`
-- Modify: `crates/wundler-cli/src/main.rs`
+- Modify: `crates/cloudpack-core/src/validation.rs`
+- Modify: `crates/cloudpack-cli/src/main.rs`
 
 - [ ] **Step 1: Write the failing test**
 
-Replace `crates/wundler-core/src/validation.rs` with the test-only version:
+Replace `crates/cloudpack-core/src/validation.rs` with the test-only version:
 
 ```rust
-// crates/wundler-core/src/validation.rs
+// crates/cloudpack-core/src/validation.rs
 
 #[cfg(test)]
 mod tests {
@@ -3709,16 +3709,16 @@ mod tests {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cargo test -p wundler-core validation
+cargo test -p cloudpack-core validation
 ```
 Expected: compilation error — `cannot find function 'run_validate_scale'` and `'ValidateScaleStats'`
 
 - [ ] **Step 3: Write the minimal implementation**
 
-Replace `crates/wundler-core/src/validation.rs` with the full implementation:
+Replace `crates/cloudpack-core/src/validation.rs` with the full implementation:
 
 ```rust
-// crates/wundler-core/src/validation.rs
+// crates/cloudpack-core/src/validation.rs
 //
 // Month 1 validation gate: summarize all modules, report metrics.
 // Target: 50k modules × ~2KB/summary ≈ 100MB total cache size.
@@ -3892,22 +3892,22 @@ mod tests {
 }
 ```
 
-Now wire the CLI. Replace `crates/wundler-cli/src/main.rs`:
+Now wire the CLI. Replace `crates/cloudpack-cli/src/main.rs`:
 
 ```rust
-// crates/wundler-cli/src/main.rs
+// crates/cloudpack-cli/src/main.rs
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
-use wundler_core::cache::local::LocalCache;
-use wundler_core::summarizer::ModuleSummarizer;
-use wundler_core::validation::run_validate_scale;
+use cloudpack_core::cache::local::LocalCache;
+use cloudpack_core::summarizer::ModuleSummarizer;
+use cloudpack_core::validation::run_validate_scale;
 
 #[derive(Parser)]
 #[command(
-    name = "wundler",
-    about = "Wundler — Teams-scale JavaScript bundler (Phase 1: Module Summarizer)",
+    name = "cloudpack",
+    about = "Cloudpack — Teams-scale JavaScript bundler (Phase 1: Module Summarizer)",
     version = "0.1.0"
 )]
 struct Cli {
@@ -3921,7 +3921,7 @@ enum Commands {
     Summarize {
         /// Path to the JS/TS file to summarize.
         path: PathBuf,
-        /// Directory to use for the summary cache (default: ~/.wundler/cache/summaries).
+        /// Directory to use for the summary cache (default: ~/.cloudpack/cache/summaries).
         #[arg(long)]
         cache_dir: Option<PathBuf>,
     },
@@ -3932,7 +3932,7 @@ enum Commands {
     ValidateScale {
         /// Root directory to scan recursively for JS/TS files.
         path: PathBuf,
-        /// Directory to use for the summary cache (default: ~/.wundler/cache/summaries).
+        /// Directory to use for the summary cache (default: ~/.cloudpack/cache/summaries).
         #[arg(long)]
         cache_dir: Option<PathBuf>,
     },
@@ -3994,7 +3994,7 @@ fn main() -> Result<()> {
 
             pb.finish_with_message("done");
 
-            println!("\n=== Wundler Phase 1 Validation Gate ===");
+            println!("\n=== Cloudpack Phase 1 Validation Gate ===");
             println!("  Modules processed  : {}", stats.module_count);
             println!(
                 "  Total cache size   : {:.2} MB  (target: ~100 MB for 50k modules)",
@@ -4040,10 +4040,10 @@ fn main() -> Result<()> {
 }
 ```
 
-Add the `walkdir` dependency to `crates/wundler-cli/Cargo.toml`:
+Add the `walkdir` dependency to `crates/cloudpack-cli/Cargo.toml`:
 ```toml
 [dependencies]
-wundler-core = { path = "../wundler-core" }
+cloudpack-core = { path = "../cloudpack-core" }
 clap = { version = "4", features = ["derive"] }
 indicatif = "0.17"
 anyhow = "1"
@@ -4054,22 +4054,22 @@ walkdir = "2"
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-cargo test -p wundler-core validation
+cargo test -p cloudpack-core validation
 ```
 Expected: `test result: ok. 2 passed; 0 failed; 0 ignored`
 
 ```bash
-cargo build -p wundler-cli
+cargo build -p cloudpack-cli
 ```
 Expected: `Finished dev [unoptimized + debuginfo] target(s) in ...`
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/wundler-core/src/validation.rs \
-        crates/wundler-cli/src/main.rs \
-        crates/wundler-cli/Cargo.toml
-git commit -m "feat(cli): add wundler summarize and validate-scale commands with Month 1 gate check"
+git add crates/cloudpack-core/src/validation.rs \
+        crates/cloudpack-cli/src/main.rs \
+        crates/cloudpack-cli/Cargo.toml
+git commit -m "feat(cli): add cloudpack summarize and validate-scale commands with Month 1 gate check"
 ```
 
 ---
@@ -4097,27 +4097,27 @@ All test crates must show `0 failed`.
 - [ ] **Step 2: Build release binary**
 
 ```bash
-cargo build --release -p wundler-cli
+cargo build --release -p cloudpack-cli
 ```
 Expected: `Finished release [optimized] target(s) in ...`
 
-- [ ] **Step 3: Smoke-test `wundler summarize` against the fixture file**
+- [ ] **Step 3: Smoke-test `cloudpack summarize` against the fixture file**
 
 ```bash
-./target/release/wundler summarize crates/wundler-core/tests/fixtures/side_effects_pure.ts \
-    --cache-dir /tmp/wundler-smoke-cache
+./target/release/cloudpack summarize crates/cloudpack-core/tests/fixtures/side_effects_pure.ts \
+    --cache-dir /tmp/cloudpack-smoke-cache
 ```
 Expected: JSON output including `"sideEffects":{"kind":"NONE"}` and an `exports` array with `add`, `multiply`, `PI`.
 
-- [ ] **Step 4: Smoke-test `wundler validate-scale` against the fixture directory**
+- [ ] **Step 4: Smoke-test `cloudpack validate-scale` against the fixture directory**
 
 ```bash
-./target/release/wundler validate-scale crates/wundler-core/tests/fixtures \
-    --cache-dir /tmp/wundler-smoke-cache
+./target/release/cloudpack validate-scale crates/cloudpack-core/tests/fixtures \
+    --cache-dir /tmp/cloudpack-smoke-cache
 ```
 Expected: Table output including:
 ```
-=== Wundler Phase 1 Validation Gate ===
+=== Cloudpack Phase 1 Validation Gate ===
   Modules processed  : 5
   Total cache size   : 0.00 MB  ...
   ...
@@ -4130,13 +4130,13 @@ Expected: Table output including:
 > **Pre-requisite:** Clone or mount the Teams source tree at `<TEAMS_ROOT>`. The Teams mono-repo contains 50k+ JS/TS modules.
 
 ```bash
-./target/release/wundler validate-scale <TEAMS_ROOT>/packages \
-    --cache-dir ~/.wundler/cache/summaries
+./target/release/cloudpack validate-scale <TEAMS_ROOT>/packages \
+    --cache-dir ~/.cloudpack/cache/summaries
 ```
 
 **Expected output for a PASSING gate:**
 ```
-=== Wundler Phase 1 Validation Gate ===
+=== Cloudpack Phase 1 Validation Gate ===
   Modules processed  : ~50,000
   Total cache size   : ~100.00 MB  (target: ~100 MB for 50k modules)
   Avg per module     : ~2,000 bytes
@@ -4151,7 +4151,7 @@ Expected: Table output including:
 **If the gate FAILS** (more than 3 KB/module average):
 - The `ModuleSummary` struct is storing redundant or over-verbose data.
 - Common causes: storing source spans, storing full AST nodes, not deduplicating string interning.
-- Fix: audit the JSON output of a few modules with `wundler summarize`, identify bloated fields, and prune `ModuleSummary`.
+- Fix: audit the JSON output of a few modules with `cloudpack summarize`, identify bloated fields, and prune `ModuleSummary`.
 - **Do not proceed to Phase 2 until this gate passes.** Phase 2's performance guarantees depend on summaries fitting in ~100MB total.
 
 - [ ] **Step 6: Final commit**
@@ -4183,8 +4183,8 @@ git commit -m "chore: Phase 1 complete — all tests pass, CLI wired, Month 1 va
 | CJS → ESM stub (static analysis path) | Task 12 |
 | Parallel `summarize_directory` with Rayon | Task 13 |
 | Month 1 gate: 100MB total cache check | Tasks 14–15 |
-| `wundler summarize <path>` CLI | Task 14 |
-| `wundler validate-scale <path>` CLI | Task 14 |
+| `cloudpack summarize <path>` CLI | Task 14 |
+| `cloudpack validate-scale <path>` CLI | Task 14 |
 
 ### Type Consistency Verified
 

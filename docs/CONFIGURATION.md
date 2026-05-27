@@ -1,14 +1,14 @@
-# wundler configuration reference
+# cloudpack configuration reference
 
-Complete reference for every configuration file and tunable in wundler. Fields are documented with their type, default, and behavior. Examples are runnable as written.
+Complete reference for every configuration file and tunable in cloudpack. Fields are documented with their type, default, and behavior. Examples are runnable as written.
 
-## wundler.toml
+## cloudpack.toml
 
-The build configuration. Passed to every wundler subcommand via `--config wundler.toml`. All fields under `[build]` are read by `BuildConfig`; the `[entry]` table maps route names to entry module paths.
+The build configuration. Passed to every cloudpack subcommand via `--config cloudpack.toml`. All fields under `[build]` are read by `BuildConfig`; the `[entry]` table maps route names to entry module paths.
 
 ```toml
 [build]
-# Required: source root — directory wundler walks for .ts/.tsx/.js/.jsx
+# Required: source root — directory cloudpack walks for .ts/.tsx/.js/.jsx
 root = "src"
 
 # Required: output directory for built chunks, manifest.json, index.html
@@ -39,7 +39,7 @@ source_maps = false
 
 **`[build] out_dir`** (required, string). Where `manifest.json`, `index.html`, and the `chunks/` directory are written. Created if it does not exist. The directory is not cleaned between builds — content-hashed chunk filenames make stale files harmless, but a periodic `rm -rf dist/chunks` is reasonable hygiene.
 
-**`[build] engine`** (string, default `"rolldown"`). The `TransformEngine` to use. `"rolldown"` invokes rolldown as a subprocess and produces correct output for every JavaScript pattern wundler has been tested with. `"swc"` uses `SwcTransformAdapter`, which is faster on cold start but performs per-chunk scope-flattening in pure Rust; it produces incorrect output for some complex re-export and default-aliasing patterns. Choose `swc` only when you have validated it against your codebase.
+**`[build] engine`** (string, default `"rolldown"`). The `TransformEngine` to use. `"rolldown"` invokes rolldown as a subprocess and produces correct output for every JavaScript pattern cloudpack has been tested with. `"swc"` uses `SwcTransformAdapter`, which is faster on cold start but performs per-chunk scope-flattening in pure Rust; it produces incorrect output for some complex re-export and default-aliasing patterns. Choose `swc` only when you have validated it against your codebase.
 
 **`[build] commons_threshold`** (integer, default `2`). The module-sharing threshold for commons extraction. A module reachable from N or more route entries is hoisted to a shared chunk. Raising this to 3 or higher reduces commons-chunk size at the cost of per-route duplication. Lowering to 1 disables commons extraction (every shared module is duplicated).
 
@@ -49,10 +49,10 @@ source_maps = false
 
 ## abs.toml
 
-Configuration for `wundler abs serve`. Mapped 1:1 to the `AbsConfig` struct in `crates/wundler-abs/src/server.rs`.
+Configuration for `cloudpack abs serve`. Mapped 1:1 to the `AbsConfig` struct in `crates/cloudpack-abs/src/server.rs`.
 
 ```toml
-# Path to the ChunkManifest JSON produced by wundler build
+# Path to the ChunkManifest JSON produced by cloudpack build
 manifest_path = "dist/manifest.json"
 
 # Base URL the Service Worker uses to construct fetch_urls
@@ -62,7 +62,7 @@ cdn_base_url = "https://cdn.example.com"
 
 # Path to write telemetry JSONL (one line per /manifest request)
 # Omit to disable telemetry
-telemetry_log = "/var/log/wundler/telemetry.jsonl"
+telemetry_log = "/var/log/cloudpack/telemetry.jsonl"
 
 # Port for the ABS HTTP server
 port = 4500
@@ -82,7 +82,7 @@ ttl_seconds = 300
 
 **`cdn_base_url`** (string, default `"https://cdn.example.com"`). Prefix used to construct every URL returned in `fetch_urls` and `prefetch_urls`. The ABS does not serve chunk content — only delta manifests. The CDN must mirror the `dist/chunks/` directory layout.
 
-**`telemetry_log`** (string, default `"/tmp/wundler-telemetry.jsonl"`). Append-only JSONL log. One line per `POST /manifest` request. Consumed by `wundler pgo ingest`. To disable telemetry entirely, point this at `/dev/null`. The directory must exist and be writable.
+**`telemetry_log`** (string, default `"/tmp/cloudpack-telemetry.jsonl"`). Append-only JSONL log. One line per `POST /manifest` request. Consumed by `cloudpack pgo ingest`. To disable telemetry entirely, point this at `/dev/null`. The directory must exist and be writable.
 
 **`port`** (integer, default `8080` in `AbsConfig::default()`, frequently overridden to `4500` in deployment). TCP port. Bind address is `0.0.0.0` — front the ABS with a reverse proxy if you need TLS, rate limiting, or authentication.
 
@@ -92,13 +92,13 @@ ttl_seconds = 300
 
 ## C³ cluster configuration
 
-The Conditional Co-request Clustering pass that drives PGO merge suggestions. Tuned by `C3Config` in `crates/wundler-pgo/src/clustering.rs`. There is currently no `[pgo]` section in any TOML file; tuning is done by passing arguments to `compute_clusters`. A future release will expose these as CLI flags on `wundler pgo apply`.
+The Conditional Co-request Clustering pass that drives PGO merge suggestions. Tuned by `C3Config` in `crates/cloudpack-pgo/src/clustering.rs`. There is currently no `[pgo]` section in any TOML file; tuning is done by passing arguments to `compute_clusters`. A future release will expose these as CLI flags on `cloudpack pgo apply`.
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `merge_threshold` | float | `0.70` | `P(b\|a)` AND `P(a\|b)` must both exceed this for a merge candidate |
 | `max_merge_modules` | int | `500` | Skip merge if combined module count would exceed this |
-| `min_sessions` | int | `100` | `wundler pgo status` shows `NOT READY` below this |
+| `min_sessions` | int | `100` | `cloudpack pgo status` shows `NOT READY` below this |
 
 ### Field details
 
@@ -110,17 +110,17 @@ The Conditional Co-request Clustering pass that drives PGO merge suggestions. Tu
 
 ## Dev server details
 
-The dev server is started by `wundler dev --port 3000`. There is no configuration file — all behavior is hard-coded with command-line flag overrides.
+The dev server is started by `cloudpack dev --port 3000`. There is no configuration file — all behavior is hard-coded with command-line flag overrides.
 
 ### Generated index.html
 
 The dev server synthesizes `index.html` per request to `GET /`. The document contains:
 
 1. An `<script type="importmap">` block listing every bare specifier in the entry module's transitive imports, resolved against a CDN (esm.sh by default).
-2. A `<script type="module">` tag for the HMR client at `/__wundler__/hmr-client.js`.
-3. A `<script type="module">` tag for the entry module configured in `wundler.toml` `[entry]`.
+2. A `<script type="module">` tag for the HMR client at `/__cloudpack__/hmr-client.js`.
+3. A `<script type="module">` tag for the entry module configured in `cloudpack.toml` `[entry]`.
 
-The HMR client opens an SSE connection to `/__wundler__/hmr` and calls `location.reload()` on any `event: change` message whose payload matches a path the page imports.
+The HMR client opens an SSE connection to `/__cloudpack__/hmr` and calls `location.reload()` on any `event: change` message whose payload matches a path the page imports.
 
 ### Extension resolution
 
@@ -136,7 +136,7 @@ Requests for module paths are resolved in this order. The first match wins.
 8. `/index.jsx`
 9. `/index.js`
 
-If none match, the server returns 404. This is the only place wundler performs filesystem extension resolution; production builds resolve at summarization time and embed the resolved paths in the `ModuleSummary`.
+If none match, the server returns 404. This is the only place cloudpack performs filesystem extension resolution; production builds resolve at summarization time and embed the resolved paths in the `ModuleSummary`.
 
 ### Bare specifiers in dev
 

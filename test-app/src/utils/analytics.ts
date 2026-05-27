@@ -1,7 +1,7 @@
 import { formatTime, formatBytes } from './format';
 
 // MODULE-LEVEL SIDE EFFECT — MUST NOT be tree-shaken
-// This module writes to window on import. Wundler must mark it as SideEffectMarker::Definite
+// This module writes to window on import. Cloudpack must mark it as SideEffectMarker::Definite
 declare global {
   interface Window {
     analyticsQueue: Array<{ event: string; data: unknown; time: string }>;

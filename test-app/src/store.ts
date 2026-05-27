@@ -18,7 +18,7 @@ type Action =
 
 const initialState: State = {
   tasks: [
-    { id: '1', title: 'Set up Wundler workspace', done: true, priority: 'high' },
+    { id: '1', title: 'Set up Cloudpack workspace', done: true, priority: 'high' },
     { id: '2', title: 'Implement module summarizer', done: false, priority: 'high' },
     { id: '3', title: 'Build graph analyzer', done: false, priority: 'medium' },
     { id: '4', title: 'Write integration tests', done: false, priority: 'medium' },

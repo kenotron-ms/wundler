@@ -2,19 +2,19 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Stand up the on-disk dependency pre-bundling cache that `run_dev` consults before starting the file watcher, so subsequent `wundler dev` invocations on an unchanged `package.json` + lockfile pair skip node_modules work entirely.
+**Goal:** Stand up the on-disk dependency pre-bundling cache that `run_dev` consults before starting the file watcher, so subsequent `cloudpack dev` invocations on an unchanged `package.json` + lockfile pair skip node_modules work entirely.
 
-**Architecture:** A new `wundler-dev` crate owns a `DepPrebundler` that fingerprints `package.json` + the canonical lockfile with blake3, looks up `<project>/.wundler/cache/deps/<fingerprint>/index.json` for cache hits, and on miss writes into `.tmp-<fingerprint>/` and renames atomically. `run_dev` calls `ensure_fresh` before spinning up `DevServer` and logs hit/miss/error. The SCA writes only `index.json` — real node_modules bundling is deferred to a later plan.
+**Architecture:** A new `cloudpack-dev` crate owns a `DepPrebundler` that fingerprints `package.json` + the canonical lockfile with blake3, looks up `<project>/.cloudpack/cache/deps/<fingerprint>/index.json` for cache hits, and on miss writes into `.tmp-<fingerprint>/` and renames atomically. `run_dev` calls `ensure_fresh` before spinning up `DevServer` and logs hit/miss/error. The SCA writes only `index.json` — real node_modules bundling is deferred to a later plan.
 
 **Tech Stack:** Rust 2021, blake3 1.x (fingerprint), tempfile 3.x (atomic write staging), anyhow 1.x (errors), tracing 0.1 (logging), walkdir 2.x (GC traversal), serde_json 1.x (`index.json`), toml 0.8 (`[dev]` section), tokio 1.x (async `run_dev`).
 
 ## Scope Boundary
 
 **In scope (SCA):**
-- New `wundler-dev` crate with `DepPrebundler`, `PrebundleResult`, `compute_fingerprint`
+- New `cloudpack-dev` crate with `DepPrebundler`, `PrebundleResult`, `compute_fingerprint`
 - `ensure_fresh`: cache-hit fast path, cache-miss writes `index.json` only (no actual node_modules bundling)
 - `gc()` walks cache root and deletes directories whose mtime is older than TTL
-- `[dev]` section in `wundler.toml` with `dep_cache_ttl_days` (default 14)
+- `[dev]` section in `cloudpack.toml` with `dep_cache_ttl_days` (default 14)
 - `run_dev` integration: call `ensure_fresh` before the watcher starts; log result; warn on >1 GB cache
 - Atomic create via tempdir + rename
 - Absent `[dev]` section preserves current behavior
@@ -31,52 +31,52 @@
 ## File Structure
 
 **Create:**
-- `crates/wundler-dev/Cargo.toml` — crate manifest
-- `crates/wundler-dev/src/lib.rs` — re-exports
-- `crates/wundler-dev/src/prebundle/mod.rs` — `DepPrebundler`, `PrebundleResult`, `compute_fingerprint`
-- `crates/wundler-dev/tests/prebundle.rs` — integration tests for hit/miss/gc/concurrency
+- `crates/cloudpack-dev/Cargo.toml` — crate manifest
+- `crates/cloudpack-dev/src/lib.rs` — re-exports
+- `crates/cloudpack-dev/src/prebundle/mod.rs` — `DepPrebundler`, `PrebundleResult`, `compute_fingerprint`
+- `crates/cloudpack-dev/tests/prebundle.rs` — integration tests for hit/miss/gc/concurrency
 
 **Modify:**
-- `Cargo.toml` — add `crates/wundler-dev` to `[workspace] members`
-- `crates/wundler-pipeline/src/config.rs` — add `DevConfig` + `BuildConfig.dev: Option<DevConfig>`
-- `crates/wundler-cli/Cargo.toml` — add `wundler-dev` + `tracing` deps
-- `crates/wundler-cli/src/main.rs::run_dev` (line ~396) — wire `DepPrebundler` in before `DevServer::start`
+- `Cargo.toml` — add `crates/cloudpack-dev` to `[workspace] members`
+- `crates/cloudpack-pipeline/src/config.rs` — add `DevConfig` + `BuildConfig.dev: Option<DevConfig>`
+- `crates/cloudpack-cli/Cargo.toml` — add `cloudpack-dev` + `tracing` deps
+- `crates/cloudpack-cli/src/main.rs::run_dev` (line ~396) — wire `DepPrebundler` in before `DevServer::start`
 
 ---
 
-## Task 1: Create `wundler-dev` crate with fingerprinting
+## Task 1: Create `cloudpack-dev` crate with fingerprinting
 
 **Files:**
-- Create: `crates/wundler-dev/Cargo.toml`
-- Create: `crates/wundler-dev/src/lib.rs`
-- Create: `crates/wundler-dev/src/prebundle/mod.rs`
+- Create: `crates/cloudpack-dev/Cargo.toml`
+- Create: `crates/cloudpack-dev/src/lib.rs`
+- Create: `crates/cloudpack-dev/src/prebundle/mod.rs`
 - Modify: `Cargo.toml` (workspace root)
 
-- [ ] **Step 1.1: Add `wundler-dev` to workspace members**
+- [ ] **Step 1.1: Add `cloudpack-dev` to workspace members**
 
-Edit `/home/ken/workspace/wundler/Cargo.toml`:
+Edit `/home/ken/workspace/cloudpack/Cargo.toml`:
 
 ```toml
 [workspace]
 resolver = "2"
 members = [
-    "crates/wundler-core",
-    "crates/wundler-cli",
-    "crates/wundler-graph",
-    "crates/wundler-transform",
-    "crates/wundler-pipeline",
-    "crates/wundler-abs",
-    "crates/wundler-pgo",
-    "crates/wundler-bench",
-    "crates/wundler-dev",
+    "crates/cloudpack-core",
+    "crates/cloudpack-cli",
+    "crates/cloudpack-graph",
+    "crates/cloudpack-transform",
+    "crates/cloudpack-pipeline",
+    "crates/cloudpack-abs",
+    "crates/cloudpack-pgo",
+    "crates/cloudpack-bench",
+    "crates/cloudpack-dev",
 ]
 ```
 
-- [ ] **Step 1.2: Create `crates/wundler-dev/Cargo.toml`**
+- [ ] **Step 1.2: Create `crates/cloudpack-dev/Cargo.toml`**
 
 ```toml
 [package]
-name = "wundler-dev"
+name = "cloudpack-dev"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -94,13 +94,13 @@ walkdir = "2"
 tempfile = "3"
 ```
 
-- [ ] **Step 1.3: Create `crates/wundler-dev/src/lib.rs`**
+- [ ] **Step 1.3: Create `crates/cloudpack-dev/src/lib.rs`**
 
 ```rust
 //! Dev-mode helpers: dependency pre-bundling cache, etc.
 //!
-//! The `prebundle` module owns the `<project>/.wundler/cache/deps/` directory
-//! that `wundler dev` consults before starting its file watcher.
+//! The `prebundle` module owns the `<project>/.cloudpack/cache/deps/` directory
+//! that `cloudpack dev` consults before starting its file watcher.
 
 pub mod prebundle;
 
@@ -109,14 +109,14 @@ pub use prebundle::{compute_fingerprint, DepPrebundler, PrebundleResult};
 
 - [ ] **Step 1.4: Write the failing test for `compute_fingerprint`**
 
-Create `crates/wundler-dev/src/prebundle/mod.rs` with the test scaffold first:
+Create `crates/cloudpack-dev/src/prebundle/mod.rs` with the test scaffold first:
 
 ```rust
 //! Dependency pre-bundling cache.
 //!
 //! Layout:
 //! ```text
-//! <project>/.wundler/cache/deps/
+//! <project>/.cloudpack/cache/deps/
 //! ├── {fingerprint-hex}/
 //! │   ├── index.json
 //! │   └── *.js            # (future: real bundles; SCA writes nothing else)
@@ -262,7 +262,7 @@ mod tests {
 
 - [ ] **Step 1.5: Verify tests compile and pass**
 
-Run: `cargo test -p wundler-dev --lib`
+Run: `cargo test -p cloudpack-dev --lib`
 
 Expected: 6 tests pass (`fingerprint_*`).
 
@@ -270,7 +270,7 @@ If `blake3::Hasher::finalize().to_hex()` returns an uppercase hex string in your
 
 - [ ] **Step 1.6: Add stub `DepPrebundler::new`**
 
-Append to `crates/wundler-dev/src/prebundle/mod.rs` (before the `#[cfg(test)]` block):
+Append to `crates/cloudpack-dev/src/prebundle/mod.rs` (before the `#[cfg(test)]` block):
 
 ```rust
 impl DepPrebundler {
@@ -289,15 +289,15 @@ impl DepPrebundler {
 
 - [ ] **Step 1.7: Run workspace build to confirm crate links**
 
-Run: `cargo build -p wundler-dev`
+Run: `cargo build -p cloudpack-dev`
 
 Expected: clean build.
 
 - [ ] **Step 1.8: Commit**
 
 ```bash
-git add Cargo.toml crates/wundler-dev/
-git commit -m "feat(wundler-dev): scaffold crate with compute_fingerprint (blake3 of package.json + lockfile)"
+git add Cargo.toml crates/cloudpack-dev/
+git commit -m "feat(cloudpack-dev): scaffold crate with compute_fingerprint (blake3 of package.json + lockfile)"
 ```
 
 ---
@@ -305,12 +305,12 @@ git commit -m "feat(wundler-dev): scaffold crate with compute_fingerprint (blake
 ## Task 2: Implement `ensure_fresh` and `gc`
 
 **Files:**
-- Modify: `crates/wundler-dev/src/prebundle/mod.rs`
-- Create: `crates/wundler-dev/tests/prebundle.rs`
+- Modify: `crates/cloudpack-dev/src/prebundle/mod.rs`
+- Create: `crates/cloudpack-dev/tests/prebundle.rs`
 
 - [ ] **Step 2.1: Write failing tests for `ensure_fresh` (cache miss → hit, atomic, gc)**
 
-Create `crates/wundler-dev/tests/prebundle.rs`:
+Create `crates/cloudpack-dev/tests/prebundle.rs`:
 
 ```rust
 //! Integration tests for the dependency pre-bundling cache.
@@ -320,7 +320,7 @@ use std::thread;
 use std::time::Duration;
 
 use tempfile::TempDir;
-use wundler_dev::{compute_fingerprint, DepPrebundler};
+use cloudpack_dev::{compute_fingerprint, DepPrebundler};
 
 fn write(dir: &Path, name: &str, body: &str) {
     std::fs::write(dir.join(name), body).unwrap();
@@ -486,7 +486,7 @@ fn gc_keeps_fresh_dirs_under_default_ttl() {
 
 #[test]
 fn gc_on_missing_root_is_not_an_error() {
-    // A user who has never run `wundler dev` has no cache dir; gc must not panic.
+    // A user who has never run `cloudpack dev` has no cache dir; gc must not panic.
     let cache = TempDir::new().unwrap();
     let missing = cache.path().join("never-created");
     let pre = DepPrebundler::new(missing, 14);
@@ -520,13 +520,13 @@ fn compute_fingerprint_is_reexported() {
 
 - [ ] **Step 2.2: Run tests to verify they fail**
 
-Run: `cargo test -p wundler-dev --test prebundle`
+Run: `cargo test -p cloudpack-dev --test prebundle`
 
 Expected: compile error — `ensure_fresh` and `gc` not defined on `DepPrebundler`.
 
 - [ ] **Step 2.3: Implement `ensure_fresh`, `gc`, and the internal `bundle_into`**
 
-Append to `crates/wundler-dev/src/prebundle/mod.rs`, inside the existing `impl DepPrebundler` block (replace the stub block from Task 1):
+Append to `crates/cloudpack-dev/src/prebundle/mod.rs`, inside the existing `impl DepPrebundler` block (replace the stub block from Task 1):
 
 ```rust
 impl DepPrebundler {
@@ -614,7 +614,7 @@ impl DepPrebundler {
 
     /// Walk `cache_root` and delete any subdirectory whose mtime is older
     /// than `ttl_days`. Never fails the whole operation if one entry errors —
-    /// logs and continues, because GC must never block `wundler dev` startup.
+    /// logs and continues, because GC must never block `cloudpack dev` startup.
     pub fn gc(&self) -> Result<()> {
         if !self.cache_root.is_dir() {
             return Ok(());
@@ -668,9 +668,9 @@ impl DepPrebundler {
 }
 ```
 
-- [ ] **Step 2.4: Run all `wundler-dev` tests**
+- [ ] **Step 2.4: Run all `cloudpack-dev` tests**
 
-Run: `cargo test -p wundler-dev`
+Run: `cargo test -p cloudpack-dev`
 
 Expected: all unit tests + all integration tests pass (16+ total).
 
@@ -678,15 +678,15 @@ If `concurrent_ensure_fresh_does_not_error` flakes on slow filesystems, the rena
 
 - [ ] **Step 2.5: Lint clean**
 
-Run: `cargo clippy -p wundler-dev --all-targets -- -D warnings`
+Run: `cargo clippy -p cloudpack-dev --all-targets -- -D warnings`
 
 Expected: no warnings. Fix any (typically: unused imports, `&PathBuf` vs `&Path`).
 
 - [ ] **Step 2.6: Commit**
 
 ```bash
-git add crates/wundler-dev/
-git commit -m "feat(wundler-dev): DepPrebundler::ensure_fresh + gc with atomic tempdir rename"
+git add crates/cloudpack-dev/
+git commit -m "feat(cloudpack-dev): DepPrebundler::ensure_fresh + gc with atomic tempdir rename"
 ```
 
 ---
@@ -694,13 +694,13 @@ git commit -m "feat(wundler-dev): DepPrebundler::ensure_fresh + gc with atomic t
 ## Task 3: Wire `DepPrebundler` into `run_dev` + `[dev]` config section + cache-size warning
 
 **Files:**
-- Modify: `crates/wundler-pipeline/src/config.rs`
-- Modify: `crates/wundler-cli/Cargo.toml`
-- Modify: `crates/wundler-cli/src/main.rs` (`run_dev` around line 396)
+- Modify: `crates/cloudpack-pipeline/src/config.rs`
+- Modify: `crates/cloudpack-cli/Cargo.toml`
+- Modify: `crates/cloudpack-cli/src/main.rs` (`run_dev` around line 396)
 
 - [ ] **Step 3.1: Add `[dev]` section to `BuildConfig` — write the failing test**
 
-Append to `crates/wundler-pipeline/src/config.rs` (inside the file, before EOF — there is currently no `#[cfg(test)]` block, so add one):
+Append to `crates/cloudpack-pipeline/src/config.rs` (inside the file, before EOF — there is currently no `#[cfg(test)]` block, so add one):
 
 ```rust
 #[cfg(test)]
@@ -719,7 +719,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let cfg = write(
             tmp.path(),
-            "wundler.toml",
+            "cloudpack.toml",
             r#"
 [build]
 root = "src"
@@ -738,7 +738,7 @@ main = "src/index.ts"
         let tmp = TempDir::new().unwrap();
         let cfg = write(
             tmp.path(),
-            "wundler.toml",
+            "cloudpack.toml",
             r#"
 [build]
 root = "src"
@@ -758,22 +758,22 @@ dep_cache_ttl_days = 7
 }
 ```
 
-Run: `cargo test -p wundler-pipeline config::tests`
+Run: `cargo test -p cloudpack-pipeline config::tests`
 
 Expected: FAIL — `BuildConfig` has no `dev` field, `DevConfig` undefined.
 
 - [ ] **Step 3.2: Implement `DevConfig` and thread it through `BuildConfig`**
 
-Edit `crates/wundler-pipeline/src/config.rs`:
+Edit `crates/cloudpack-pipeline/src/config.rs`:
 
 In the public types section, add after `BuildConfig`:
 
 ```rust
-/// `[dev]` section of `wundler.toml`. All fields optional; an absent
+/// `[dev]` section of `cloudpack.toml`. All fields optional; an absent
 /// section preserves current behavior.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct DevConfig {
-    /// TTL (days) for entries in `<project>/.wundler/cache/deps/`.
+    /// TTL (days) for entries in `<project>/.cloudpack/cache/deps/`.
     #[serde(default)]
     pub dep_cache_ttl_days: Option<u32>,
 }
@@ -823,9 +823,9 @@ Ok(Self {
 })
 ```
 
-- [ ] **Step 3.3: Re-export `DevConfig` from `wundler-pipeline`**
+- [ ] **Step 3.3: Re-export `DevConfig` from `cloudpack-pipeline`**
 
-Open `crates/wundler-pipeline/src/lib.rs` and confirm `BuildConfig` is already re-exported. Add `DevConfig` alongside it. Example diff if the current re-export is `pub use config::{BuildConfig, EngineChoice};`:
+Open `crates/cloudpack-pipeline/src/lib.rs` and confirm `BuildConfig` is already re-exported. Add `DevConfig` alongside it. Example diff if the current re-export is `pub use config::{BuildConfig, EngineChoice};`:
 
 ```rust
 pub use config::{BuildConfig, DevConfig, EngineChoice};
@@ -835,13 +835,13 @@ pub use config::{BuildConfig, DevConfig, EngineChoice};
 
 - [ ] **Step 3.4: Run the pipeline tests**
 
-Run: `cargo test -p wundler-pipeline config::tests`
+Run: `cargo test -p cloudpack-pipeline config::tests`
 
 Expected: both tests pass.
 
 - [ ] **Step 3.5: Make sure existing pipeline consumers still compile**
 
-Run: `cargo build -p wundler-pipeline`
+Run: `cargo build -p cloudpack-pipeline`
 
 Expected: clean build. If anywhere in the workspace constructs `BuildConfig { .. }` by struct-literal (rather than via `BuildConfig::load`), it will fail to compile. Fix each call site by adding `dev: None,`.
 
@@ -856,24 +856,24 @@ For every match that is a struct literal (not a method call or type annotation),
 - [ ] **Step 3.6: Commit the config change**
 
 ```bash
-git add crates/wundler-pipeline/
-git commit -m "feat(wundler-pipeline): add optional [dev] section with dep_cache_ttl_days"
+git add crates/cloudpack-pipeline/
+git commit -m "feat(cloudpack-pipeline): add optional [dev] section with dep_cache_ttl_days"
 ```
 
-- [ ] **Step 3.7: Add `wundler-dev` + `tracing` deps to the CLI**
+- [ ] **Step 3.7: Add `cloudpack-dev` + `tracing` deps to the CLI**
 
-Edit `crates/wundler-cli/Cargo.toml`. After the existing dep block, ensure these are present:
+Edit `crates/cloudpack-cli/Cargo.toml`. After the existing dep block, ensure these are present:
 
 ```toml
 [dependencies]
-wundler-core = { path = "../wundler-core" }
-wundler-graph = { path = "../wundler-graph" }
-wundler-transform = { path = "../wundler-transform" }
-wundler-pipeline = { path = "../wundler-pipeline" }
-wundler-abs = { path = "../wundler-abs" }
-wundler-pgo = { path = "../wundler-pgo" }
-wundler-bench = { path = "../wundler-bench" }
-wundler-dev = { path = "../wundler-dev" }
+cloudpack-core = { path = "../cloudpack-core" }
+cloudpack-graph = { path = "../cloudpack-graph" }
+cloudpack-transform = { path = "../cloudpack-transform" }
+cloudpack-pipeline = { path = "../cloudpack-pipeline" }
+cloudpack-abs = { path = "../cloudpack-abs" }
+cloudpack-pgo = { path = "../cloudpack-pgo" }
+cloudpack-bench = { path = "../cloudpack-bench" }
+cloudpack-dev = { path = "../cloudpack-dev" }
 clap = { version = "4", features = ["derive"] }
 anyhow = { workspace = true }
 serde = { workspace = true }
@@ -887,16 +887,16 @@ tracing = "0.1"
 
 - [ ] **Step 3.8: Wire `DepPrebundler` into `run_dev`**
 
-Edit `crates/wundler-cli/src/main.rs`. At the top, add to the existing `use wundler_pipeline::` line so `DevConfig` is in scope:
+Edit `crates/cloudpack-cli/src/main.rs`. At the top, add to the existing `use cloudpack_pipeline::` line so `DevConfig` is in scope:
 
 ```rust
-use wundler_pipeline::{BuildConfig, BuildPipeline, DevConfig, DevServer, EngineChoice};
+use cloudpack_pipeline::{BuildConfig, BuildPipeline, DevConfig, DevServer, EngineChoice};
 ```
 
 And add a use line:
 
 ```rust
-use wundler_dev::DepPrebundler;
+use cloudpack_dev::DepPrebundler;
 ```
 
 Replace the body of `run_dev` (currently lines ~396–404):
@@ -912,7 +912,7 @@ async fn run_dev(config_path: &Path, port: u16) -> Result<()> {
         .as_ref()
         .and_then(|d: &DevConfig| d.dep_cache_ttl_days)
         .unwrap_or(14);
-    let cache_root = cfg.root.join(".wundler").join("cache").join("deps");
+    let cache_root = cfg.root.join(".cloudpack").join("cache").join("deps");
     let prebundler = DepPrebundler::new(cache_root.clone(), ttl_days);
 
     match prebundler.ensure_fresh(&cfg.root) {
@@ -946,7 +946,7 @@ async fn run_dev(config_path: &Path, port: u16) -> Result<()> {
     }
 
     println!(
-        "wundler dev: serving {} on http://127.0.0.1:{}",
+        "cloudpack dev: serving {} on http://127.0.0.1:{}",
         cfg.root.display(),
         port
     );
@@ -972,7 +972,7 @@ fn dir_size_bytes(dir: &Path) -> Result<u64> {
 
 - [ ] **Step 3.9: Add a unit test for `dir_size_bytes`**
 
-Find the `#[cfg(test)] mod tests` block in `crates/wundler-cli/src/main.rs` (or create one at EOF):
+Find the `#[cfg(test)] mod tests` block in `crates/cloudpack-cli/src/main.rs` (or create one at EOF):
 
 ```rust
 #[cfg(test)]
@@ -1000,7 +1000,7 @@ mod dev_tests {
 
 - [ ] **Step 3.10: Run CLI tests**
 
-Run: `cargo test -p wundler-cli`
+Run: `cargo test -p cloudpack-cli`
 
 Expected: pre-existing tests still pass + 2 new `dev_tests::*` pass.
 
@@ -1043,7 +1043,7 @@ And drop the `let cache_root = ...; ... cache_root.clone()` line, constructing t
 
 ```rust
     let prebundler = DepPrebundler::new(
-        cfg.root.join(".wundler").join("cache").join("deps"),
+        cfg.root.join(".cloudpack").join("cache").join("deps"),
         ttl_days,
     );
 ```
@@ -1051,34 +1051,34 @@ And drop the `let cache_root = ...; ... cache_root.clone()` line, constructing t
 - [ ] **Step 3.13: Smoke test the CLI end-to-end**
 
 ```bash
-mkdir -p /tmp/wundler-smoke/src
-cat > /tmp/wundler-smoke/package.json <<'JSON'
+mkdir -p /tmp/cloudpack-smoke/src
+cat > /tmp/cloudpack-smoke/package.json <<'JSON'
 {"name":"smoke","version":"1.0.0"}
 JSON
-cat > /tmp/wundler-smoke/package-lock.json <<'JSON'
+cat > /tmp/cloudpack-smoke/package-lock.json <<'JSON'
 {"lockfileVersion":1}
 JSON
-cat > /tmp/wundler-smoke/src/index.ts <<'TS'
+cat > /tmp/cloudpack-smoke/src/index.ts <<'TS'
 export const x = 1;
 TS
-cat > /tmp/wundler-smoke/wundler.toml <<'TOML'
+cat > /tmp/cloudpack-smoke/cloudpack.toml <<'TOML'
 [build]
-root = "/tmp/wundler-smoke"
-out_dir = "/tmp/wundler-smoke/dist"
+root = "/tmp/cloudpack-smoke"
+out_dir = "/tmp/cloudpack-smoke/dist"
 
 [entry]
-main = "/tmp/wundler-smoke/src/index.ts"
+main = "/tmp/cloudpack-smoke/src/index.ts"
 
 [dev]
 dep_cache_ttl_days = 14
 TOML
 
 # Run with tracing enabled so we see the info/debug lines.
-RUST_LOG=wundler=info,wundler_dev=debug,wundler_cli=info \
-  timeout 3 cargo run -p wundler-cli -- dev --config /tmp/wundler-smoke/wundler.toml --port 8123 || true
+RUST_LOG=cloudpack=info,cloudpack_dev=debug,cloudpack_cli=info \
+  timeout 3 cargo run -p cloudpack-cli -- dev --config /tmp/cloudpack-smoke/cloudpack.toml --port 8123 || true
 
-ls /tmp/wundler-smoke/.wundler/cache/deps/
-cat /tmp/wundler-smoke/.wundler/cache/deps/*/index.json
+ls /tmp/cloudpack-smoke/.cloudpack/cache/deps/
+cat /tmp/cloudpack-smoke/.cloudpack/cache/deps/*/index.json
 ```
 
 Expected:
@@ -1091,15 +1091,15 @@ Re-run the same `cargo run` command. Expected: `dep cache hit: <hex>` at debug l
 - [ ] **Step 3.14: Commit**
 
 ```bash
-git add crates/wundler-cli/
-git commit -m "feat(wundler-cli): run_dev pre-bundles deps via wundler-dev, warns on >1 GB cache"
+git add crates/cloudpack-cli/
+git commit -m "feat(cloudpack-cli): run_dev pre-bundles deps via cloudpack-dev, warns on >1 GB cache"
 ```
 
 ---
 
 ## Acceptance Criteria Recap
 
-- [x] `cargo test -p wundler-dev` — Task 1 (fingerprint) + Task 2 (ensure_fresh/gc) cover this
+- [x] `cargo test -p cloudpack-dev` — Task 1 (fingerprint) + Task 2 (ensure_fresh/gc) cover this
 - [x] `ensure_fresh` cache-hit is instant and does not touch `index.json` — `cache_hit_returns_instantly_without_touching_index`
 - [x] `ensure_fresh` cache-miss is atomic (tempdir + rename) — `cache_miss_creates_dir_with_index_json` + `ensure_fresh_leaves_no_tmp_dirs_behind`
 - [x] Fingerprint changes when `package.json` OR any lockfile changes — `fingerprint_changes_when_package_json_changes` + `fingerprint_changes_when_lockfile_changes` + `fingerprint_changes_invalidate_cache`
@@ -1111,4 +1111,4 @@ git commit -m "feat(wundler-cli): run_dev pre-bundles deps via wundler-dev, warn
 - **Spec coverage:** all six acceptance criteria mapped to tests above; cache-size warning covered by the smoke test in Step 3.13 (no unit test because it touches the global file size of a path; the `dir_size_bytes` helper is unit-tested in Step 3.9).
 - **Type consistency:** `DepPrebundler::new(PathBuf, u32) -> Self`, `ensure_fresh(&self, &Path) -> Result<PrebundleResult>`, `gc(&self) -> Result<()>`, `compute_fingerprint(&Path) -> Result<String>` — all signatures stable across Tasks 1–3.
 - **No placeholders:** every step contains the exact Rust to write or the exact command to run.
-- **Re-exports:** `wundler_dev::{DepPrebundler, PrebundleResult, compute_fingerprint}` (Task 1.3), `wundler_pipeline::{BuildConfig, DevConfig, ...}` (Task 3.3) — both consumed by `run_dev` in Task 3.8.
+- **Re-exports:** `cloudpack_dev::{DepPrebundler, PrebundleResult, compute_fingerprint}` (Task 1.3), `cloudpack_pipeline::{BuildConfig, DevConfig, ...}` (Task 3.3) — both consumed by `run_dev` in Task 3.8.

@@ -1,0 +1,249 @@
+//! Output writer for the Cloudpack build pipeline.
+//!
+//! Provides four public functions:
+//!
+//! * [`write_chunk`] — writes a `ChunkOutput` to `<out_dir>/chunks/<hash>.js`
+//!   (and an optional `.js.map` alongside it).
+//! * [`write_manifest`] — serialises a `ChunkManifest` as pretty JSON to
+//!   `<out_dir>/manifest.json`, with chunk hashes updated to the actual output-file hashes.
+//! * [`write_index_html`] — generates an `<out_dir>/index.html` stub that
+//!   loads the initial chunks for a named entry point, referencing the actual output-file hashes.
+//! * [`write_rolldown_index_html`] — generates an `<out_dir>/index.html` that references
+//!   rolldown's output files directly (e.g. `root-abc123.js`).
+
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use cloudpack_transform::engine::sanitize_entry_key;
+
+use anyhow::Result;
+use cloudpack_core::types::ContentHash;
+use cloudpack_graph::types::ChunkManifest;
+use cloudpack_transform::engine::ChunkOutput;
+
+// ---------------------------------------------------------------------------
+// write_chunk
+// ---------------------------------------------------------------------------
+
+/// Write a single chunk's JavaScript (and optional source map) to disk.
+///
+/// The output file is placed at `<out_dir>/chunks/<hash>.js`, where `hash` is
+/// the hex string of `output.hash`.  If `output.source_map` is `Some(_)`, a
+/// companion `<hash>.js.map` file is also written and a `//# sourceMappingURL=`
+/// comment is appended to the JS body.
+///
+/// Returns the path of the created `.js` file.
+pub fn write_chunk(out_dir: &Path, output: &ChunkOutput) -> Result<PathBuf> {
+    let chunks_dir = out_dir.join("chunks");
+    fs::create_dir_all(&chunks_dir)?;
+
+    let hash_hex = output.hash.as_str();
+    let file_name = format!("{hash_hex}.js");
+    let path = chunks_dir.join(&file_name);
+
+    let mut body = output.code.clone();
+
+    if let Some(ref map) = output.source_map {
+        // Ensure the comment is on its own line.
+        if !body.ends_with('\n') {
+            body.push('\n');
+        }
+        body.push_str(&format!("//# sourceMappingURL={hash_hex}.js.map\n"));
+
+        // Write the companion source-map file.
+        let map_path = chunks_dir.join(format!("{hash_hex}.js.map"));
+        fs::write(map_path, map)?;
+    }
+
+    fs::write(&path, &body)?;
+    Ok(path)
+}
+
+// ---------------------------------------------------------------------------
+// write_manifest
+// ---------------------------------------------------------------------------
+
+/// Serialise `manifest` as pretty-printed JSON and write it to
+/// `<out_dir>/manifest.json`.
+///
+/// `id_to_hash` maps each chunk's logical ID to the content hash of its
+/// actual output file (the hash used in the `.js` filename).  The manifest
+/// is cloned and each chunk's `hash` field is overwritten with the
+/// corresponding output hash before serialisation, so the on-disk
+/// `manifest.json` always reflects real file names.
+pub fn write_manifest(
+    out_dir: &Path,
+    manifest: &ChunkManifest,
+    id_to_hash: &HashMap<String, ContentHash>,
+) -> Result<()> {
+    fs::create_dir_all(out_dir)?;
+
+    // Clone the manifest and update each chunk hash to the actual output hash.
+    let mut updated = manifest.clone();
+    for chunk in &mut updated.chunks {
+        if let Some(output_hash) = id_to_hash.get(&chunk.id) {
+            chunk.hash = output_hash.clone();
+        }
+    }
+
+    let json = serde_json::to_string_pretty(&updated)?;
+    fs::write(out_dir.join("manifest.json"), json)?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// write_index_html
+// ---------------------------------------------------------------------------
+
+/// Generate an `index.html` stub for the named `entry` point.
+///
+/// The stub includes one `<script type="module">` tag per chunk listed in
+/// `manifest.entry_chunks[entry]`, with `src` pointing to
+/// `chunks/<hash>.js`.
+///
+/// `id_to_hash` maps each chunk's logical ID to the content hash of its
+/// actual output file.  This hash — not the analysis-phase hash stored in
+/// `chunk.hash` — is used for the `src` attribute, ensuring the referenced
+/// filename matches the file written by [`write_chunk`].
+///
+/// The file is written to `<out_dir>/index.html`.
+pub fn write_index_html(
+    out_dir: &Path,
+    manifest: &ChunkManifest,
+    entry: &str,
+    id_to_hash: &HashMap<String, ContentHash>,
+) -> Result<()> {
+    fs::create_dir_all(out_dir)?;
+
+    // Collect script tags for each initial chunk of this entry.
+    let mut script_tags = String::new();
+
+    if let Some(chunk_ids) = manifest.entry_chunks.get(entry) {
+        for chunk_id in chunk_ids {
+            // Look up the actual output hash for this chunk (not the
+            // analysis-phase hash stored in the manifest).
+            if let Some(hash) = id_to_hash.get(chunk_id) {
+                let hash_hex = hash.as_str();
+                script_tags.push_str(&format!(
+                    "  <script src=\"chunks/{hash_hex}.js\" type=\"module\"></script>\n"
+                ));
+            }
+        }
+    }
+
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{entry}</title>
+</head>
+<body>
+  <div id="root"></div>
+{script_tags}</body>
+</html>
+"#
+    );
+
+    fs::write(out_dir.join("index.html"), html)?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// write_rolldown_index_html
+// ---------------------------------------------------------------------------
+
+/// Generate an `index.html` for the rolldown batch-build path.
+///
+/// Rolldown writes output files directly into `out_dir` with names like
+/// `root-<hash>.js` (for the entry whose sanitized key is `"root"`).
+/// This function scans `out_dir` for files whose stem starts with the
+/// sanitized entry key and references them via `<script type="module">` tags.
+///
+/// Unlike [`write_index_html`], the script `src` values are relative paths
+/// to the output directory (e.g. `./root-abc123.js`), not
+/// `chunks/<sha256>.js`, because rolldown owns the file naming.
+pub fn write_rolldown_index_html(out_dir: &Path, entry: &str) -> Result<()> {
+    fs::create_dir_all(out_dir)?;
+
+    let key = sanitize_entry_key(entry);
+    let prefix = format!("{key}-");
+
+    let mut script_tags = String::new();
+
+    for dir_entry in fs::read_dir(out_dir)? {
+        let dir_entry = dir_entry?;
+        let path = dir_entry.path();
+
+        if path.extension().and_then(|e| e.to_str()) != Some("js") {
+            continue;
+        }
+
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+
+        if stem.starts_with(&prefix) {
+            let filename = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            script_tags.push_str(&format!(
+                "  <script src=\"./{filename}\" type=\"module\"></script>\n"
+            ));
+        }
+    }
+
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{entry}</title>
+</head>
+<body>
+  <div id="root"></div>
+{script_tags}</body>
+</html>
+"#
+    );
+
+    fs::write(out_dir.join("index.html"), html)?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// write_build_stats — atomic
+// ---------------------------------------------------------------------------
+
+use crate::build_stats::BuildStatsArtifact;
+
+/// Atomically write the build-stats artifact to `<out_dir>/build-stats.json`.
+///
+/// Strategy: write JSON to `<out_dir>/build-stats.json.tmp`, then `rename` it
+/// into place. The rename is atomic on every platform supported by Cloudpack.
+pub fn write_build_stats(out_dir: &Path, stats: &BuildStatsArtifact) -> Result<()> {
+    fs::create_dir_all(out_dir)?;
+
+    let final_path = out_dir.join("build-stats.json");
+    let tmp_path = out_dir.join("build-stats.json.tmp");
+
+    let json = serde_json::to_string_pretty(stats)?;
+    fs::write(&tmp_path, json)?;
+    fs::rename(&tmp_path, &final_path)?;
+
+    Ok(())
+}
+
+/// Read `<out_dir>/build-stats.json` if present and parseable.
+///
+/// Returns `None` on any error (missing file, IO error, JSON parse error).
+pub fn read_previous_stats(out_dir: &Path) -> Option<BuildStatsArtifact> {
+    let path = out_dir.join("build-stats.json");
+    let bytes = fs::read(&path).ok()?;
+    serde_json::from_slice::<BuildStatsArtifact>(&bytes).ok()
+}

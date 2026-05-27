@@ -1,7 +1,7 @@
 # Scale Benchmark Foundation — Design
 
 **Status:** Design accepted, ready for implementation planning
-**Owner:** Wundler core
+**Owner:** Cloudpack core
 **Depends on:** None (orthogonal to VRC and Security Baseline)
 **Blocks:** Performance work (HMR, pre-bundling, incremental graph) — measurement must precede optimization claims
 
@@ -36,12 +36,12 @@
 
 | Component | Location | Used by this design |
 |---|---|---|
-| `RepoScaleReport` + `measure_repo` | `crates/wundler-bench/src/repo_scale.rs` | **The profile schema.** Generator reads it, verifier re-measures into it. |
+| `RepoScaleReport` + `measure_repo` | `crates/cloudpack-bench/src/repo_scale.rs` | **The profile schema.** Generator reads it, verifier re-measures into it. |
 | `RepoScaleReport.schema_version = 1` | same | Profile schema versioning is free; we add `compat_min_schema_version` |
-| `SyntheticApp::generate_at` | `crates/wundler-bench/src/synthetic.rs:40` | Reuse the entry-point + `wundler.toml` boilerplate; replace `generate_module()` body |
+| `SyntheticApp::generate_at` | `crates/cloudpack-bench/src/synthetic.rs:40` | Reuse the entry-point + `cloudpack.toml` boilerplate; replace `generate_module()` body |
 | `bump_bench_version` / `__BENCH_VERSION__` | same:434 | Preserve — needed for warm-build / churn benchmarks |
-| `build_adjacency()` + `tarjan_sccs()` | `crates/wundler-graph/src/graph.rs` | Verifier (V4) and `graph-profile` consume these |
-| `GraphAnalyzer` + `AnalysisStats` | `crates/wundler-graph/src/analyzer.rs` | `graph-profile` runs full pipeline; produces `GraphShapeProfile` |
+| `build_adjacency()` + `tarjan_sccs()` | `crates/cloudpack-graph/src/graph.rs` | Verifier (V4) and `graph-profile` consume these |
+| `GraphAnalyzer` + `AnalysisStats` | `crates/cloudpack-graph/src/analyzer.rs` | `graph-profile` runs full pipeline; produces `GraphShapeProfile` |
 | Existing benchmark runners | `analysis_bench.rs`, `cas_bench.rs`, `abs_bench.rs` | Unchanged. They consume `&Path` and don't care how the corpus was produced. |
 | `presets/uniform.json` placeholder | (to be created) | Captures the current `mod_00000`/skip-7 pattern as a frozen `GraphShapeProfile` for backward-compat runs |
 
@@ -49,15 +49,15 @@
 
 | Component | New file | Responsibility |
 |---|---|---|
-| `BenchProfile` type | `crates/wundler-bench/src/profile.rs` | Newtype alias around `RepoScaleReport` + generation hints (`seed`, `tolerances`) |
-| Archetype library | `crates/wundler-bench/src/archetypes/` (module) | Hand-written content templates with line/byte-padding strategy |
-| Corpus generator | `crates/wundler-bench/src/corpus_gen.rs` | Allocates files to dirs, picks archetype per extension, writes tree |
-| Corpus verifier | `crates/wundler-bench/src/corpus_verify.rs` | Re-runs `measure_repo`, parses sample, returns `ConformanceReport` |
-| Graph-shape profile | `crates/wundler-bench/src/graph_profile.rs` | Walks a `GraphAnalyzer` result, emits `GraphShapeProfile` (numbers + histograms) |
-| Graph-driven generator | `crates/wundler-bench/src/graph_gen.rs` | Configuration-model graph sampling; replaces hard-coded `import_deps()` in synthetic.rs |
-| Graph similarity | `crates/wundler-bench/src/graph_similarity.rs` | Scalar tolerance + EMD on histograms |
-| CLI subcommands | `crates/wundler-bench/src/main.rs` | `generate-corpus`, `verify-corpus`, `graph-profile`, `graph-similarity` |
-| Committed profiles | `crates/wundler-bench/profiles/` | `large-web-app.v1.json`, `large-web-app-small.v1.json`, `presets/uniform.v1.json` |
+| `BenchProfile` type | `crates/cloudpack-bench/src/profile.rs` | Newtype alias around `RepoScaleReport` + generation hints (`seed`, `tolerances`) |
+| Archetype library | `crates/cloudpack-bench/src/archetypes/` (module) | Hand-written content templates with line/byte-padding strategy |
+| Corpus generator | `crates/cloudpack-bench/src/corpus_gen.rs` | Allocates files to dirs, picks archetype per extension, writes tree |
+| Corpus verifier | `crates/cloudpack-bench/src/corpus_verify.rs` | Re-runs `measure_repo`, parses sample, returns `ConformanceReport` |
+| Graph-shape profile | `crates/cloudpack-bench/src/graph_profile.rs` | Walks a `GraphAnalyzer` result, emits `GraphShapeProfile` (numbers + histograms) |
+| Graph-driven generator | `crates/cloudpack-bench/src/graph_gen.rs` | Configuration-model graph sampling; replaces hard-coded `import_deps()` in synthetic.rs |
+| Graph similarity | `crates/cloudpack-bench/src/graph_similarity.rs` | Scalar tolerance + EMD on histograms |
+| CLI subcommands | `crates/cloudpack-bench/src/main.rs` | `generate-corpus`, `verify-corpus`, `graph-profile`, `graph-similarity` |
+| Committed profiles | `crates/cloudpack-bench/profiles/` | `large-web-app.v1.json`, `large-web-app-small.v1.json`, `presets/uniform.v1.json` |
 
 ### Key Dependency: A ⟶ B
 
@@ -98,8 +98,8 @@ Part A alone is enough to unblock **all file-count-driven** benchmarks at scale.
 
 **Files:**
 ```
-crates/wundler-bench/src/synthetic.rs   ← extended in place
-crates/wundler-bench/src/options.rs     ← new: SyntheticOptions
+crates/cloudpack-bench/src/synthetic.rs   ← extended in place
+crates/cloudpack-bench/src/options.rs     ← new: SyntheticOptions
 ```
 
 **Flow:**
@@ -131,8 +131,8 @@ SyntheticOptions  ──►  SyntheticApp::generate_at  ──►  tree on disk
 
 **Files:**
 ```
-crates/wundler-bench/src/profile.rs        ← BenchProfile = wraps RepoScaleReport + GenHints
-crates/wundler-bench/src/archetypes/       ← module dir
+crates/cloudpack-bench/src/profile.rs        ← BenchProfile = wraps RepoScaleReport + GenHints
+crates/cloudpack-bench/src/archetypes/       ← module dir
     mod.rs
     ts_module.rs
     tsx_component.rs
@@ -142,9 +142,9 @@ crates/wundler-bench/src/archetypes/       ← module dir
     tsconfig_json.rs
     markdown.rs
     cmdscript.rs
-crates/wundler-bench/src/corpus_gen.rs     ← allocates files, picks archetypes, writes tree
-crates/wundler-bench/src/corpus_verify.rs  ← re-measures + sample-parses; emits ConformanceReport
-crates/wundler-bench/profiles/
+crates/cloudpack-bench/src/corpus_gen.rs     ← allocates files, picks archetypes, writes tree
+crates/cloudpack-bench/src/corpus_verify.rs  ← re-measures + sample-parses; emits ConformanceReport
+crates/cloudpack-bench/profiles/
     large-web-app.v1.json
     large-web-app-small.v1.json           ← 10% scale for CI
     presets/uniform.v1.json
@@ -244,10 +244,10 @@ real repo  ──► measure_repo() ──► RepoScaleReport  ──┐
 
 **Files:**
 ```
-crates/wundler-bench/src/skeleton.rs      ← SkeletonProfile { files: Vec<FileSkel>, seed }
-crates/wundler-bench/src/archetypes/      ← same as C2
-crates/wundler-bench/src/corpus_gen.rs    ← reads skeleton, stamps archetypes
-crates/wundler-bench/profiles/
+crates/cloudpack-bench/src/skeleton.rs      ← SkeletonProfile { files: Vec<FileSkel>, seed }
+crates/cloudpack-bench/src/archetypes/      ← same as C2
+crates/cloudpack-bench/src/corpus_gen.rs    ← reads skeleton, stamps archetypes
+crates/cloudpack-bench/profiles/
     large-web-app.v1.skel.json           ← LARGE: 36k file rows
 ```
 
@@ -348,7 +348,7 @@ C2 is also the cheapest path to **V1–V5 all mechanically checkable**, which is
 
 ## ARCHETYPE LIBRARY DESIGN
 
-**Constraint recap:** zero LLM tokens; pure Rust; deterministic; valid syntax by construction; boring is correct. The library is hand-written, lives in `crates/wundler-bench/src/archetypes/`, and exposes one function per file type.
+**Constraint recap:** zero LLM tokens; pure Rust; deterministic; valid syntax by construction; boring is correct. The library is hand-written, lives in `crates/cloudpack-bench/src/archetypes/`, and exposes one function per file type.
 
 ### Padding strategy (the core trick)
 
@@ -453,7 +453,7 @@ let archetype = match ext.as_str() {
 
 ### R2 — Archetype templates drifting from valid TS syntax (MEDIUM)
 
-**Risk:** Someone edits `ts_module.rs` to add a new export form. It happens to produce a syntax error at certain seeds. The corpus generates, but `wundler analyze` crashes mid-bench.
+**Risk:** Someone edits `ts_module.rs` to add a new export form. It happens to produce a syntax error at certain seeds. The corpus generates, but `cloudpack analyze` crashes mid-bench.
 
 **Mitigation:**
 - `cargo test` runs `corpus_verify` against a tiny fixture profile (`profiles/test/tiny.v1.json` — 20 files) on every PR. V3 syntactic check (SWC parse) on 100% of generated files at this size is fast (<1s).
@@ -484,7 +484,7 @@ let archetype = match ext.as_str() {
 **Mitigation:**
 - `BenchProfile.profile_schema_version` is checked at load time.
 - The generator declares `MIN_SUPPORTED = N` and `MAX_SUPPORTED = M` constants.
-- Profiles outside the range produce a clear error: `"profile is schema v1 but generator requires v2..v3. Re-measure with: wundler-bench repo-scale --path <repo> --output json > new-profile.json"`.
+- Profiles outside the range produce a clear error: `"profile is schema v1 but generator requires v2..v3. Re-measure with: cloudpack-bench repo-scale --path <repo> --output json > new-profile.json"`.
 - We commit profiles **with the schema_version they were measured at** — never silently upgrade.
 
 ### R6 — `verify-corpus` passes but bench wall-time still doesn't match real (LOW, unmeasurable)
@@ -551,7 +551,7 @@ Step 16. Re-measure the reference monorepo, commit large-web-app.v2.json
 
 ## OPEN QUESTIONS (not blocking this design — answer at planning time)
 
-1. **Profile location: `crates/wundler-bench/profiles/` (in-crate) or `bench/profiles/` (repo-root)?**
+1. **Profile location: `crates/cloudpack-bench/profiles/` (in-crate) or `bench/profiles/` (repo-root)?**
    - In-crate: ships with the crate, simple `include_bytes!` if we ever embed.
    - Repo-root: separate from code, no rebuild on profile change.
    - *Suggest: in-crate.* Profiles are small (<100 KB), and crate ownership = clearer change review.
@@ -574,7 +574,7 @@ Step 16. Re-measure the reference monorepo, commit large-web-app.v2.json
 | **Part A recommendation** | **Candidate 2 — Profile-as-Contract.** `RepoScaleReport` is the `BenchProfile`. Generator + verifier share the type. V1–V5 mechanically checkable. |
 | **Part B recommendation** | **B2 — Configuration-model graph sampling.** Gated behind `GenHints.graph_shape`. Falls back to `presets/uniform.v1.json` preserving current `synthetic.rs` behavior. |
 | **MVP** | Steps 1–7. Unblocks CAS/ABS/analysis benchmarks at 36k-file scale without graph shape work. |
-| **First crusty test passes** | `wundler-bench generate-corpus --profile profiles/large-web-app.v1.json --out target/corpus && wundler-bench verify-corpus target/corpus --profile profiles/large-web-app.v1.json` exits 0. |
+| **First crusty test passes** | `cloudpack-bench generate-corpus --profile profiles/large-web-app.v1.json --out target/corpus && cloudpack-bench verify-corpus target/corpus --profile profiles/large-web-app.v1.json` exits 0. |
 | **Top risk to watch** | R1 — file-size distribution within an extension. Mitigated by schema v2 percentiles in Phase 3. |
 | **What this is NOT** | Not a real-workload benchmark. Function bodies are inert; this measures analyzer/chunker/CAS cost on a *structurally faithful* corpus, not on real computation. |
 | **Why this is right** | The user explicitly accepted "contrived and useless as a benchmark but Certifiably Verifiable at this scale." V1–V5 mechanical checkability is the contract. C2 delivers it with the smallest schema surface. |

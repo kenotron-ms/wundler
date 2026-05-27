@@ -4,7 +4,7 @@
 
 ## What We Have Now
 
-`hmr-client.js` connects to `/__wundler__/hmr` via EventSource. On any file change event, it calls `location.reload()`. Full page tear-down, all React state resets, every module re-fetched.
+`hmr-client.js` connects to `/__cloudpack__/hmr` via EventSource. On any file change event, it calls `location.reload()`. Full page tear-down, all React state resets, every module re-fetched.
 
 This is live reload, not HMR.
 
@@ -43,11 +43,11 @@ es.addEventListener('change', async (ev) => {
   const url = `/${path}?t=${Date.now()}`;  // cache-bust
   try {
     await import(url);               // re-fetch + re-execute the module
-    if (window.__wundler_refresh__) {
-      window.__wundler_refresh__();  // calls ReactRefreshRuntime.performReactRefresh()
+    if (window.__cloudpack_refresh__) {
+      window.__cloudpack_refresh__();  // calls ReactRefreshRuntime.performReactRefresh()
     }
   } catch (e) {
-    console.warn('[wundler] HMR failed, falling back to reload', e);
+    console.warn('[cloudpack] HMR failed, falling back to reload', e);
     location.reload();
   }
 });
@@ -55,11 +55,11 @@ es.addEventListener('change', async (ev) => {
 
 ### 4. Dependency graph propagation
 
-When `utils/format.ts` changes, any module that imports it also needs to re-execute (it may have bound to the old export values). Wundler already has the full module graph — serialize a lightweight `importers` map into the dev HTML so the HMR client can walk up the dependency chain.
+When `utils/format.ts` changes, any module that imports it also needs to re-execute (it may have bound to the old export values). Cloudpack already has the full module graph — serialize a lightweight `importers` map into the dev HTML so the HMR client can walk up the dependency chain.
 
 ```html
 <script>
-window.__wundler_graph__ = {
+window.__cloudpack_graph__ = {
   "src/utils/format.ts": ["src/pages/Home.tsx", "src/utils/analytics.ts"],
   "src/pages/Home.tsx":  ["src/App.tsx"],
   // ...
@@ -74,7 +74,7 @@ The client iterates `importers[changedPath]` recursively and re-imports the full
 - [ ] Edit a React component's JSX → only that component re-renders, `useState` in siblings is preserved
 - [ ] Edit a utility module → components that import it re-render, state preserved in unaffected components
 - [ ] Edit a module with a non-recoverable error → falls back to `location.reload()` gracefully
-- [ ] `[wundler] HMR` console messages show path, not a full page reload marker
+- [ ] `[cloudpack] HMR` console messages show path, not a full page reload marker
 
 ## Estimated Effort
 

@@ -2,17 +2,17 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a profile-driven synthetic-corpus generator and structural conformance verifier to `wundler-bench` so benchmarks can target reproducible, declarative repo shapes (Steps 1–7 of the scale benchmark foundation design).
+**Goal:** Add a profile-driven synthetic-corpus generator and structural conformance verifier to `cloudpack-bench` so benchmarks can target reproducible, declarative repo shapes (Steps 1–7 of the scale benchmark foundation design).
 
 **Architecture:** A new `BenchProfile` JSON contract wraps an existing `RepoScaleReport` plus generator hints (seed + tolerances). `corpus_gen` walks the profile’s `WorkspaceStats` and emits files using a small library of file archetypes (TypeScript module, JSON config, Markdown) padded to per-extension average byte sizes; everything is driven by a single seeded `StdRng` so two runs with identical inputs produce byte-identical trees. `corpus_verify` re-measures the corpus, compares each `ExtensionStat` field against the profile within configured tolerances, and additionally runs an SWC parse sample over `.ts` files. CLI subcommands and a CV-stability gate on `analysis-bench` round out the workflow.
 
 **Tech Stack:**
-- Rust 2021, `wundler-bench` crate
+- Rust 2021, `cloudpack-bench` crate
 - `serde` / `serde_json` for the profile contract
 - `rand 0.8` (`StdRng`) for deterministic generation
-- `swc_core` (v65, ecma_parser/ecma_ast/common features — already used by `wundler-transform`) for V3 TS parse validity
+- `swc_core` (v65, ecma_parser/ecma_ast/common features — already used by `cloudpack-transform`) for V3 TS parse validity
 - `clap 4` derive for CLI
-- `tempfile`, `anyhow` (already in `wundler-bench`)
+- `tempfile`, `anyhow` (already in `cloudpack-bench`)
 
 **Scope Boundary (MVP, Steps 1–7 only):**
 - ✅ `profile.rs` types + schema version gate
@@ -32,34 +32,34 @@
 ## File Structure
 
 **Files to create:**
-- `crates/wundler-bench/src/profile.rs` — Profile contract types + schema version constant + JSON load/save
-- `crates/wundler-bench/src/archetypes/mod.rs` — Shared `pad_to_target` helper + module re-exports
-- `crates/wundler-bench/src/archetypes/ts_module.rs` — Three TS variants (Leaf, Intermediate, Barrel)
-- `crates/wundler-bench/src/archetypes/json_config.rs` — Small JSON config object generator
-- `crates/wundler-bench/src/archetypes/markdown.rs` — H1 + paragraphs generator
-- `crates/wundler-bench/src/corpus_gen.rs` — `generate_corpus(profile, out_dir)` + fingerprint writer
-- `crates/wundler-bench/src/corpus_verify.rs` — `verify_corpus(profile, dir) -> ConformanceReport`
-- `crates/wundler-bench/profiles/test/tiny.v1.json` — 20-file profile for `cargo test`
-- `crates/wundler-bench/profiles/large-web-app-small.v1.json` — 100-file profile (< 1 s)
-- `crates/wundler-bench/tests/corpus_e2e.rs` — End-to-end integration test (generate → verify)
+- `crates/cloudpack-bench/src/profile.rs` — Profile contract types + schema version constant + JSON load/save
+- `crates/cloudpack-bench/src/archetypes/mod.rs` — Shared `pad_to_target` helper + module re-exports
+- `crates/cloudpack-bench/src/archetypes/ts_module.rs` — Three TS variants (Leaf, Intermediate, Barrel)
+- `crates/cloudpack-bench/src/archetypes/json_config.rs` — Small JSON config object generator
+- `crates/cloudpack-bench/src/archetypes/markdown.rs` — H1 + paragraphs generator
+- `crates/cloudpack-bench/src/corpus_gen.rs` — `generate_corpus(profile, out_dir)` + fingerprint writer
+- `crates/cloudpack-bench/src/corpus_verify.rs` — `verify_corpus(profile, dir) -> ConformanceReport`
+- `crates/cloudpack-bench/profiles/test/tiny.v1.json` — 20-file profile for `cargo test`
+- `crates/cloudpack-bench/profiles/large-web-app-small.v1.json` — 100-file profile (< 1 s)
+- `crates/cloudpack-bench/tests/corpus_e2e.rs` — End-to-end integration test (generate → verify)
 
 **Files to modify:**
-- `crates/wundler-bench/Cargo.toml` — Add `rand`, `swc_core` deps
-- `crates/wundler-bench/src/lib.rs` — Add new `pub mod` declarations
-- `crates/wundler-bench/src/main.rs` — Add `generate-corpus`, `verify-corpus` subcommands; add `--repeat` + `--check-cv` flags to `analysis-bench`
+- `crates/cloudpack-bench/Cargo.toml` — Add `rand`, `swc_core` deps
+- `crates/cloudpack-bench/src/lib.rs` — Add new `pub mod` declarations
+- `crates/cloudpack-bench/src/main.rs` — Add `generate-corpus`, `verify-corpus` subcommands; add `--repeat` + `--check-cv` flags to `analysis-bench`
 
 ---
 
 ## Task 1: Profile Contract + Schema Version Gate
 
 **Files:**
-- Modify: `crates/wundler-bench/Cargo.toml`
-- Create: `crates/wundler-bench/src/profile.rs`
-- Modify: `crates/wundler-bench/src/lib.rs`
+- Modify: `crates/cloudpack-bench/Cargo.toml`
+- Create: `crates/cloudpack-bench/src/profile.rs`
+- Modify: `crates/cloudpack-bench/src/lib.rs`
 
 - [ ] **Step 1.1: Add `rand` dependency**
 
-Open `crates/wundler-bench/Cargo.toml`. Under `[dependencies]`, append:
+Open `crates/cloudpack-bench/Cargo.toml`. Under `[dependencies]`, append:
 
 ```toml
 rand            = "0.8"
@@ -69,7 +69,7 @@ The other deps we need later (`swc_core`) will be added in Task 4 when first use
 
 - [ ] **Step 1.2: Write the failing test for `BenchProfile` JSON round-trip**
 
-Create `crates/wundler-bench/src/profile.rs` (initially with **only** the test module so the test fails to compile):
+Create `crates/cloudpack-bench/src/profile.rs` (initially with **only** the test module so the test fails to compile):
 
 ```rust
 //! BenchProfile contract — declarative, versioned shape spec for synthetic corpora.
@@ -165,14 +165,14 @@ mod tests {
 - [ ] **Step 1.3: Run the test, watch it fail to compile**
 
 ```bash
-cargo test -p wundler-bench --lib profile::tests 2>&1 | tail -20
+cargo test -p cloudpack-bench --lib profile::tests 2>&1 | tail -20
 ```
 
 Expected: many `cannot find type`/`cannot find function` errors. That’s the failing state.
 
 - [ ] **Step 1.4: Add `pub mod profile;` to lib.rs**
 
-Edit `crates/wundler-bench/src/lib.rs` — append:
+Edit `crates/cloudpack-bench/src/lib.rs` — append:
 
 ```rust
 pub mod archetypes;
@@ -186,14 +186,14 @@ pub mod profile;
 Create empty placeholders so the crate still compiles:
 
 ```bash
-mkdir -p crates/wundler-bench/src/archetypes
-cat > crates/wundler-bench/src/archetypes/mod.rs <<'EOF'
+mkdir -p crates/cloudpack-bench/src/archetypes
+cat > crates/cloudpack-bench/src/archetypes/mod.rs <<'EOF'
 //! Placeholder — populated in Task 2.
 EOF
-cat > crates/wundler-bench/src/corpus_gen.rs <<'EOF'
+cat > crates/cloudpack-bench/src/corpus_gen.rs <<'EOF'
 //! Placeholder — populated in Task 3.
 EOF
-cat > crates/wundler-bench/src/corpus_verify.rs <<'EOF'
+cat > crates/cloudpack-bench/src/corpus_verify.rs <<'EOF'
 //! Placeholder — populated in Task 4.
 EOF
 ```
@@ -274,7 +274,7 @@ pub enum CheckStatus {
 pub fn check_schema_version(profile: &BenchProfile) -> Result<()> {
     if profile.profile_schema_version > PROFILE_SCHEMA_VERSION {
         return Err(anyhow!(
-            "profile schema version {} is newer than supported maximum {} — upgrade wundler-bench",
+            "profile schema version {} is newer than supported maximum {} — upgrade cloudpack-bench",
             profile.profile_schema_version,
             PROFILE_SCHEMA_VERSION
         ));
@@ -306,7 +306,7 @@ pub fn save_profile(profile: &BenchProfile, path: &Path) -> Result<()> {
 - [ ] **Step 1.6: Verify derives on `repo_scale.rs` types**
 
 ```bash
-grep -nE 'derive\(' crates/wundler-bench/src/repo_scale.rs
+grep -nE 'derive\(' crates/cloudpack-bench/src/repo_scale.rs
 ```
 
 For each of `GitStats`, `ManifestStats`, `RepoScaleReport`, `WorkspaceStats`, `ExtensionStat`, `DirectoryStat`, ensure the derive includes `Serialize, Deserialize, Default`. If `Default` is missing on any, add it:
@@ -320,7 +320,7 @@ For each of `GitStats`, `ManifestStats`, `RepoScaleReport`, `WorkspaceStats`, `E
 - [ ] **Step 1.7: Run the profile tests — expect PASS**
 
 ```bash
-cargo test -p wundler-bench --lib profile::tests -- --nocapture
+cargo test -p cloudpack-bench --lib profile::tests -- --nocapture
 ```
 
 Expected: 5 tests pass (`round_trip_json`, `default_tolerances`, `schema_version_gate_accepts_current`, `schema_version_gate_rejects_future`, `check_status_serializes_snake_case`).
@@ -328,7 +328,7 @@ Expected: 5 tests pass (`round_trip_json`, `default_tolerances`, `schema_version
 - [ ] **Step 1.8: Compile-check the whole crate**
 
 ```bash
-cargo build -p wundler-bench
+cargo build -p cloudpack-bench
 ```
 
 Expected: clean build (the three placeholder files are empty modules, which is legal).
@@ -336,13 +336,13 @@ Expected: clean build (the three placeholder files are empty modules, which is l
 - [ ] **Step 1.9: Commit**
 
 ```bash
-git add crates/wundler-bench/Cargo.toml \
-        crates/wundler-bench/src/lib.rs \
-        crates/wundler-bench/src/profile.rs \
-        crates/wundler-bench/src/archetypes/mod.rs \
-        crates/wundler-bench/src/corpus_gen.rs \
-        crates/wundler-bench/src/corpus_verify.rs \
-        crates/wundler-bench/src/repo_scale.rs
+git add crates/cloudpack-bench/Cargo.toml \
+        crates/cloudpack-bench/src/lib.rs \
+        crates/cloudpack-bench/src/profile.rs \
+        crates/cloudpack-bench/src/archetypes/mod.rs \
+        crates/cloudpack-bench/src/corpus_gen.rs \
+        crates/cloudpack-bench/src/corpus_verify.rs \
+        crates/cloudpack-bench/src/repo_scale.rs
 git commit -m "feat(bench): add BenchProfile contract + schema version gate"
 ```
 
@@ -351,15 +351,15 @@ git commit -m "feat(bench): add BenchProfile contract + schema version gate"
 ## Task 2: File Archetypes
 
 **Files:**
-- Modify: `crates/wundler-bench/src/archetypes/mod.rs`
-- Create: `crates/wundler-bench/src/archetypes/ts_module.rs`
-- Create: `crates/wundler-bench/src/archetypes/json_config.rs`
-- Create: `crates/wundler-bench/src/archetypes/markdown.rs`
-- Modify: `crates/wundler-bench/Cargo.toml`
+- Modify: `crates/cloudpack-bench/src/archetypes/mod.rs`
+- Create: `crates/cloudpack-bench/src/archetypes/ts_module.rs`
+- Create: `crates/cloudpack-bench/src/archetypes/json_config.rs`
+- Create: `crates/cloudpack-bench/src/archetypes/markdown.rs`
+- Modify: `crates/cloudpack-bench/Cargo.toml`
 
 - [ ] **Step 2.1: Add `swc_core` dependency (used both here for tests and in Task 4)**
 
-Edit `crates/wundler-bench/Cargo.toml` under `[dependencies]`:
+Edit `crates/cloudpack-bench/Cargo.toml` under `[dependencies]`:
 
 ```toml
 swc_core        = { version = "65", features = ["ecma_parser", "ecma_ast", "common"] }
@@ -367,7 +367,7 @@ swc_core        = { version = "65", features = ["ecma_parser", "ecma_ast", "comm
 
 - [ ] **Step 2.2: Write failing tests for the shared `pad_to_target` helper**
 
-Open `crates/wundler-bench/src/archetypes/mod.rs` and replace its contents with:
+Open `crates/cloudpack-bench/src/archetypes/mod.rs` and replace its contents with:
 
 ```rust
 //! File content archetypes used by `corpus_gen`. Each archetype emits a UTF-8
@@ -465,14 +465,14 @@ mod tests {
 - [ ] **Step 2.3: Run the helper tests — expect PASS**
 
 ```bash
-cargo test -p wundler-bench --lib archetypes::tests
+cargo test -p cloudpack-bench --lib archetypes::tests
 ```
 
 Expected: 3 tests pass.
 
 - [ ] **Step 2.4: Write failing tests for `ts_module::generate`**
 
-Create `crates/wundler-bench/src/archetypes/ts_module.rs` with **tests only first**:
+Create `crates/cloudpack-bench/src/archetypes/ts_module.rs` with **tests only first**:
 
 ```rust
 //! TypeScript module archetype with three variants:
@@ -543,7 +543,7 @@ mod tests {
 - [ ] **Step 2.5: Run, expect compile failure (no `generate`, no `Variant`)**
 
 ```bash
-cargo test -p wundler-bench --lib archetypes::ts_module 2>&1 | tail -10
+cargo test -p cloudpack-bench --lib archetypes::ts_module 2>&1 | tail -10
 ```
 
 - [ ] **Step 2.6: Implement `ts_module`**
@@ -615,14 +615,14 @@ fn barrel(seed: u64) -> String {
 - [ ] **Step 2.7: Run ts_module tests — expect PASS**
 
 ```bash
-cargo test -p wundler-bench --lib archetypes::ts_module
+cargo test -p cloudpack-bench --lib archetypes::ts_module
 ```
 
 Expected: 5 tests pass.
 
 - [ ] **Step 2.8: Write failing tests for `json_config::generate`**
 
-Create `crates/wundler-bench/src/archetypes/json_config.rs`:
+Create `crates/cloudpack-bench/src/archetypes/json_config.rs`:
 
 ```rust
 //! JSON config archetype — emits a small object whose `filler` string field is
@@ -686,12 +686,12 @@ pub fn generate(variant_seed: u64, target_bytes: u64) -> String {
 - [ ] **Step 2.10: Run json_config tests — expect PASS**
 
 ```bash
-cargo test -p wundler-bench --lib archetypes::json_config
+cargo test -p cloudpack-bench --lib archetypes::json_config
 ```
 
 - [ ] **Step 2.11: Write failing tests for `markdown::generate`**
 
-Create `crates/wundler-bench/src/archetypes/markdown.rs`:
+Create `crates/cloudpack-bench/src/archetypes/markdown.rs`:
 
 ```rust
 //! Markdown archetype — H1 followed by paragraphs of filler text.
@@ -747,7 +747,7 @@ pub fn generate(variant_seed: u64, target_bytes: u64) -> String {
 - [ ] **Step 2.13: Run all archetype tests — expect PASS**
 
 ```bash
-cargo test -p wundler-bench --lib archetypes
+cargo test -p cloudpack-bench --lib archetypes
 ```
 
 Expected: 11 tests pass total (3 mod + 5 ts_module + 3 json_config + 3 markdown — note `near_target_size`/`deterministic` exist in both json_config and markdown, plus `has_h1` and `parses_as_json`).
@@ -755,7 +755,7 @@ Expected: 11 tests pass total (3 mod + 5 ts_module + 3 json_config + 3 markdown 
 - [ ] **Step 2.14: Commit**
 
 ```bash
-git add crates/wundler-bench/Cargo.toml crates/wundler-bench/src/archetypes
+git add crates/cloudpack-bench/Cargo.toml crates/cloudpack-bench/src/archetypes
 git commit -m "feat(bench): add TS/JSON/Markdown file archetypes with deterministic padding"
 ```
 
@@ -764,11 +764,11 @@ git commit -m "feat(bench): add TS/JSON/Markdown file archetypes with determinis
 ## Task 3: Corpus Generator
 
 **Files:**
-- Modify: `crates/wundler-bench/src/corpus_gen.rs`
+- Modify: `crates/cloudpack-bench/src/corpus_gen.rs`
 
 - [ ] **Step 3.1: Sketch the API and write a failing integration-style test**
 
-Replace `crates/wundler-bench/src/corpus_gen.rs` with **tests-only first**:
+Replace `crates/cloudpack-bench/src/corpus_gen.rs` with **tests-only first**:
 
 ```rust
 //! Deterministic synthetic corpus generator. Walks the `BenchProfile`'s
@@ -883,7 +883,7 @@ mod tests {
     fn writes_fingerprint() {
         let dir = tempfile::tempdir().unwrap();
         generate_corpus(&tiny_profile(), dir.path()).unwrap();
-        let fp = dir.path().join(".wundler-bench-fingerprint.json");
+        let fp = dir.path().join(".cloudpack-bench-fingerprint.json");
         assert!(fp.exists());
         let v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&fp).unwrap()).unwrap();
@@ -925,7 +925,7 @@ mod tests {
                     stack.push(p);
                 } else {
                     let rel = p.strip_prefix(root).unwrap().to_string_lossy().into_owned();
-                    if rel == ".wundler-bench-fingerprint.json" {
+                    if rel == ".cloudpack-bench-fingerprint.json" {
                         continue; // exclude fingerprint from determinism check
                     }
                     map.insert(rel, fs::read(&p).unwrap());
@@ -947,7 +947,7 @@ mod tests {
 - [ ] **Step 3.2: Run, expect compile failure**
 
 ```bash
-cargo test -p wundler-bench --lib corpus_gen::tests 2>&1 | tail -10
+cargo test -p cloudpack-bench --lib corpus_gen::tests 2>&1 | tail -10
 ```
 
 - [ ] **Step 3.3: Implement `generate_corpus`**
@@ -966,7 +966,7 @@ use crate::archetypes::{json_config, markdown, ts_module};
 use crate::profile::{check_schema_version, BenchProfile, PROFILE_SCHEMA_VERSION};
 use crate::repo_scale::{DirectoryStat, ExtensionStat};
 
-const FINGERPRINT_FILENAME: &str = ".wundler-bench-fingerprint.json";
+const FINGERPRINT_FILENAME: &str = ".cloudpack-bench-fingerprint.json";
 
 /// Generate a synthetic corpus at `out_dir` matching `profile`'s shape.
 /// Fully deterministic in `(profile, out_dir-independence)`: two invocations
@@ -1100,7 +1100,7 @@ fn write_fingerprint(profile: &BenchProfile, out_dir: &Path) -> Result<()> {
         seed: profile.gen.seed,
         generator_version: env!("CARGO_PKG_VERSION"),
         profile_target_total_files: profile.target.workspace_stats.total_files,
-        notes: "generated by wundler-bench corpus_gen",
+        notes: "generated by cloudpack-bench corpus_gen",
     };
     let text = serde_json::to_string_pretty(&fp)?;
     std::fs::write(out_dir.join(FINGERPRINT_FILENAME), text)?;
@@ -1111,7 +1111,7 @@ fn write_fingerprint(profile: &BenchProfile, out_dir: &Path) -> Result<()> {
 - [ ] **Step 3.4: Run the corpus_gen tests — expect PASS**
 
 ```bash
-cargo test -p wundler-bench --lib corpus_gen::tests -- --nocapture
+cargo test -p cloudpack-bench --lib corpus_gen::tests -- --nocapture
 ```
 
 Expected: 4 tests pass.
@@ -1119,13 +1119,13 @@ Expected: 4 tests pass.
 - [ ] **Step 3.5: Compile-check whole crate**
 
 ```bash
-cargo build -p wundler-bench
+cargo build -p cloudpack-bench
 ```
 
 - [ ] **Step 3.6: Commit**
 
 ```bash
-git add crates/wundler-bench/src/corpus_gen.rs
+git add crates/cloudpack-bench/src/corpus_gen.rs
 git commit -m "feat(bench): deterministic corpus generator (generate_corpus)"
 ```
 
@@ -1134,11 +1134,11 @@ git commit -m "feat(bench): deterministic corpus generator (generate_corpus)"
 ## Task 4: Corpus Verifier (V1 Structural + V3 SWC Parse Sample)
 
 **Files:**
-- Modify: `crates/wundler-bench/src/corpus_verify.rs`
+- Modify: `crates/cloudpack-bench/src/corpus_verify.rs`
 
 - [ ] **Step 4.1: Write failing tests**
 
-Replace `crates/wundler-bench/src/corpus_verify.rs`:
+Replace `crates/cloudpack-bench/src/corpus_verify.rs`:
 
 ```rust
 //! Conformance verifier: re-measures a corpus directory and checks that each
@@ -1297,7 +1297,7 @@ mod tests {
 - [ ] **Step 4.2: Run, expect compile failure**
 
 ```bash
-cargo test -p wundler-bench --lib corpus_verify::tests 2>&1 | tail -10
+cargo test -p cloudpack-bench --lib corpus_verify::tests 2>&1 | tail -10
 ```
 
 - [ ] **Step 4.3: Implement `verify_corpus`**
@@ -1411,7 +1411,7 @@ fn measure_corpus(root: &Path) -> Result<HashMap<String, ExtensionStat>> {
             let Some(file_name) = path.file_name().and_then(|s| s.to_str()) else {
                 continue;
             };
-            if file_name == ".wundler-bench-fingerprint.json" {
+            if file_name == ".cloudpack-bench-fingerprint.json" {
                 continue;
             }
             let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
@@ -1515,7 +1515,7 @@ fn parse_ts(source: &str) -> bool {
 - [ ] **Step 4.4: Run verifier tests — expect PASS**
 
 ```bash
-cargo test -p wundler-bench --lib corpus_verify::tests -- --nocapture
+cargo test -p cloudpack-bench --lib corpus_verify::tests -- --nocapture
 ```
 
 Expected: 4 tests pass.
@@ -1523,13 +1523,13 @@ Expected: 4 tests pass.
 - [ ] **Step 4.5: Run the full library suite to ensure nothing regressed**
 
 ```bash
-cargo test -p wundler-bench --lib
+cargo test -p cloudpack-bench --lib
 ```
 
 - [ ] **Step 4.6: Commit**
 
 ```bash
-git add crates/wundler-bench/src/corpus_verify.rs
+git add crates/cloudpack-bench/src/corpus_verify.rs
 git commit -m "feat(bench): corpus verifier (V1 structural + V3 SWC parse sample)"
 ```
 
@@ -1538,22 +1538,22 @@ git commit -m "feat(bench): corpus verifier (V1 structural + V3 SWC parse sample
 ## Task 5: CLI Wiring, Committed Profiles, CV Stability Gate, E2E
 
 **Files:**
-- Modify: `crates/wundler-bench/src/main.rs`
-- Create: `crates/wundler-bench/profiles/test/tiny.v1.json`
-- Create: `crates/wundler-bench/profiles/large-web-app-small.v1.json`
-- Create: `crates/wundler-bench/tests/corpus_e2e.rs`
+- Modify: `crates/cloudpack-bench/src/main.rs`
+- Create: `crates/cloudpack-bench/profiles/test/tiny.v1.json`
+- Create: `crates/cloudpack-bench/profiles/large-web-app-small.v1.json`
+- Create: `crates/cloudpack-bench/tests/corpus_e2e.rs`
 
 - [ ] **Step 5.1: Inspect the existing CLI to identify the subcommand enum**
 
 ```bash
-sed -n '1,80p' crates/wundler-bench/src/main.rs
+sed -n '1,80p' crates/cloudpack-bench/src/main.rs
 ```
 
 Note the location of the `#[derive(Subcommand)]` enum (call it `Cmd`) and the `match` block in `main()`. You will add two new variants and one set of fields, plus extend the existing `AnalysisBench` variant with `--repeat` and `--check-cv`.
 
 - [ ] **Step 5.2: Add the `GenerateCorpus` and `VerifyCorpus` subcommands**
 
-In `crates/wundler-bench/src/main.rs`, inside the subcommand enum, add:
+In `crates/cloudpack-bench/src/main.rs`, inside the subcommand enum, add:
 
 ```rust
     /// Generate a synthetic corpus that matches a BenchProfile.
@@ -1584,8 +1584,8 @@ Then, in the `match` block in `main()`, add handlers:
 
 ```rust
         Cmd::GenerateCorpus { profile, out } => {
-            let p = wundler_bench::profile::load_profile(&profile)?;
-            wundler_bench::corpus_gen::generate_corpus(&p, &out)?;
+            let p = cloudpack_bench::profile::load_profile(&profile)?;
+            cloudpack_bench::corpus_gen::generate_corpus(&p, &out)?;
             eprintln!(
                 "generated corpus at {} (seed={}, target_files={})",
                 out.display(),
@@ -1595,15 +1595,15 @@ Then, in the `match` block in `main()`, add handlers:
             Ok(())
         }
         Cmd::VerifyCorpus { corpus, profile, json } => {
-            let p = wundler_bench::profile::load_profile(&profile)?;
-            let report = wundler_bench::corpus_verify::verify_corpus(&p, &corpus)?;
+            let p = cloudpack_bench::profile::load_profile(&profile)?;
+            let report = cloudpack_bench::corpus_verify::verify_corpus(&p, &corpus)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 let fails: Vec<_> = report
                     .checks
                     .iter()
-                    .filter(|c| c.status == wundler_bench::profile::CheckStatus::Fail)
+                    .filter(|c| c.status == cloudpack_bench::profile::CheckStatus::Fail)
                     .collect();
                 eprintln!(
                     "verify: {} checks, passed={} (fails: {})",
@@ -1649,9 +1649,9 @@ In the handler for `AnalysisBench`, after running `analysis_bench::run` (or what
         Cmd::AnalysisBench { repo, scales, repeat, check_cv /* + existing fields */ } => {
             // Run the existing benchmark `repeat` times, collecting cold wall-time
             // per scale. We use the largest scale as the stability target.
-            let mut runs: Vec<Vec<wundler_bench::analysis_bench::AnalysisBenchResult>> = Vec::new();
+            let mut runs: Vec<Vec<cloudpack_bench::analysis_bench::AnalysisBenchResult>> = Vec::new();
             for _ in 0..repeat.max(1) {
-                runs.push(wundler_bench::analysis_bench::run(&repo, &scales)?);
+                runs.push(cloudpack_bench::analysis_bench::run(&repo, &scales)?);
             }
 
             // Aggregate the cold wall-time of the LAST (largest) scale.
@@ -1688,7 +1688,7 @@ In the handler for `AnalysisBench`, after running `analysis_bench::run` (or what
 > **NOTE:** Adapt to whichever field name `analysis_bench::AnalysisBenchResult` actually uses for cold wall time. Check with:
 >
 > ```bash
-> grep -n 'struct AnalysisBenchResult' -A 12 crates/wundler-bench/src/analysis_bench.rs
+> grep -n 'struct AnalysisBenchResult' -A 12 crates/cloudpack-bench/src/analysis_bench.rs
 > ```
 >
 > If the field is named differently (e.g. `cold_wall_time_ms`, `cold_ms`, `cold_total_ms`), substitute that name in `res.cold_wall_ms` above.
@@ -1734,15 +1734,15 @@ mod cv_tests {
 - [ ] **Step 5.4: Compile check**
 
 ```bash
-cargo build -p wundler-bench
+cargo build -p cloudpack-bench
 ```
 
 - [ ] **Step 5.5: Verify CLI help works**
 
 ```bash
-cargo run -p wundler-bench --quiet -- generate-corpus --help
-cargo run -p wundler-bench --quiet -- verify-corpus --help
-cargo run -p wundler-bench --quiet -- analysis-bench --help
+cargo run -p cloudpack-bench --quiet -- generate-corpus --help
+cargo run -p cloudpack-bench --quiet -- verify-corpus --help
+cargo run -p cloudpack-bench --quiet -- analysis-bench --help
 ```
 
 Expected: each prints a help block listing the new flags.
@@ -1750,10 +1750,10 @@ Expected: each prints a help block listing the new flags.
 - [ ] **Step 5.6: Create `tiny.v1.json` profile (20 files)**
 
 ```bash
-mkdir -p crates/wundler-bench/profiles/test
+mkdir -p crates/cloudpack-bench/profiles/test
 ```
 
-Write `crates/wundler-bench/profiles/test/tiny.v1.json`. Note the line totals are calibrated to what the archetypes actually emit (md=3/file, json=5/file, ts~5/file with variant-dependent spread), and `line_count_pct` is set to 0.30 so the TS variant variance doesn't trip the check:
+Write `crates/cloudpack-bench/profiles/test/tiny.v1.json`. Note the line totals are calibrated to what the archetypes actually emit (md=3/file, json=5/file, ts~5/file with variant-dependent spread), and `line_count_pct` is set to 0.30 so the TS variant variance doesn't trip the check:
 
 ```json
 {
@@ -1807,23 +1807,23 @@ Write `crates/wundler-bench/profiles/test/tiny.v1.json`. Note the line totals ar
 - [ ] **Step 5.7: Smoke-test the CLI with the tiny profile**
 
 ```bash
-rm -rf /tmp/wundler-tiny-corpus
-cargo run -p wundler-bench --quiet -- generate-corpus \
-    --profile crates/wundler-bench/profiles/test/tiny.v1.json \
-    --out /tmp/wundler-tiny-corpus
+rm -rf /tmp/cloudpack-tiny-corpus
+cargo run -p cloudpack-bench --quiet -- generate-corpus \
+    --profile crates/cloudpack-bench/profiles/test/tiny.v1.json \
+    --out /tmp/cloudpack-tiny-corpus
 echo "exit=$?"
 
-cargo run -p wundler-bench --quiet -- verify-corpus \
-    --profile crates/wundler-bench/profiles/test/tiny.v1.json \
-    --corpus /tmp/wundler-tiny-corpus
+cargo run -p cloudpack-bench --quiet -- verify-corpus \
+    --profile crates/cloudpack-bench/profiles/test/tiny.v1.json \
+    --corpus /tmp/cloudpack-tiny-corpus
 echo "exit=$?"
 ```
 
-Expected: both exit 0; the generated corpus contains 20 files plus `.wundler-bench-fingerprint.json`.
+Expected: both exit 0; the generated corpus contains 20 files plus `.cloudpack-bench-fingerprint.json`.
 
 - [ ] **Step 5.8: Create `large-web-app-small.v1.json` (100 files, < 1 s)**
 
-Write `crates/wundler-bench/profiles/large-web-app-small.v1.json`. Line totals are calibrated to archetype output (md=3/file, json=5/file, ts~5/file) — `avg_file_bytes` controls byte size via padding (which doesn't add newlines), so line counts scale with file count, not byte count:
+Write `crates/cloudpack-bench/profiles/large-web-app-small.v1.json`. Line totals are calibrated to archetype output (md=3/file, json=5/file, ts~5/file) — `avg_file_bytes` controls byte size via padding (which doesn't add newlines), so line counts scale with file count, not byte count:
 
 ```json
 {
@@ -1877,20 +1877,20 @@ Write `crates/wundler-bench/profiles/large-web-app-small.v1.json`. Line totals a
 - [ ] **Step 5.9: Smoke-test the small-web-app profile and time it**
 
 ```bash
-rm -rf /tmp/wundler-small-corpus
-time cargo run -p wundler-bench --release --quiet -- generate-corpus \
-    --profile crates/wundler-bench/profiles/large-web-app-small.v1.json \
-    --out /tmp/wundler-small-corpus
-cargo run -p wundler-bench --release --quiet -- verify-corpus \
-    --profile crates/wundler-bench/profiles/large-web-app-small.v1.json \
-    --corpus /tmp/wundler-small-corpus
+rm -rf /tmp/cloudpack-small-corpus
+time cargo run -p cloudpack-bench --release --quiet -- generate-corpus \
+    --profile crates/cloudpack-bench/profiles/large-web-app-small.v1.json \
+    --out /tmp/cloudpack-small-corpus
+cargo run -p cloudpack-bench --release --quiet -- verify-corpus \
+    --profile crates/cloudpack-bench/profiles/large-web-app-small.v1.json \
+    --corpus /tmp/cloudpack-small-corpus
 ```
 
 Expected: total wall time < 1 s (excluding compile); verify exits 0.
 
 - [ ] **Step 5.10: Write the end-to-end integration test**
 
-Create `crates/wundler-bench/tests/corpus_e2e.rs`:
+Create `crates/cloudpack-bench/tests/corpus_e2e.rs`:
 
 ```rust
 //! End-to-end: load the committed tiny profile from disk, generate a corpus
@@ -1898,9 +1898,9 @@ Create `crates/wundler-bench/tests/corpus_e2e.rs`:
 
 use std::path::PathBuf;
 
-use wundler_bench::corpus_gen::generate_corpus;
-use wundler_bench::corpus_verify::verify_corpus;
-use wundler_bench::profile::{load_profile, CheckStatus};
+use cloudpack_bench::corpus_gen::generate_corpus;
+use cloudpack_bench::corpus_verify::verify_corpus;
+use cloudpack_bench::profile::{load_profile, CheckStatus};
 
 fn tiny_profile_path() -> PathBuf {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
@@ -1940,7 +1940,7 @@ fn tiny_profile_generation_is_deterministic() {
                 if p.is_dir() {
                     stack.push(p);
                 } else if p.file_name().and_then(|s| s.to_str())
-                    != Some(".wundler-bench-fingerprint.json")
+                    != Some(".cloudpack-bench-fingerprint.json")
                 {
                     let rel = p.strip_prefix(root).unwrap().to_string_lossy().into_owned();
                     out.push((rel, std::fs::read(&p).unwrap()));
@@ -1958,7 +1958,7 @@ fn tiny_profile_generation_is_deterministic() {
 - [ ] **Step 5.11: Run the full crate test suite**
 
 ```bash
-cargo test -p wundler-bench
+cargo test -p cloudpack-bench
 ```
 
 Expected: all tests (unit + e2e) pass.
@@ -1966,7 +1966,7 @@ Expected: all tests (unit + e2e) pass.
 - [ ] **Step 5.12: Run clippy with the project's standard flags**
 
 ```bash
-cargo clippy -p wundler-bench --all-targets -- -D warnings
+cargo clippy -p cloudpack-bench --all-targets -- -D warnings
 ```
 
 Fix any warnings. Common ones to expect: unused imports if a helper went away; `needless_borrow` on `&PathBuf::clone()`. Treat all warnings as errors.
@@ -1977,38 +1977,38 @@ Run each as a shell check; all should print `OK`:
 
 ```bash
 # AC1: cargo test passes
-cargo test -p wundler-bench >/dev/null 2>&1 && echo "AC1 OK"
+cargo test -p cloudpack-bench >/dev/null 2>&1 && echo "AC1 OK"
 
 # AC2: generate-corpus exits 0
 rm -rf /tmp/ac-corpus
-cargo run -q -p wundler-bench -- generate-corpus \
-    --profile crates/wundler-bench/profiles/test/tiny.v1.json \
+cargo run -q -p cloudpack-bench -- generate-corpus \
+    --profile crates/cloudpack-bench/profiles/test/tiny.v1.json \
     --out /tmp/ac-corpus >/dev/null 2>&1 && echo "AC2 OK"
 
 # AC3: verify-corpus exits 0
-cargo run -q -p wundler-bench -- verify-corpus \
-    --profile crates/wundler-bench/profiles/test/tiny.v1.json \
+cargo run -q -p cloudpack-bench -- verify-corpus \
+    --profile crates/cloudpack-bench/profiles/test/tiny.v1.json \
     --corpus /tmp/ac-corpus >/dev/null 2>&1 && echo "AC3 OK"
 
 # AC4: byte-identical output for same seed (excluding fingerprint)
 rm -rf /tmp/ac-a /tmp/ac-b
-cargo run -q -p wundler-bench -- generate-corpus \
-    --profile crates/wundler-bench/profiles/test/tiny.v1.json --out /tmp/ac-a >/dev/null
-cargo run -q -p wundler-bench -- generate-corpus \
-    --profile crates/wundler-bench/profiles/test/tiny.v1.json --out /tmp/ac-b >/dev/null
-HA=$(find /tmp/ac-a -type f ! -name '.wundler-bench-fingerprint.json' | sort \
+cargo run -q -p cloudpack-bench -- generate-corpus \
+    --profile crates/cloudpack-bench/profiles/test/tiny.v1.json --out /tmp/ac-a >/dev/null
+cargo run -q -p cloudpack-bench -- generate-corpus \
+    --profile crates/cloudpack-bench/profiles/test/tiny.v1.json --out /tmp/ac-b >/dev/null
+HA=$(find /tmp/ac-a -type f ! -name '.cloudpack-bench-fingerprint.json' | sort \
      | xargs -I{} sh -c 'printf "%s " "${1#/tmp/ac-a}"; cat "$1"' _ {} | sha256sum)
-HB=$(find /tmp/ac-b -type f ! -name '.wundler-bench-fingerprint.json' | sort \
+HB=$(find /tmp/ac-b -type f ! -name '.cloudpack-bench-fingerprint.json' | sort \
      | xargs -I{} sh -c 'printf "%s " "${1#/tmp/ac-b}"; cat "$1"' _ {} | sha256sum)
 [ "$HA" = "$HB" ] && echo "AC4 OK"
 
 # AC5: ts_parse_sample is Pass in tiny verify report
-cargo run -q -p wundler-bench -- verify-corpus \
-    --profile crates/wundler-bench/profiles/test/tiny.v1.json \
+cargo run -q -p cloudpack-bench -- verify-corpus \
+    --profile crates/cloudpack-bench/profiles/test/tiny.v1.json \
     --corpus /tmp/ac-corpus --json \
   | grep -q '"name": "ts_parse_sample"' \
-  && cargo run -q -p wundler-bench -- verify-corpus \
-       --profile crates/wundler-bench/profiles/test/tiny.v1.json \
+  && cargo run -q -p cloudpack-bench -- verify-corpus \
+       --profile crates/cloudpack-bench/profiles/test/tiny.v1.json \
        --corpus /tmp/ac-corpus --json \
      | python3 -c 'import sys,json; r=json.load(sys.stdin); \
        c=[c for c in r["checks"] if c["name"]=="ts_parse_sample"][0]; \
@@ -2018,11 +2018,11 @@ cargo run -q -p wundler-bench -- verify-corpus \
 # AC6: schema version gate refuses future schema
 python3 -c '
 import json, pathlib
-p = json.load(open("crates/wundler-bench/profiles/test/tiny.v1.json"))
+p = json.load(open("crates/cloudpack-bench/profiles/test/tiny.v1.json"))
 p["profile_schema_version"] = 999
 pathlib.Path("/tmp/future.json").write_text(json.dumps(p))
 '
-cargo run -q -p wundler-bench -- generate-corpus \
+cargo run -q -p cloudpack-bench -- generate-corpus \
     --profile /tmp/future.json --out /tmp/future-corpus 2>/dev/null
 [ "$?" -ne 0 ] && echo "AC6 OK"
 ```
@@ -2032,9 +2032,9 @@ All six should print `OK`. If any fail, debug and fix before committing.
 - [ ] **Step 5.14: Commit**
 
 ```bash
-git add crates/wundler-bench/src/main.rs \
-        crates/wundler-bench/profiles \
-        crates/wundler-bench/tests/corpus_e2e.rs
+git add crates/cloudpack-bench/src/main.rs \
+        crates/cloudpack-bench/profiles \
+        crates/cloudpack-bench/tests/corpus_e2e.rs
 git commit -m "feat(bench): CLI subcommands, committed profiles, CV stability gate, e2e tests"
 ```
 
@@ -2046,11 +2046,11 @@ After Task 5, run the full repo check:
 
 ```bash
 cargo build --workspace
-cargo test -p wundler-bench
-cargo clippy -p wundler-bench --all-targets -- -D warnings
+cargo test -p cloudpack-bench
+cargo clippy -p cloudpack-bench --all-targets -- -D warnings
 ```
 
-All three must succeed with zero warnings on the `wundler-bench` crate.
+All three must succeed with zero warnings on the `cloudpack-bench` crate.
 
 ---
 
@@ -2058,7 +2058,7 @@ All three must succeed with zero warnings on the `wundler-bench` crate.
 
 | # | Criterion | Verified by |
 |---|---|---|
-| AC1 | `cargo test -p wundler-bench` passes | Step 5.11, Step 5.13 / AC1 |
+| AC1 | `cargo test -p cloudpack-bench` passes | Step 5.11, Step 5.13 / AC1 |
 | AC2 | `generate-corpus` exits 0 on tiny profile | Step 5.7, Step 5.13 / AC2 |
 | AC3 | `verify-corpus` exits 0 on tiny profile | Step 5.7, Step 5.13 / AC3 |
 | AC4 | V2: same seed → byte-identical output | Step 3.1 (`deterministic_same_seed_identical_bytes`), Step 5.10 (`tiny_profile_generation_is_deterministic`), Step 5.13 / AC4 |

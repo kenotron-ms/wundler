@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add an opt-in, per-IP, in-process rate limiter to the Asset Bundling Server (`wundler-abs`), applied **only** to `POST /manifest`, so that abusive clients receive `429 Too Many Requests` without affecting `/health` or `/sw.js`.
+**Goal:** Add an opt-in, per-IP, in-process rate limiter to the Asset Bundling Server (`cloudpack-abs`), applied **only** to `POST /manifest`, so that abusive clients receive `429 Too Many Requests` without affecting `/health` or `/sw.js`.
 
 **Architecture:** A `governor`-backed `RateLimiter<IpAddr, …>` is constructed once at startup inside `ResolvedSecurity::from_config` when `manifest_rate_per_sec` is present in `[security]`. A small Axum middleware reads the remote IP from `ConnectInfo<SocketAddr>` (already wired in production via `into_make_service_with_connect_info`). The middleware is mounted as a `.route_layer(...)` on the single `POST /manifest` route — it is **not** a global layer — so exempt routes are exempt by construction. When no `ConnectInfo` is present (e.g. `axum_test::TestServer`, which does not run a real TCP listener), the middleware passes the request through; this preserves test ergonomics and avoids a fail-open security regression because the production startup path always installs `ConnectInfo`.
 
@@ -13,12 +13,12 @@
 ## File Structure
 
 **New files:**
-- `crates/wundler-abs/src/security/ratelimit.rs` — `IpRateLimiter` type alias, `build_limiter`, `rate_limit_mw` middleware, unit tests.
+- `crates/cloudpack-abs/src/security/ratelimit.rs` — `IpRateLimiter` type alias, `build_limiter`, `rate_limit_mw` middleware, unit tests.
 
 **Modified files:**
-- `crates/wundler-abs/Cargo.toml` — add `governor = "0.7"`.
-- `crates/wundler-abs/src/security/mod.rs` — add `pub mod ratelimit;`, two new fields on `SecurityConfig`, one new field on `ResolvedSecurity`, build the limiter in `from_config`.
-- `crates/wundler-abs/src/server.rs` — attach `rate_limit_mw` as `.route_layer(...)` on the `POST /manifest` route inside `build_router` when `security.rate_limiter` is `Some`.
+- `crates/cloudpack-abs/Cargo.toml` — add `governor = "0.7"`.
+- `crates/cloudpack-abs/src/security/mod.rs` — add `pub mod ratelimit;`, two new fields on `SecurityConfig`, one new field on `ResolvedSecurity`, build the limiter in `from_config`.
+- `crates/cloudpack-abs/src/server.rs` — attach `rate_limit_mw` as `.route_layer(...)` on the `POST /manifest` route inside `build_router` when `security.rate_limiter` is `Some`.
 
 **Test files:**
 - Unit tests live inline in `security/ratelimit.rs` (`#[cfg(test)] mod tests`).
@@ -29,13 +29,13 @@
 ## Task 1 — Dependencies, Config Fields, and Resolution
 
 **Files:**
-- Modify: `crates/wundler-abs/Cargo.toml`
-- Modify: `crates/wundler-abs/src/security/mod.rs`
-- Test: `crates/wundler-abs/src/security/mod.rs` (inline `#[cfg(test)] mod tests`)
+- Modify: `crates/cloudpack-abs/Cargo.toml`
+- Modify: `crates/cloudpack-abs/src/security/mod.rs`
+- Test: `crates/cloudpack-abs/src/security/mod.rs` (inline `#[cfg(test)] mod tests`)
 
 ### Step 1.1 — Add `governor` dependency
 
-- [ ] **Edit `crates/wundler-abs/Cargo.toml`**
+- [ ] **Edit `crates/cloudpack-abs/Cargo.toml`**
 
 Add this line to the `[dependencies]` block, alphabetised under `e` / before `pkcs8`:
 
@@ -54,7 +54,7 @@ pkcs8 = { version = "0.10", features = ["pem"] }
 - [ ] **Verify it resolves**
 
 ```bash
-~/.cargo/bin/cargo build -p wundler-abs
+~/.cargo/bin/cargo build -p cloudpack-abs
 ```
 
 Expected: clean build (no compile errors, no usage of the new crate yet so it may emit an `unused_crate_dependencies` warning if that lint is on — there is no such workspace lint, so build should be clean).
@@ -62,7 +62,7 @@ Expected: clean build (no compile errors, no usage of the new crate yet so it ma
 - [ ] **Commit**
 
 ```bash
-git add crates/wundler-abs/Cargo.toml Cargo.lock
+git add crates/cloudpack-abs/Cargo.toml Cargo.lock
 git commit -m "build(abs): add governor 0.7 dependency for P1.3 rate limiter"
 ```
 
@@ -70,7 +70,7 @@ git commit -m "build(abs): add governor 0.7 dependency for P1.3 rate limiter"
 
 ### Step 1.2 — Write the failing test for new config fields and limiter construction
 
-- [ ] **Edit `crates/wundler-abs/src/security/mod.rs`**
+- [ ] **Edit `crates/cloudpack-abs/src/security/mod.rs`**
 
 Add (or extend) an inline test module at the bottom of the file:
 
@@ -137,7 +137,7 @@ mod tests {
 - [ ] **Run the test — it must fail to compile**
 
 ```bash
-~/.cargo/bin/cargo test -p wundler-abs --lib security::tests 2>&1 | head -40
+~/.cargo/bin/cargo test -p cloudpack-abs --lib security::tests 2>&1 | head -40
 ```
 
 Expected: compile errors like:
@@ -152,13 +152,13 @@ This confirms the test exercises behaviour that does not yet exist.
 
 ### Step 1.3 — Add new fields to `SecurityConfig` and `ResolvedSecurity`
 
-- [ ] **Edit `crates/wundler-abs/src/security/mod.rs`**
+- [ ] **Edit `crates/cloudpack-abs/src/security/mod.rs`**
 
 Replace the existing `SecurityConfig` struct with:
 
 ```rust
 /// Configuration for the ABS security layer, parsed from `[security]` in
-/// `wundler.toml`.
+/// `cloudpack.toml`.
 ///
 /// All fields are optional; `Default` produces a no-security configuration
 /// that preserves today's unauthenticated behaviour.
@@ -166,7 +166,7 @@ Replace the existing `SecurityConfig` struct with:
 pub struct SecurityConfig {
     /// Path to a file containing the bearer token (one line, trimmed).
     ///
-    /// Storing the token in a file (rather than inline in `wundler.toml`)
+    /// Storing the token in a file (rather than inline in `cloudpack.toml`)
     /// prevents accidental commit and log leakage.
     ///
     /// If this field is absent, bearer-token authentication is disabled.
@@ -209,7 +209,7 @@ Add the `Arc` import and a forward declaration of the module. Replace the existi
 //!
 //! This module provides optional bearer-token authentication and an optional
 //! per-IP rate limiter, applied as Axum middleware layers. When the
-//! `[security]` section is absent from `wundler.toml`, every middleware is a
+//! `[security]` section is absent from `cloudpack.toml`, every middleware is a
 //! transparent pass-through — existing behaviour is unchanged.
 
 pub mod auth;
@@ -284,7 +284,7 @@ Update `is_enabled` to reflect the broader meaning of "any security feature on":
 - [ ] **Read `auth.rs` to verify the `is_enabled` semantic shift is safe**
 
 ```bash
-sed -n '100,120p' crates/wundler-abs/src/security/auth.rs
+sed -n '100,120p' crates/cloudpack-abs/src/security/auth.rs
 ```
 
 If the current code is:
@@ -305,7 +305,7 @@ then changing `is_enabled()` to also return `true` for rate-limit-only configs w
 
 - [ ] **Patch `require_bearer` to gate on `token.is_some()` directly**
 
-Edit `crates/wundler-abs/src/security/auth.rs`, replace:
+Edit `crates/cloudpack-abs/src/security/auth.rs`, replace:
 
 ```rust
     // If security is not configured, pass through.
@@ -333,7 +333,7 @@ This makes `require_bearer` only sensitive to its own concern (the token), which
 
 `from_config` references `ratelimit::IpRateLimiter` and `ratelimit::build_limiter`. We need a minimal stub so Task 1 compiles before Task 2 fleshes the module out.
 
-- [ ] **Create `crates/wundler-abs/src/security/ratelimit.rs`** with this stub:
+- [ ] **Create `crates/cloudpack-abs/src/security/ratelimit.rs`** with this stub:
 
 ```rust
 //! Per-IP, in-process rate limiter for `POST /manifest`.
@@ -370,7 +370,7 @@ pub fn build_limiter(rate: NonZeroU32, burst: NonZeroU32) -> Arc<IpRateLimiter> 
 - [ ] **Run the four new tests — they must pass**
 
 ```bash
-~/.cargo/bin/cargo test -p wundler-abs --lib security::tests
+~/.cargo/bin/cargo test -p cloudpack-abs --lib security::tests
 ```
 
 Expected output (order may vary):
@@ -385,7 +385,7 @@ test security::tests::zero_rate_disables_limiter ... ok
 - [ ] **Run the existing auth tests — they must still pass**
 
 ```bash
-~/.cargo/bin/cargo test -p wundler-abs --lib
+~/.cargo/bin/cargo test -p cloudpack-abs --lib
 ```
 
 Expected: every existing test still green.
@@ -393,7 +393,7 @@ Expected: every existing test still green.
 - [ ] **Run clippy — it must be clean**
 
 ```bash
-~/.cargo/bin/cargo clippy -p wundler-abs --all-targets -- -D warnings
+~/.cargo/bin/cargo clippy -p cloudpack-abs --all-targets -- -D warnings
 ```
 
 Expected: no warnings, no errors.
@@ -401,10 +401,10 @@ Expected: no warnings, no errors.
 - [ ] **Commit**
 
 ```bash
-git add crates/wundler-abs/Cargo.toml \
-        crates/wundler-abs/src/security/mod.rs \
-        crates/wundler-abs/src/security/auth.rs \
-        crates/wundler-abs/src/security/ratelimit.rs
+git add crates/cloudpack-abs/Cargo.toml \
+        crates/cloudpack-abs/src/security/mod.rs \
+        crates/cloudpack-abs/src/security/auth.rs \
+        crates/cloudpack-abs/src/security/ratelimit.rs
 git commit -m "feat(abs/security): add rate-limit config fields and limiter builder
 
 - SecurityConfig: add manifest_rate_per_sec, manifest_rate_burst
@@ -419,12 +419,12 @@ git commit -m "feat(abs/security): add rate-limit config fields and limiter buil
 ## Task 2 — `rate_limit_mw` Middleware and Unit Tests
 
 **Files:**
-- Modify: `crates/wundler-abs/src/security/ratelimit.rs`
+- Modify: `crates/cloudpack-abs/src/security/ratelimit.rs`
 - Test: inline `#[cfg(test)] mod tests` in the same file
 
 ### Step 2.1 — Write the failing middleware tests
 
-- [ ] **Edit `crates/wundler-abs/src/security/ratelimit.rs`** — append this test module to the bottom of the file:
+- [ ] **Edit `crates/cloudpack-abs/src/security/ratelimit.rs`** — append this test module to the bottom of the file:
 
 ```rust
 #[cfg(test)]
@@ -581,7 +581,7 @@ mod tests {
 
 The test module needs `tower` as a dev-dep for `ServiceExt::oneshot`.
 
-- [ ] **Add `tower` to `[dev-dependencies]` in `crates/wundler-abs/Cargo.toml`**
+- [ ] **Add `tower` to `[dev-dependencies]` in `crates/cloudpack-abs/Cargo.toml`**
 
 ```toml
 tower = { version = "0.5", features = ["util"] }
@@ -600,7 +600,7 @@ tower = { version = "0.5", features = ["util"] }
 - [ ] **Run the new tests — they must fail (no `rate_limit_mw` yet)**
 
 ```bash
-~/.cargo/bin/cargo test -p wundler-abs --lib security::ratelimit 2>&1 | head -40
+~/.cargo/bin/cargo test -p cloudpack-abs --lib security::ratelimit 2>&1 | head -40
 ```
 
 Expected: compile errors such as:
@@ -613,7 +613,7 @@ error[E0425]: cannot find function `rate_limit_mw` in this scope
 
 ### Step 2.2 — Implement `rate_limit_mw`
 
-- [ ] **Edit `crates/wundler-abs/src/security/ratelimit.rs`**
+- [ ] **Edit `crates/cloudpack-abs/src/security/ratelimit.rs`**
 
 Replace the whole file with the following (preserves `IpRateLimiter` and `build_limiter` from Step 1.4, then adds the middleware):
 
@@ -737,7 +737,7 @@ mod tests {
 - [ ] **Run the rate-limit tests — all five must pass**
 
 ```bash
-~/.cargo/bin/cargo test -p wundler-abs --lib security::ratelimit::tests
+~/.cargo/bin/cargo test -p cloudpack-abs --lib security::ratelimit::tests
 ```
 
 Expected:
@@ -753,20 +753,20 @@ test security::ratelimit::tests::body_is_json_error_on_429 ... ok
 - [ ] **Run the full crate test suite — nothing else regressed**
 
 ```bash
-~/.cargo/bin/cargo test -p wundler-abs
+~/.cargo/bin/cargo test -p cloudpack-abs
 ```
 
 - [ ] **Clippy clean**
 
 ```bash
-~/.cargo/bin/cargo clippy -p wundler-abs --all-targets -- -D warnings
+~/.cargo/bin/cargo clippy -p cloudpack-abs --all-targets -- -D warnings
 ```
 
 - [ ] **Commit**
 
 ```bash
-git add crates/wundler-abs/Cargo.toml \
-        crates/wundler-abs/src/security/ratelimit.rs
+git add crates/cloudpack-abs/Cargo.toml \
+        crates/cloudpack-abs/src/security/ratelimit.rs
 git commit -m "feat(abs/security): add per-IP rate_limit_mw middleware
 
 - rate_limit_mw extracts ConnectInfo<SocketAddr>, consults governor limiter
@@ -780,16 +780,16 @@ git commit -m "feat(abs/security): add per-IP rate_limit_mw middleware
 ## Task 3 — Wire into `build_router` and Add HTTP Integration Tests
 
 **Files:**
-- Modify: `crates/wundler-abs/src/server.rs` (function `build_router`, plus the inline `#[cfg(test)] mod tests`)
+- Modify: `crates/cloudpack-abs/src/server.rs` (function `build_router`, plus the inline `#[cfg(test)] mod tests`)
 
 ### Step 3.1 — Write the failing integration tests
 
 - [ ] **Read the existing test module in `server.rs` first**
 
 ```bash
-~/.cargo/bin/cargo test -p wundler-abs --lib server::tests -- --list 2>&1 | head -20
-sed -n '1,40p' crates/wundler-abs/src/server.rs
-grep -n "mod tests" crates/wundler-abs/src/server.rs
+~/.cargo/bin/cargo test -p cloudpack-abs --lib server::tests -- --list 2>&1 | head -20
+sed -n '1,40p' crates/cloudpack-abs/src/server.rs
+grep -n "mod tests" crates/cloudpack-abs/src/server.rs
 ```
 
 This locates the existing `#[cfg(test)] mod tests` block (added during P1.1).
@@ -846,8 +846,8 @@ This locates the existing `#[cfg(test)] mod tests` block (added during P1.1).
     /// Minimal `AppState` + `TelemetryLogger` factory for these tests.
     ///
     /// **Implementer step:** before writing this helper, run
-    /// `grep -n "AppState {" crates/wundler-abs/src/server.rs` and
-    /// `grep -n "TelemetryLogger::new" crates/wundler-abs/src/server.rs`
+    /// `grep -n "AppState {" crates/cloudpack-abs/src/server.rs` and
+    /// `grep -n "TelemetryLogger::new" crates/cloudpack-abs/src/server.rs`
     /// to find how the P1.1 bearer-token tests build these. If a helper
     /// already exists (e.g. `fn build_test_state()`), call it. Otherwise
     /// build them inline using the same construction the existing tests
@@ -1016,12 +1016,12 @@ This locates the existing `#[cfg(test)] mod tests` block (added during P1.1).
     }
 ```
 
-> **Implementer note on `test_state`:** The existing test module from P1.1 already has helpers that build an `AppState` (with an empty `ChunkManifest`) and a no-op `TelemetryLogger`. Find them by `grep -n "AppState {" crates/wundler-abs/src/server.rs` and reuse them. If they're named differently, alias them inside a small `mod test_helpers { … }` submodule rather than duplicating construction.
+> **Implementer note on `test_state`:** The existing test module from P1.1 already has helpers that build an `AppState` (with an empty `ChunkManifest`) and a no-op `TelemetryLogger`. Find them by `grep -n "AppState {" crates/cloudpack-abs/src/server.rs` and reuse them. If they're named differently, alias them inside a small `mod test_helpers { … }` submodule rather than duplicating construction.
 
 - [ ] **Run the new tests — they must fail**
 
 ```bash
-~/.cargo/bin/cargo test -p wundler-abs --lib server::tests::manifest_post_is_rate_limited \
+~/.cargo/bin/cargo test -p cloudpack-abs --lib server::tests::manifest_post_is_rate_limited \
                                           server::tests::health_is_not_rate_limited \
                                           server::tests::default_config_has_no_rate_limit 2>&1 | tail -40
 ```
@@ -1032,7 +1032,7 @@ Expected: the `manifest_post_is_rate_limited` test fails because no 429 is ever 
 
 ### Step 3.2 — Wire `rate_limit_mw` into `build_router`
 
-- [ ] **Edit `crates/wundler-abs/src/server.rs`**
+- [ ] **Edit `crates/cloudpack-abs/src/server.rs`**
 
 Locate `pub fn build_router(...)` at around line 193. Today it looks roughly like:
 
@@ -1096,7 +1096,7 @@ The order matters:
 - [ ] **Run the three new integration tests — they must pass**
 
 ```bash
-~/.cargo/bin/cargo test -p wundler-abs --lib server::tests::manifest_post_is_rate_limited \
+~/.cargo/bin/cargo test -p cloudpack-abs --lib server::tests::manifest_post_is_rate_limited \
                                           server::tests::health_is_not_rate_limited \
                                           server::tests::default_config_has_no_rate_limit
 ```
@@ -1110,7 +1110,7 @@ Expected: three `ok` lines.
 - [ ] **Run the entire crate test suite — nothing regressed**
 
 ```bash
-~/.cargo/bin/cargo test -p wundler-abs
+~/.cargo/bin/cargo test -p cloudpack-abs
 ```
 
 Expected: all tests green, including the P1.1 bearer-token suite and the P1.2 CORS suite.
@@ -1118,7 +1118,7 @@ Expected: all tests green, including the P1.1 bearer-token suite and the P1.2 CO
 - [ ] **Run clippy across the workspace for this crate**
 
 ```bash
-~/.cargo/bin/cargo clippy -p wundler-abs --all-targets -- -D warnings
+~/.cargo/bin/cargo clippy -p cloudpack-abs --all-targets -- -D warnings
 ```
 
 Expected: no warnings.
@@ -1126,14 +1126,14 @@ Expected: no warnings.
 - [ ] **Run rustfmt** (to keep diffs minimal in review)
 
 ```bash
-~/.cargo/bin/cargo fmt -p wundler-abs
+~/.cargo/bin/cargo fmt -p cloudpack-abs
 git diff --stat
 ```
 
 - [ ] **Smoke-test the production startup path compiles**
 
 ```bash
-~/.cargo/bin/cargo build -p wundler-abs --release 2>&1 | tail -10
+~/.cargo/bin/cargo build -p cloudpack-abs --release 2>&1 | tail -10
 ```
 
 Expected: clean build (release profile catches a different class of lints).
@@ -1141,7 +1141,7 @@ Expected: clean build (release profile catches a different class of lints).
 - [ ] **Commit**
 
 ```bash
-git add crates/wundler-abs/src/server.rs
+git add crates/cloudpack-abs/src/server.rs
 git commit -m "feat(abs/security): mount per-IP rate limiter on POST /manifest
 
 - build_router attaches rate_limit_mw as a route_layer on /manifest only
@@ -1167,14 +1167,14 @@ Run all four acceptance criteria one final time and paste the output into the PR
 
 ```bash
 # 1. crate tests
-~/.cargo/bin/cargo test -p wundler-abs
+~/.cargo/bin/cargo test -p cloudpack-abs
 
 # 2. clippy clean (per security-baseline standard)
-~/.cargo/bin/cargo clippy -p wundler-abs --all-targets -- -D warnings
+~/.cargo/bin/cargo clippy -p cloudpack-abs --all-targets -- -D warnings
 
 # 3. specific behavioural assertions (these were green in Task 3 but
 #    re-run them by name so the PR shows the named acceptance tests)
-~/.cargo/bin/cargo test -p wundler-abs --lib \
+~/.cargo/bin/cargo test -p cloudpack-abs --lib \
     server::tests::manifest_post_is_rate_limited \
     server::tests::health_is_not_rate_limited \
     server::tests::default_config_has_no_rate_limit

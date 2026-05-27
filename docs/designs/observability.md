@@ -5,7 +5,7 @@
 **Status:** Design.
 **Depends on:** `versioned-runtime-control.md` (provides deterministic `build_id` used in `build-stats.json` and `/metrics` labels).
 **Blocks:** Performance work (cannot tune what you cannot see), Web Vitals adoption in PGO (gated on Priority 2 being live).
-**System types:** data pipeline (build artifact), web service / API (`/metrics`, `/telemetry/*`), edge / offline-first (SW collection), CLI tool (`wundler build` exit code), philosophy: Linux/Unix (mechanism, not policy — alerts live in the caller).
+**System types:** data pipeline (build artifact), web service / API (`/metrics`, `/telemetry/*`), edge / offline-first (SW collection), CLI tool (`cloudpack build` exit code), philosophy: Linux/Unix (mechanism, not policy — alerts live in the caller).
 
 ---
 
@@ -15,8 +15,8 @@
 
 | ID | Goal |
 |---|---|
-| G1 | `wundler build` emits a machine-readable `build-stats.json` next to `manifest.json` on every successful build |
-| G2 | A `[budget]` section in `wundler.toml` makes the build exit non-zero with an actionable message when configured thresholds are exceeded |
+| G1 | `cloudpack build` emits a machine-readable `build-stats.json` next to `manifest.json` on every successful build |
+| G2 | A `[budget]` section in `cloudpack.toml` makes the build exit non-zero with an actionable message when configured thresholds are exceeded |
 | G3 | The Service Worker reports chunk load/eval/integrity errors to ABS over a fire-and-forget endpoint that **never** blocks chunk delivery |
 | G4 | ABS accumulates labelled in-process counters and exposes them on `GET /metrics` in Prometheus text format |
 | G5 | The build-stats JSON contains everything Scale Benchmark Foundation's V5 stability check needs to flag drift across runs |
@@ -27,9 +27,9 @@
 
 ```
        ┌──────────────────────────────────────┐
-       │  wundler build (CLI)                  │
+       │  cloudpack build (CLI)                  │
        │  ┌──────────────────────────────────┐ │   build-stats.json
-       │  │ wundler-pipeline ── BuildOutput ─┼─┼──▶  out_dir/
+       │  │ cloudpack-pipeline ── BuildOutput ─┼─┼──▶  out_dir/
        │  └──────────────────────────────────┘ │
        │  budget check ── exit 0 / exit 1 ─────┼──▶  stderr
        └──────────────────────────────────────┘
@@ -64,16 +64,16 @@ The pattern from the prior three designs holds: **the scaffolding is already the
 
 | What | Where | Status / Gap |
 |---|---|---|
-| `BuildStats { total_modules, alive_modules, dead_modules, chunks_written, build_time_ms, largest_chunk_bytes }` | `crates/wundler-pipeline/src/pipeline.rs:27-40` | Struct exists, returned from `BuildPipeline::build()` in `BuildOutput`. Currently **only consumed by stdout printer at `crates/wundler-cli/src/main.rs:372`.** Not serialised. |
-| `BuildOutput { manifest, chunk_files, stats }` | `crates/wundler-pipeline/src/pipeline.rs:44-51` | Already carries `chunk_files: Vec<PathBuf>` — sufficient to derive per-chunk sizes without re-walking `out_dir`. |
-| `AnalysisStats { total, alive, dead, chunks }` | `crates/wundler-graph/src/analyzer.rs:59-68` | Already populated by `GraphAnalyzer::analyze`. Subset of `BuildStats`; no new code needed. |
-| `output::write_manifest` | `crates/wundler-pipeline/src/output.rs` | The pattern to follow: a sibling `write_build_stats` slots in next to it without touching `pipeline.rs` orchestration. |
-| `TelemetryLogger` (append-only JSONL, `Arc<Mutex<BufWriter>>`, thread-safe, clones share writer) | `crates/wundler-abs/src/telemetry.rs` | Already accepts arbitrary `TelemetryEvent`. Can carry new event kinds via an `enum` discriminant; **must remain backward-compatible with `wundler-pgo`'s deserializer.** |
-| `TelemetryEvent { session_id, entry_point, chunks_served, client_had, timestamp_ms }` | `crates/wundler-abs/src/types.rs:81-96` | **Does NOT currently carry `build_id` as a typed field.** The parent context's claim that `last_seen_build_id` already exists is incorrect. The handler at `crates/wundler-abs/src/server.rs:200-203` shoves `req.build_id` into the `session_id` field — this is a latent bug (named field carries semantically wrong data) that this design **does not silently fix**; see §5.2 contract note. |
-| `wundler-pgo::ingestor::TelemetryEvent` (private deserialize-only mirror) | `crates/wundler-pgo/src/ingestor.rs:32-41` | **Critical compatibility constraint.** It tolerates unknown fields (no `deny_unknown_fields`), so additive JSON fields are safe. Field renames or new required fields will break PGO. |
-| `notifyBuildIdChanged(newBuildId)` in SW | `crates/wundler-abs/assets/sw.js:62-72` | Already postMessages clients. Hook point for SW → ABS chunk-error reporting lives **immediately around the `fetch(url)` / `cache.match(url)` calls at lines 128-148** — that block currently has `catch {}` returning `null` silently; it is the exact ground zero for chunk-error reporting. |
-| ABS HTTP server | `crates/wundler-abs/src/server.rs` | Three routes: `/manifest`, `/health`, `/sw.js`. **No `/metrics`. No `/telemetry/*`.** Telemetry currently piggybacks on the `/manifest` handler (only events that imply a successful manifest fetch ever get recorded). |
-| PGO store + ingestor | `crates/wundler-pgo/src/` | Reads the same JSONL `TelemetryLogger` writes. Already idempotent (`sessions_skipped_duplicate`). Web Vitals events would extend `SessionRecord` shape — see Priority 4 gate. |
+| `BuildStats { total_modules, alive_modules, dead_modules, chunks_written, build_time_ms, largest_chunk_bytes }` | `crates/cloudpack-pipeline/src/pipeline.rs:27-40` | Struct exists, returned from `BuildPipeline::build()` in `BuildOutput`. Currently **only consumed by stdout printer at `crates/cloudpack-cli/src/main.rs:372`.** Not serialised. |
+| `BuildOutput { manifest, chunk_files, stats }` | `crates/cloudpack-pipeline/src/pipeline.rs:44-51` | Already carries `chunk_files: Vec<PathBuf>` — sufficient to derive per-chunk sizes without re-walking `out_dir`. |
+| `AnalysisStats { total, alive, dead, chunks }` | `crates/cloudpack-graph/src/analyzer.rs:59-68` | Already populated by `GraphAnalyzer::analyze`. Subset of `BuildStats`; no new code needed. |
+| `output::write_manifest` | `crates/cloudpack-pipeline/src/output.rs` | The pattern to follow: a sibling `write_build_stats` slots in next to it without touching `pipeline.rs` orchestration. |
+| `TelemetryLogger` (append-only JSONL, `Arc<Mutex<BufWriter>>`, thread-safe, clones share writer) | `crates/cloudpack-abs/src/telemetry.rs` | Already accepts arbitrary `TelemetryEvent`. Can carry new event kinds via an `enum` discriminant; **must remain backward-compatible with `cloudpack-pgo`'s deserializer.** |
+| `TelemetryEvent { session_id, entry_point, chunks_served, client_had, timestamp_ms }` | `crates/cloudpack-abs/src/types.rs:81-96` | **Does NOT currently carry `build_id` as a typed field.** The parent context's claim that `last_seen_build_id` already exists is incorrect. The handler at `crates/cloudpack-abs/src/server.rs:200-203` shoves `req.build_id` into the `session_id` field — this is a latent bug (named field carries semantically wrong data) that this design **does not silently fix**; see §5.2 contract note. |
+| `cloudpack-pgo::ingestor::TelemetryEvent` (private deserialize-only mirror) | `crates/cloudpack-pgo/src/ingestor.rs:32-41` | **Critical compatibility constraint.** It tolerates unknown fields (no `deny_unknown_fields`), so additive JSON fields are safe. Field renames or new required fields will break PGO. |
+| `notifyBuildIdChanged(newBuildId)` in SW | `crates/cloudpack-abs/assets/sw.js:62-72` | Already postMessages clients. Hook point for SW → ABS chunk-error reporting lives **immediately around the `fetch(url)` / `cache.match(url)` calls at lines 128-148** — that block currently has `catch {}` returning `null` silently; it is the exact ground zero for chunk-error reporting. |
+| ABS HTTP server | `crates/cloudpack-abs/src/server.rs` | Three routes: `/manifest`, `/health`, `/sw.js`. **No `/metrics`. No `/telemetry/*`.** Telemetry currently piggybacks on the `/manifest` handler (only events that imply a successful manifest fetch ever get recorded). |
+| PGO store + ingestor | `crates/cloudpack-pgo/src/` | Reads the same JSONL `TelemetryLogger` writes. Already idempotent (`sessions_skipped_duplicate`). Web Vitals events would extend `SessionRecord` shape — see Priority 4 gate. |
 
 ### 1.4 Failure modes WITHOUT this design
 
@@ -112,7 +112,7 @@ The pattern from the prior three designs holds: **the scaffolding is already the
               a layout problem — and PGO will recommend the wrong fix.
 ```
 
-**Why Priority 1 is first:** zero runtime infrastructure needed. The pipeline already returns `BuildStats`. Wiring it to disk + adding a TOML threshold check is local to two crates (`wundler-pipeline`, `wundler-cli`) and produces immediate, visible value (CI signal). It also unblocks Scale Benchmark Foundation V5, which is independently waiting.
+**Why Priority 1 is first:** zero runtime infrastructure needed. The pipeline already returns `BuildStats`. Wiring it to disk + adding a TOML threshold check is local to two crates (`cloudpack-pipeline`, `cloudpack-cli`) and produces immediate, visible value (CI signal). It also unblocks Scale Benchmark Foundation V5, which is independently waiting.
 
 **Why Priority 2 before Priority 3:** Prometheus format is exposition over the *same counters*. Building Priority 3 first means inventing exposition for counters with no producer — a contract test with no implementation. Build the producer (Priority 2), then the format (Priority 3).
 
@@ -126,7 +126,7 @@ The pattern from the prior three designs holds: **the scaffolding is already the
 
 #### C1 — Serialize existing `BuildStats` as-is
 
-A new file `wundler-pipeline/src/output.rs::write_build_stats` derives `Serialize` on `BuildStats` and writes `out_dir/build-stats.json`. No new fields. No budget check.
+A new file `cloudpack-pipeline/src/output.rs::write_build_stats` derives `Serialize` on `BuildStats` and writes `out_dir/build-stats.json`. No new fields. No budget check.
 
 | Dimension | C1 |
 |---|---|
@@ -143,14 +143,14 @@ A new file `wundler-pipeline/src/output.rs::write_build_stats` derives `Serializ
 
 Adds:
 
-1. A `BuildStatsArtifact` wire type in `wundler-pipeline/src/build_stats.rs` distinct from the in-memory `BuildStats` (separation of concerns — internal struct vs file format).
+1. A `BuildStatsArtifact` wire type in `cloudpack-pipeline/src/build_stats.rs` distinct from the in-memory `BuildStats` (separation of concerns — internal struct vs file format).
 2. Per-chunk breakdown derived from `BuildOutput.chunk_files` (size from `fs::metadata`, chunk-id resolution from the manifest in the same `BuildOutput`).
 3. `build_id` field populated from `BuildOutput.manifest.build_id` (deterministic from VRC SCA).
 4. `total_bundle_bytes` (sum of all chunks).
 5. `previous_build` diff (optional, present iff `out_dir/build-stats.json` exists from the prior run — read **before** the new file is written, hold in memory, then overwrite).
-6. `[budget]` table in `wundler.toml` (`initial_bundle_max_bytes`, `lazy_chunk_max_bytes`, `total_bundle_max_bytes`); a new `budget` module in `wundler-pipeline/src/budget.rs` consumes `BuildStatsArtifact` and returns `Result<(), BudgetViolation>`; CLI maps that to `exit(1)` with the actionable message.
+6. `[budget]` table in `cloudpack.toml` (`initial_bundle_max_bytes`, `lazy_chunk_max_bytes`, `total_bundle_max_bytes`); a new `budget` module in `cloudpack-pipeline/src/budget.rs` consumes `BuildStatsArtifact` and returns `Result<(), BudgetViolation>`; CLI maps that to `exit(1)` with the actionable message.
 
-File locations (all in `crates/wundler-pipeline/`):
+File locations (all in `crates/cloudpack-pipeline/`):
 
 ```
 src/
@@ -179,7 +179,7 @@ if let Some(budget) = config.budget {
 | Components | 3 new files, 1 added call site, 1 new TOML section |
 | Complexity | Low — pure functions, no I/O outside `output.rs` |
 | Operability | Good — exit code + stderr message; no silent breakage (budget is opt-in) |
-| Coupling | `wundler-pipeline` ↔ `BuildOutput` (already exists); no new cross-crate dependency |
+| Coupling | `cloudpack-pipeline` ↔ `BuildOutput` (already exists); no new cross-crate dependency |
 | Evolvability | Schema versioned (`schema_version: "1"`); additive fields without breaking older diff consumers |
 | Failure modes addressed | F1 (size growth), partial F5 (size+chunk count surfaced; ordering left to V5) |
 | Cost | ~150 LoC + tests |
@@ -189,7 +189,7 @@ if let Some(budget) = config.budget {
 
 C2 plus:
 
-- A `wundler-bench`-adjacent `wundler bench-stats diff <baseline.json> <head.json>` subcommand that produces a structured markdown table for PR comments.
+- A `cloudpack-bench`-adjacent `cloudpack bench-stats diff <baseline.json> <head.json>` subcommand that produces a structured markdown table for PR comments.
 - A `[budget.baseline]` knob pointing to a checked-in baseline JSON; budget violations express as deltas ("+38 KB lazy chunk vs baseline") rather than absolutes.
 
 | Dimension | C3 |
@@ -221,7 +221,7 @@ SW logs chunk load/eval failures to the browser console. Nothing leaves the devi
 
 #### C2 — SW fire-and-forget POST + in-process counters   **(RECOMMENDED)**
 
-**SW side** (`crates/wundler-abs/assets/sw.js`, modify the install/fetch handlers and the `catch {}` blocks at lines 84-86, 113-114, 137-148):
+**SW side** (`crates/cloudpack-abs/assets/sw.js`, modify the install/fetch handlers and the `catch {}` blocks at lines 84-86, 113-114, 137-148):
 
 ```js
 function reportChunkError(absBaseUrl, payload) {
@@ -259,7 +259,7 @@ Payload shape:
 }
 ```
 
-**ABS side** — new module `crates/wundler-abs/src/metrics/`:
+**ABS side** — new module `crates/cloudpack-abs/src/metrics/`:
 
 ```
 src/metrics/
@@ -338,20 +338,20 @@ Adds a small SW-side queue that batches events and persists across reloads via `
 
 Hand-roll the exposition format. It is ~50 lines of `format!` calls. The format is stable, well-documented, and the *only* thing the SDK does for counters at this scale is provide a registry and locking primitives we already have.
 
-`crates/wundler-abs/src/metrics/prometheus.rs`:
+`crates/cloudpack-abs/src/metrics/prometheus.rs`:
 
 ```rust
 pub fn render(metrics: &Metrics) -> String {
     let mut s = String::new();
-    writeln!(s, "# HELP wundler_manifest_requests_total Manifest requests served.").unwrap();
-    writeln!(s, "# TYPE wundler_manifest_requests_total counter").unwrap();
-    writeln!(s, "wundler_manifest_requests_total {}", metrics.manifest_requests_total.load(Ordering::Relaxed)).unwrap();
+    writeln!(s, "# HELP cloudpack_manifest_requests_total Manifest requests served.").unwrap();
+    writeln!(s, "# TYPE cloudpack_manifest_requests_total counter").unwrap();
+    writeln!(s, "cloudpack_manifest_requests_total {}", metrics.manifest_requests_total.load(Ordering::Relaxed)).unwrap();
     // ... chunk_errors with labels ...
     for entry in metrics.chunk_errors.iter() {
         let k = entry.key();
         writeln!(
             s,
-            r#"wundler_chunk_errors_total{{build_id="{}",chunk_id="{}",error_type="{}"}} {}"#,
+            r#"cloudpack_chunk_errors_total{{build_id="{}",chunk_id="{}",error_type="{}"}} {}"#,
             escape(&k.build_id), escape(&k.chunk_id), k.error_type.as_str(),
             entry.value().load(Ordering::Relaxed),
         ).unwrap();
@@ -410,13 +410,13 @@ Web Vitals (LCP, CLS, INP) require a page-side reporter that posts to the SW or 
 
 **File:** `<out_dir>/build-stats.json`
 **Schema version:** `"1"` (additive evolution only; rename or remove = bump)
-**Stability contract:** for a fixed input tree and `wundler.toml`, two consecutive `wundler build` invocations on the same host produce byte-identical `build-stats.json` (modulo the `timing` block and `previous_build`). This is the V5 contract.
+**Stability contract:** for a fixed input tree and `cloudpack.toml`, two consecutive `cloudpack build` invocations on the same host produce byte-identical `build-stats.json` (modulo the `timing` block and `previous_build`). This is the V5 contract.
 
 ```json
 {
   "schema_version": "1",
   "build_id": "9c1a7f0e2d3b...",
-  "wundler_version": "0.1.0",
+  "cloudpack_version": "0.1.0",
   "generated_at": "2026-05-15T12:30:12Z",
 
   "summary": {
@@ -505,7 +505,7 @@ Consumers MUST tolerate unknown fields. The diff helper SHOULD warn on `schema_v
 
 ### 5.1 JSONL telemetry compatibility (critical — PGO contract)
 
-`wundler-pgo/src/ingestor.rs:32-41` deserialises lines into:
+`cloudpack-pgo/src/ingestor.rs:32-41` deserialises lines into:
 
 ```rust
 struct TelemetryEvent {
@@ -525,7 +525,7 @@ It does **not** use `#[serde(deny_unknown_fields)]`, so:
 The clean evolution: introduce a tagged-enum wire type, but emit the existing shape as the default-untagged variant for backward compatibility.
 
 ```rust
-// crates/wundler-abs/src/types.rs  (additive)
+// crates/cloudpack-abs/src/types.rs  (additive)
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TelemetryEventV2 {
@@ -535,7 +535,7 @@ pub enum TelemetryEventV2 {
 }
 ```
 
-For the existing line shape (no `"kind"` field), the writer emits the legacy shape until `wundler-pgo` learns to recognise `"kind": "manifest"` and tolerate the new shapes. Migration sequence:
+For the existing line shape (no `"kind"` field), the writer emits the legacy shape until `cloudpack-pgo` learns to recognise `"kind": "manifest"` and tolerate the new shapes. Migration sequence:
 
 1. **Now:** ABS writes legacy shape for manifest events; new shape for `chunk_error` events. PGO `parse_errors` counts but ignores chunk_error lines (acceptable — PGO doesn't use them yet).
 2. **Next:** PGO learns to read both shapes (one-line `match` on presence of `"kind"`).
@@ -545,7 +545,7 @@ This sequencing keeps the contract additive at every step.
 
 ### 5.2 `TelemetryEvent.session_id` carries `build_id` today — do not silently fix
 
-`crates/wundler-abs/src/server.rs:200-203`:
+`crates/cloudpack-abs/src/server.rs:200-203`:
 
 ```rust
 let session_id = req.build_id.clone().unwrap_or_else(|| "anonymous".to_string());
@@ -553,7 +553,7 @@ let session_id = req.build_id.clone().unwrap_or_else(|| "anonymous".to_string())
 
 This is wrong (the field is called `session_id` but receives `build_id`). It is **out of scope** for this design to fix, because:
 
-- `wundler-pgo` reads `session_id` literally and would suddenly see "anonymous" or a real session id where it was getting build_id-as-session-id before.
+- `cloudpack-pgo` reads `session_id` literally and would suddenly see "anonymous" or a real session id where it was getting build_id-as-session-id before.
 - Fixing this is a small, separate change that belongs in a dedicated PR with PGO test coverage.
 
 This design adds a *new* `build_id` field to the new event variants but does **not** touch the existing event shape. Flag this in the implementation plan.
@@ -565,7 +565,7 @@ SW cannot observe JS evaluation errors in the page. To report `eval_failed`, a s
 - `postMessage` to the SW, which posts to ABS (preferred — single network code path), or
 - Direct `fetch` to ABS with `keepalive: true`.
 
-Either way, this is outside the SW patch and belongs in a small `wundler-abs/assets/error-reporter.js` injected by `output::write_index_html`. **Defer to a follow-up** — Priority 2 ships without `eval_failed` and addresses F3 partially via `load_failed` + `network_timeout` only. Document this gap.
+Either way, this is outside the SW patch and belongs in a small `cloudpack-abs/assets/error-reporter.js` injected by `output::write_index_html`. **Defer to a follow-up** — Priority 2 ships without `eval_failed` and addresses F3 partially via `load_failed` + `network_timeout` only. Document this gap.
 
 ### 5.4 Where `/metrics` and `/telemetry/*` live in the route table
 
@@ -597,8 +597,8 @@ Web Vitals collection in PGO MUST NOT land until **all** of the following are de
 
 | # | Condition | How to verify |
 |---|---|---|
-| G-1 | `POST /telemetry/chunk-error` is wired in SW and exercised on real chunk failure | Synthetic test: deploy a manifest pointing to a 404 chunk URL; observe `wundler_chunk_errors_total{error_type="load_failed"}` increment on `/metrics` |
-| G-2 | `wundler_chunk_errors_total` is non-zero in steady-state production scrape, OR a deliberately-injected error increments the counter end-to-end | Grafana panel / curl `/metrics` shows the counter family present and changing |
+| G-1 | `POST /telemetry/chunk-error` is wired in SW and exercised on real chunk failure | Synthetic test: deploy a manifest pointing to a 404 chunk URL; observe `cloudpack_chunk_errors_total{error_type="load_failed"}` increment on `/metrics` |
+| G-2 | `cloudpack_chunk_errors_total` is non-zero in steady-state production scrape, OR a deliberately-injected error increments the counter end-to-end | Grafana panel / curl `/metrics` shows the counter family present and changing |
 | G-3 | PGO ingestor either consumes `kind: "chunk_error"` events OR explicitly ignores them with a counter (no parse-error spam) | `IngestStats.parse_errors == 0` over a fresh log file containing chunk_error events |
 | G-4 | The chunk-error → chunk-id resolution is correct: a known-failing chunk produces the matching `chunk_id` label in the counter | Cross-check `/metrics` label against the deployed `manifest.json` chunk-id field |
 | G-5 | `/metrics` scrape latency p99 < 50ms under the realistic chunk-error counter cardinality (build_ids × chunk_ids × 4 error_types) | Load test with VRC's archive default of 5 build_ids and the synthetic app's chunk count (~250) → ~5000 series — well within budget |
@@ -626,12 +626,12 @@ A bad deploy can cause every active client to fire `load_failed` on every naviga
 The change "build now exits 1 when X" is backward-incompatible if X used to fail silently. Mitigations baked into the design:
 
 1. `[budget]` is **opt-in** — absent section, no exit-code change. This is the single most important property of the design.
-2. The default `wundler.toml` we ship MUST NOT contain a `[budget]` section. Templates that demo budgets live under `examples/`, not the default config.
-3. Document a one-line override: `wundler build --no-budget` skips the check (useful for `cargo run` style local iteration that intentionally exceeds limits).
+2. The default `cloudpack.toml` we ship MUST NOT contain a `[budget]` section. Templates that demo budgets live under `examples/`, not the default config.
+3. Document a one-line override: `cloudpack build --no-budget` skips the check (useful for `cargo run` style local iteration that intentionally exceeds limits).
 
 ### 7.3 In-process counter loss on ABS restart
 
-Documented as expected. Mitigation: the JSONL log persists chunk-error events; a `wundler abs replay-counters --since <ts> <log>` recovery command can rebuild counters from the log on cold start if needed. Not building this now — restart resets counters, Prometheus's `rate()` handles this correctly.
+Documented as expected. Mitigation: the JSONL log persists chunk-error events; a `cloudpack abs replay-counters --since <ts> <log>` recovery command can rebuild counters from the log on cold start if needed. Not building this now — restart resets counters, Prometheus's `rate()` handles this correctly.
 
 ### 7.4 `build-stats.json` missing from partial build paths
 
@@ -647,7 +647,7 @@ Realistic for a bundler tool: chunk loads are bursty, not continuous. With keepa
 
 ### 7.6 Cardinality blow-up on `/metrics`
 
-`wundler_chunk_errors_total{build_id, chunk_id, error_type}` can grow unboundedly if we never prune. VRC's archive bounds active `build_id`s (default 5), but a long-running ABS that has seen many deploys might accumulate stale entries.
+`cloudpack_chunk_errors_total{build_id, chunk_id, error_type}` can grow unboundedly if we never prune. VRC's archive bounds active `build_id`s (default 5), but a long-running ABS that has seen many deploys might accumulate stale entries.
 
 **Mitigation:** add `Metrics::prune(active_build_ids: &HashSet<String>)` called whenever the manifest hot-reloads (the `POST /reload` path from VRC). Stale build_id counters drop. This couples Observability to VRC — explicitly. It is correct coupling: cardinality control is downstream of versioning.
 
@@ -663,22 +663,22 @@ The pattern from the prior three designs holds. Concrete reuse:
 
 | Existing | Reused for | Net new code |
 |---|---|---|
-| `BuildStats` struct (`wundler-pipeline/src/pipeline.rs:27`) | Source of truth for `summary` block | `Serialize` derive + adapter to `BuildStatsArtifact` |
-| `BuildOutput.chunk_files` (`wundler-pipeline/src/pipeline.rs:48`) | Source of per-chunk paths/sizes | `fs::metadata` walk |
-| `AnalysisStats` (`wundler-graph/src/analyzer.rs:59`) | Already subset of `BuildStats` | None |
-| `output::write_manifest` (`wundler-pipeline/src/output.rs`) | Sibling pattern for `write_build_stats` | Mirror the function |
-| `TelemetryLogger` (`wundler-abs/src/telemetry.rs`) | Append-only persistence for chunk-error JSONL | Add event variants, no logger changes |
-| `TelemetryEvent` (`wundler-abs/src/types.rs`) | Base wire type | New variants `ChunkError`, `WebVital` (Priority 4) |
-| `notifyBuildIdChanged` site in SW (`wundler-abs/assets/sw.js:62`) | Adjacent to where chunk-load happens — clean hook neighborhood | New `reportChunkError` helper |
+| `BuildStats` struct (`cloudpack-pipeline/src/pipeline.rs:27`) | Source of truth for `summary` block | `Serialize` derive + adapter to `BuildStatsArtifact` |
+| `BuildOutput.chunk_files` (`cloudpack-pipeline/src/pipeline.rs:48`) | Source of per-chunk paths/sizes | `fs::metadata` walk |
+| `AnalysisStats` (`cloudpack-graph/src/analyzer.rs:59`) | Already subset of `BuildStats` | None |
+| `output::write_manifest` (`cloudpack-pipeline/src/output.rs`) | Sibling pattern for `write_build_stats` | Mirror the function |
+| `TelemetryLogger` (`cloudpack-abs/src/telemetry.rs`) | Append-only persistence for chunk-error JSONL | Add event variants, no logger changes |
+| `TelemetryEvent` (`cloudpack-abs/src/types.rs`) | Base wire type | New variants `ChunkError`, `WebVital` (Priority 4) |
+| `notifyBuildIdChanged` site in SW (`cloudpack-abs/assets/sw.js:62`) | Adjacent to where chunk-load happens — clean hook neighborhood | New `reportChunkError` helper |
 | The three silent `catch {}` blocks in SW (`assets/sw.js:84`, `113`, `137-148`) | Ground zero for every error-reporting concern | Replace with `reportChunkError(...)` |
-| `wundler-pgo` ingestor's tolerant deserializer (`crates/wundler-pgo/src/ingestor.rs:32-41`) | Lets us evolve event shapes additively without coordinated PGO release | Schema-tagged enum (§5.1) |
-| `wundler-cli` stats printer (`crates/wundler-cli/src/main.rs:372`) | Already reads `BuildOutput.stats` — adjacent to where budget check + `write_build_stats` call belongs | Add ~15 LoC |
+| `cloudpack-pgo` ingestor's tolerant deserializer (`crates/cloudpack-pgo/src/ingestor.rs:32-41`) | Lets us evolve event shapes additively without coordinated PGO release | Schema-tagged enum (§5.1) |
+| `cloudpack-cli` stats printer (`crates/cloudpack-cli/src/main.rs:372`) | Already reads `BuildOutput.stats` — adjacent to where budget check + `write_build_stats` call belongs | Add ~15 LoC |
 
 Genuinely new infrastructure:
 
-- `crates/wundler-abs/src/metrics/` (4 files, ~350 LoC).
-- `crates/wundler-pipeline/src/budget.rs` (~80 LoC).
-- `crates/wundler-pipeline/src/build_stats.rs` (~150 LoC).
+- `crates/cloudpack-abs/src/metrics/` (4 files, ~350 LoC).
+- `crates/cloudpack-pipeline/src/budget.rs` (~80 LoC).
+- `crates/cloudpack-pipeline/src/build_stats.rs` (~150 LoC).
 - One new SW helper (~25 LoC).
 - One new TOML section under `[budget]`.
 
@@ -704,11 +704,11 @@ Everything else in this design is *credible reasons to do more than this*. The c
 
 | # | Question | Default answer if unanswered |
 |---|---|---|
-| Q1 | Does `wundler build --no-budget` skip both checks AND `build-stats.json` emission, or just the budget check? | Skip only the check. Always emit the artifact. |
+| Q1 | Does `cloudpack build --no-budget` skip both checks AND `build-stats.json` emission, or just the budget check? | Skip only the check. Always emit the artifact. |
 | Q2 | When `previous_build` is present but `schema_version` differs, do we still emit a delta? | No. Set `previous_build.present: false, schema_mismatch: true`. |
 | Q3 | Should `/metrics` require bearer auth from day one? | Yes, conditioned on whether Security Baseline P1 has landed. If not, document the gap. |
 | Q4 | Does Priority 2 ship with `eval_failed` page-side reporter, or as a deliberate follow-up? | Follow-up. Priority 2 covers `load_failed`, `network_timeout`, and `integrity_mismatch` (the last only when SRI is on). |
-| Q5 | Where does `build-stats.json` live in the output dir relative to `manifest.json` — same dir, or `dist/.wundler/`? | Same dir as `manifest.json`. Convention beats nesting; tooling reads `out_dir`. |
+| Q5 | Where does `build-stats.json` live in the output dir relative to `manifest.json` — same dir, or `dist/.cloudpack/`? | Same dir as `manifest.json`. Convention beats nesting; tooling reads `out_dir`. |
 
 ---
 
@@ -726,7 +726,7 @@ Everything else in this design is *credible reasons to do more than this*. The c
 **Critical contracts:**
 
 - `build-stats.json` schema (§4) — frozen at `schema_version: "1"`; additive evolution only.
-- JSONL event compatibility with `wundler-pgo` (§5.1) — tagged-enum migration path; no coordinated release required.
+- JSONL event compatibility with `cloudpack-pgo` (§5.1) — tagged-enum migration path; no coordinated release required.
 - `Metrics::prune` coupling to VRC's manifest hot-reload (§7.6) — cardinality control downstream of versioning.
 
 **What this design refuses to do:**
